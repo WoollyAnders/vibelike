@@ -178,12 +178,62 @@ def make_rock_prop():
                 px[x, y] = max(97, min(127, shade + random.randint(-2, 2)))
     return img
 
+# ---- sfx: 8-bit 22050Hz mono WAVs --------------------------------------------
+
+import math
+import wave
+import struct
+
+SFX_RATE = 22050
+
+def write_wav8(path, samples):
+    """samples: floats -1..1 -> 8-bit unsigned mono WAV."""
+    with wave.open(path, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(1)
+        w.setframerate(SFX_RATE)
+        data = bytes(max(0, min(255, int((s * 0.95 + 1.0) * 127.5))) for s in samples)
+        w.writeframes(data)
+
+def make_worm_roar():
+    """1.8s descending growl: pitch-swept saw + heavy noise, crunchy."""
+    n = int(1.8 * SFX_RATE)
+    out = []
+    phase = 0.0
+    lp = 0.0
+    rng = random.Random(7)
+    for i in range(n):
+        t = i / n
+        freq = 90.0 * (1.0 - t * 0.7) + 18.0 * math.sin(t * 21.0)
+        phase += freq / SFX_RATE
+        saw = 2.0 * (phase - math.floor(phase)) - 1.0
+        noise = rng.uniform(-1, 1)
+        lp += (noise - lp) * 0.12
+        env = math.sin(min(t * 4.0, 1.0) * math.pi / 2) * (1.0 - t) ** 0.6
+        s = (saw * 0.6 + lp * 0.9) * env
+        s = max(-1.0, min(1.0, s * 2.2))  # drive into clipping for grit
+        out.append(s)
+    return out
+
+def make_blip():
+    n = int(0.09 * SFX_RATE)
+    out = []
+    for i in range(n):
+        t = i / n
+        f = 880.0 if t < 0.5 else 1174.0
+        s = 1.0 if (i * f / SFX_RATE) % 1.0 < 0.5 else -1.0
+        out.append(s * 0.5 * (1.0 - t))
+    return out
+
 def main():
     os.makedirs(OUT, exist_ok=True)
+    os.makedirs(os.path.join(OUT, "sfx"), exist_ok=True)
     write_pal(os.path.join(OUT, "palette.pal"))
     make_tiles().save(os.path.join(OUT, "tiles.png"), transparency=0)
     make_player().save(os.path.join(OUT, "player.png"), transparency=0)
     make_rock_prop().save(os.path.join(OUT, "rock.png"), transparency=0)
+    write_wav8(os.path.join(OUT, "sfx", "worm_roar.wav"), make_worm_roar())
+    write_wav8(os.path.join(OUT, "sfx", "blip.wav"), make_blip())
     with open(os.path.join(OUT, "manifest.txt"), "w") as f:
         f.write("# name  file  frame_w frame_h frames  anchor_x anchor_y\n")
         f.write("tiles   tiles.png   32 16 8   16 8\n")

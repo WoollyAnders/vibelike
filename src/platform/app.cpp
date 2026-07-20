@@ -3,32 +3,129 @@
 // animated sprite, colormap night lighting, mouse tile picking, text.
 #include <SDL.h>
 
+#include <cmath>
 #include <cstdio>
+#include <vector>
 
 #include "engine/assets.h"
+#include "engine/audio.h"
 #include "engine/framebuffer.h"
 #include "engine/iso.h"
 #include "engine/palette.h"
 #include "engine/render.h"
+#include "engine/wav.h"
 #include "platform/input.h"
 
 namespace {
 
 constexpr int kTickHz = 60;
 
+// ---- demo audio data ---------------------------------------------------------
+
+// Instruments: 0 = warm pad, 1 = glassy pluck, 2 = deep drone.
+const audio::FmInstrument kInstruments[] = {
+    {1.0f, 2.0f, 1.6f, 0.3f, {0.9f, 0.6f, 0.7f, 1.4f}, {1.2f, 0.8f, 0.5f, 1.0f}, 0.30f},
+    {1.0f, 3.01f, 4.0f, 0.2f, {0.004f, 0.35f, 0.0f, 0.35f}, {0.004f, 0.2f, 0.2f, 0.2f}, 0.38f},
+    {0.5f, 1.0f, 2.2f, 0.4f, {1.5f, 1.0f, 0.8f, 2.0f}, {2.0f, 1.5f, 0.6f, 1.5f}, 0.34f},
+};
+
+// Ambient loop, 4 ticks/sec, 64 ticks (~16s). D drone + slow pad + sparse pluck.
+const audio::SongEvent kAmbient[] = {
+    {0, 0, 38, 2, 100},    // D2 drone
+    {0, 1, 57, 0, 70},     // A3 pad
+    {16, 1, 0, 0, 0},
+    {18, 1, 60, 0, 70},    // C4 pad
+    {32, 1, 0, 0, 0},
+    {34, 1, 57, 0, 70},
+    {8, 2, 62, 1, 90},     // D4 pluck
+    {14, 2, 65, 1, 80},    // F4
+    {22, 2, 69, 1, 85},    // A4
+    {30, 2, 72, 1, 75},    // C5
+    {44, 2, 69, 1, 70},
+    {52, 2, 65, 1, 65},
+    {0xFFFF, 0, 0, 0, 0},
+};
+
+int g_song_ambient = -1;
+int g_sfx_roar = -1;
+int g_sfx_blip = -1;
+
+bool audio_load(audio::Mixer& mixer) {
+    for (const audio::FmInstrument& in : kInstruments) mixer.add_instrument(in);
+    // Song events must be tick-sorted; sort a mutable copy at startup.
+    static std::vector<audio::SongEvent> sorted(kAmbient, kAmbient + SDL_arraysize(kAmbient) - 1);
+    for (size_t i = 1; i < sorted.size(); ++i)  // insertion sort, tiny N
+        for (size_t j = i; j > 0 && sorted[j].tick < sorted[j - 1].tick; --j)
+            std::swap(sorted[j], sorted[j - 1]);
+    sorted.push_back(audio::SongEvent{0xFFFF, 0, 0, 0, 0});
+    g_song_ambient = mixer.add_song(audio::Song{sorted.data(), 4.0f, 64, 0});
+
+    Sample roar, blip;
+    if (!wav_load("data/sfx/worm_roar.wav", roar) || !wav_load("data/sfx/blip.wav", blip)) {
+        std::fprintf(stderr, "audio: failed to load sfx\n");
+        return false;
+    }
+    g_sfx_roar = mixer.add_sample(std::move(roar));
+    g_sfx_blip = mixer.add_sample(std::move(blip));
+    return true;
+}
+
+void sdl_audio_callback(void* userdata, Uint8* stream, int len) {
+    static_cast<audio::Mixer*>(userdata)->render(reinterpret_cast<int16_t*>(stream), len / 4);
+}
+
+// Offline verification: render the mixer to data/dump.wav with scripted
+// events, no audio device needed. Prints per-second RMS.
+int run_dumpwav(audio::Mixer& mixer) {
+    constexpr int kSeconds = 8;
+    std::vector<int16_t> out(size_t(audio::kRate) * kSeconds * 2);
+    mixer.push({audio::Cmd::PlaySong, uint8_t(g_song_ambient), 0, 0});
+    for (int s = 0; s < kSeconds; ++s) {
+        if (s == 2) mixer.push({audio::Cmd::PlaySfx, uint8_t(g_sfx_roar), 255, 128});
+        if (s == 4) mixer.push({audio::Cmd::Rumble, 0, 220, 0});
+        if (s == 6) mixer.push({audio::Cmd::Rumble, 0, 0, 0});
+        mixer.render(out.data() + size_t(s) * audio::kRate * 2, audio::kRate);
+        double acc = 0;
+        for (int i = 0; i < audio::kRate; ++i) {
+            const double v = out[size_t(s) * audio::kRate * 2 + i * 2] / 32768.0;
+            acc += v * v;
+        }
+        std::printf("second %d rms %.4f\n", s, std::sqrt(acc / audio::kRate));
+    }
+    const bool ok = wav_save("data/dump.wav", out.data(), audio::kRate * kSeconds, audio::kRate);
+    std::printf("dump.wav %s\n", ok ? "written" : "FAILED");
+    return ok ? 0 : 1;
+}
+
 struct Platform {
     SDL_Window* window = nullptr;
     SDL_Renderer* renderer = nullptr;
     SDL_Texture* texture = nullptr;  // 640x360 ARGB8888 streaming
+    SDL_AudioDeviceID audio_dev = 0;
     bool fullscreen = false;
     SDL_Rect present_dst{0, 0, fb::W, fb::H};  // last blit rect, for mouse mapping
     int present_scale = 1;
 };
 
-bool platform_init(Platform& p) {
-    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+bool platform_init(Platform& p, audio::Mixer* mixer) {
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) != 0) {
         std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
         return false;
+    }
+    if (mixer) {
+        SDL_AudioSpec want{}, have{};
+        want.freq = audio::kRate;
+        want.format = AUDIO_S16SYS;
+        want.channels = 2;
+        want.samples = 1024;
+        want.callback = sdl_audio_callback;
+        want.userdata = mixer;
+        p.audio_dev = SDL_OpenAudioDevice(nullptr, 0, &want, &have, 0);
+        if (!p.audio_dev) {
+            std::fprintf(stderr, "audio device unavailable: %s\n", SDL_GetError());
+        } else {
+            SDL_PauseAudioDevice(p.audio_dev, 0);
+        }
     }
     p.window = SDL_CreateWindow("DUSTFALL", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                                 fb::W * 2, fb::H * 2, SDL_WINDOW_RESIZABLE);
@@ -52,6 +149,7 @@ bool platform_init(Platform& p) {
 }
 
 void platform_shutdown(Platform& p) {
+    if (p.audio_dev) SDL_CloseAudioDevice(p.audio_dev);
     if (p.texture) SDL_DestroyTexture(p.texture);
     if (p.renderer) SDL_DestroyRenderer(p.renderer);
     if (p.window) SDL_DestroyWindow(p.window);
@@ -248,8 +346,14 @@ void demo_draw(Framebuffer& frame, const Demo& d, const Assets& assets,
 }  // namespace
 
 int main(int argc, char** argv) {
+    audio::Mixer mixer;
+    if (!audio_load(mixer)) return 1;
+
+    for (int i = 1; i < argc; ++i)
+        if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
+
     Platform platform;
-    if (!platform_init(platform)) {
+    if (!platform_init(platform, &mixer)) {
         platform_shutdown(platform);
         return 1;
     }
@@ -276,6 +380,9 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i)
         if (SDL_strcmp(argv[i], "--night") == 0) demo.night = true;
 
+    mixer.push({audio::Cmd::PlaySong, uint8_t(g_song_ambient), 0, 0});
+    bool rumble_on = false;
+
     uint64_t prev = SDL_GetPerformanceCounter();
     const double tick_period = 1.0 / kTickHz;
     double accum = 0.0;
@@ -295,6 +402,12 @@ int main(int argc, char** argv) {
                         break;
                     }
                     if (ev.key.keysym.sym == SDLK_ESCAPE) running = false;
+                    if (ev.key.keysym.sym == SDLK_SPACE)
+                        mixer.push({audio::Cmd::PlaySfx, uint8_t(g_sfx_roar), 255, 128});
+                    if (ev.key.keysym.sym == SDLK_r) {
+                        rumble_on = !rumble_on;
+                        mixer.push({audio::Cmd::Rumble, 0, uint8_t(rumble_on ? 220 : 0), 0});
+                    }
                     map_scancode(input, ev.key.keysym.scancode, true);
                     break;
                 case SDL_KEYUP:
