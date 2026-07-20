@@ -35,7 +35,7 @@ frames, Doom-style colormap lighting bands, bitmap font, smooth-scrolling camera
 screen→tile picking.
 **Exit:** scrolling iso desert with an animated sprite, night-lighting toggle, and text.
 
-### E4 — Audio ⬜
+### E4 — Audio ✅
 Mixer on the SDL audio callback: 2-op FM synth voices + tracked song playback, 8-bit WAV
 one-shots, parameterized worm-rumble channel (filtered noise + low sine).
 **Exit:** keypress plays a crunchy worm roar over an FM ambient track; no glitches while

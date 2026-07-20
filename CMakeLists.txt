@@ -25,6 +25,8 @@ add_executable(dustfall
   src/engine/assets.cpp
   src/engine/render.cpp
   src/engine/iso.cpp
+  src/engine/audio.cpp
+  src/engine/wav.cpp
   src/engine/stb_image_impl.cpp
 )
 
