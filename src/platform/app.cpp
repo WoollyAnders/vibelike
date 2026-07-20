@@ -139,6 +139,7 @@ constexpr Binding kBindings[] = {
     {SDL_SCANCODE_Z, Key::Powers},
     {SDL_SCANCODE_C, Key::Sandwalk},
     {SDL_SCANCODE_M, Key::Map},
+    {SDL_SCANCODE_G, Key::Harvest},
     {SDL_SCANCODE_F5, Key::Save},
     {SDL_SCANCODE_F9, Key::Load},
 };
@@ -226,12 +227,12 @@ int run_seamtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cma
         }
     };
 
-    tick_with(Key::Right, 5);
-    tick_with(Key::Down, 3);
+    tick_with(Key::Right, 3);
+    tick_with(Key::Down, 2);
     tick_with(Key::Save, 1);
     const uint64_t h_saved = game_state_hash();
 
-    tick_with(Key::Right, 7);  // diverge
+    tick_with(Key::Left, 4);  // diverge (backtracks over known-walkable tiles)
     const uint64_t h_diverged = game_state_hash();
 
     tick_with(Key::Load, 1);
@@ -239,8 +240,8 @@ int run_seamtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cma
 
     // Re-init from the same seed and replay the pre-save inputs: determinism.
     game_init(12345, services);
-    tick_with(Key::Right, 5);
-    tick_with(Key::Down, 3);
+    tick_with(Key::Right, 3);
+    tick_with(Key::Down, 2);
     const uint64_t h_replayed = game_state_hash();
 
     std::printf("saved    %016llx\ndiverged %016llx\nloaded   %016llx\nreplayed %016llx\n",
@@ -251,16 +252,42 @@ int run_seamtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cma
     return pass ? 0 : 1;
 }
 
+// Headless survival test: leave the sietch, then stand in the open desert
+// until thirst and sun finish the job. Proves upkeep/heat/death end to end.
+int run_slicetest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(777, services);
+
+    InputState in;
+    auto tick_with = [&](Key k) {
+        in.pressed[int(k)] = true;
+        game_update(in);
+        in.end_tick();
+    };
+
+    for (int i = 0; i < 12; ++i) tick_with(Key::Down);  // corridor -> door -> desert
+    int waits = 0;
+    while (!game_is_dead() && waits < 6000) {
+        tick_with(Key::Wait);
+        ++waits;
+    }
+    std::printf("dead after %d waits\n", waits);
+    const bool pass = game_is_dead() && waits > 50;
+    std::printf("slicetest %s\n", pass ? "PASS" : "FAIL");
+    return pass ? 0 : 1;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
     audio::Mixer mixer;
     if (!audio_load(mixer)) return 1;
 
-    bool seamtest = false;
+    bool seamtest = false, slicetest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
         if (SDL_strcmp(argv[i], "--seamtest") == 0) seamtest = true;
+        if (SDL_strcmp(argv[i], "--slicetest") == 0) slicetest = true;
     }
 
     Palette master;
@@ -275,6 +302,7 @@ int main(int argc, char** argv) {
     if (!assets.load_all("data", master)) return 1;
 
     if (seamtest) return run_seamtest(mixer, assets, cmaps);
+    if (slicetest) return run_slicetest(mixer, assets, cmaps);
 
     Platform platform;
     if (!platform_init(platform, &mixer)) {

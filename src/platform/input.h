@@ -10,7 +10,7 @@ enum class Key : uint8_t {
     UpLeft, UpRight, DownLeft, DownRight,   // diagonal moves (numpad)
     Wait,
     Confirm, Cancel,
-    Inventory, Look, Powers, Sandwalk, Map,
+    Inventory, Look, Powers, Sandwalk, Map, Harvest,
     Save, Load,
     Count
 };

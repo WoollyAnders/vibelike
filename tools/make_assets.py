@@ -121,6 +121,8 @@ def make_tiles():
         make_floor(68, 4, speckle=146, speckle_p=0.22),  # 5 spice-flecked sand
         make_floor(60, 3, edge_dark=1),         # 6 drum sand (dimmer, ringed)
         make_highlight(),                        # 7 selection highlight
+        make_floor(100, 3, edge_dark=2),        # 8 sietch stone floor
+        make_floor(103, 2, edge_dark=2),        # 9 sietch door pad
     ]
     # drum sand: concentric arcs
     px = tiles[6].load()
@@ -129,7 +131,86 @@ def make_tiles():
             d = abs(x - 16) + abs((y - 8) * 2)
             if d in (6, 12):
                 px[x, y] = 52
+    # door pad: gold inlay border
+    px = tiles[9].load()
+    for y, x0, x1 in diamond_rows():
+        px[x0, y] = 228
+        px[x1 - 1, y] = 228
     return sheet_from(tiles, 32, 16)
+
+def make_hound():
+    """16x16 dust hound, 2 frames (lope)."""
+    frames = []
+    for i in range(2):
+        img = new_indexed(16, 16)
+        px = img.load()
+        lift = 1 if i == 1 else 0
+        # lean body
+        for y in range(6, 12):
+            for x in range(2, 13):
+                if (x + y) % 7 != 0:
+                    px[x, y - lift] = 100 + ((x * 3 + y) % 5)
+        # head
+        for y in range(4, 8):
+            for x in range(11, 15):
+                px[x, y - lift] = 104
+        px[14, 5 - lift] = 210  # eye ember
+        # legs
+        for x in (3, 6, 9, 12):
+            px[x, 12 + (i if x % 2 else -i) % 2] = 98
+            px[x, 13] = 98
+        frames.append(img)
+    return sheet_from(frames, 16, 16)
+
+def make_corpse():
+    """16x10 harvestable corpse mound."""
+    img = new_indexed(16, 10)
+    px = img.load()
+    for y in range(3, 9):
+        for x in range(2, 14):
+            dx, dy = (x - 8) / 6.5, (y - 6) / 3.2
+            if dx * dx + dy * dy < 1.0:
+                px[x, y] = 96 + int((1 - dy) * 4)
+    px[6, 4] = 200
+    px[9, 5] = 198
+    return img
+
+def make_wall():
+    """32x40 sietch wall block (fills a diamond footprint, tall)."""
+    img = new_indexed(32, 40)
+    px = img.load()
+    for y, x0, x1 in diamond_rows():
+        for x in range(x0, x1):
+            # extrude the diamond upward 24px
+            for h in range(25):
+                yy = y + 24 - h
+                if 0 <= yy < 40:
+                    shade = 108 if h > 0 else 116
+                    if x < x0 + 3 or x > x1 - 4:
+                        shade -= 6
+                    px[x, yy] = shade + ((x * 7 + yy * 3) % 3)
+    # top face brighter
+    for y, x0, x1 in diamond_rows():
+        for x in range(x0, x1):
+            if y < 14:
+                px[x, y] = 118 + ((x + y) % 3)
+    return img
+
+def make_cistern():
+    """24x24 water cistern."""
+    img = new_indexed(24, 24)
+    px = img.load()
+    for y in range(8, 22):
+        for x in range(3, 21):
+            dx, dy = (x - 12) / 9.5, (y - 15) / 7.5
+            if dx * dx + dy * dy < 1.0:
+                px[x, y] = 102
+    for y in range(9, 14):
+        for x in range(6, 18):
+            dx, dy = (x - 12) / 6.5, (y - 11.5) / 2.8
+            if dx * dx + dy * dy < 1.0:
+                px[x, y] = 168 + int(2 * math.sin(x))  # water shimmer blues
+    return img
 
 # ---- sprites -----------------------------------------------------------------
 
@@ -234,11 +315,19 @@ def main():
     make_rock_prop().save(os.path.join(OUT, "rock.png"), transparency=0)
     write_wav8(os.path.join(OUT, "sfx", "worm_roar.wav"), make_worm_roar())
     write_wav8(os.path.join(OUT, "sfx", "blip.wav"), make_blip())
+    make_hound().save(os.path.join(OUT, "hound.png"), transparency=0)
+    make_corpse().save(os.path.join(OUT, "corpse.png"), transparency=0)
+    make_wall().save(os.path.join(OUT, "wall.png"), transparency=0)
+    make_cistern().save(os.path.join(OUT, "cistern.png"), transparency=0)
     with open(os.path.join(OUT, "manifest.txt"), "w") as f:
         f.write("# name  file  frame_w frame_h frames  anchor_x anchor_y\n")
-        f.write("tiles   tiles.png   32 16 8   16 8\n")
+        f.write("tiles   tiles.png   32 16 10  16 8\n")
         f.write("player  player.png  16 32 4   8 30\n")
         f.write("rock    rock.png    32 32 1   16 26\n")
+        f.write("hound   hound.png   16 16 2   8 13\n")
+        f.write("corpse  corpse.png  16 10 1   8 7\n")
+        f.write("wall    wall.png    32 40 1   16 32\n")
+        f.write("cistern cistern.png 24 24 1   12 20\n")
     print("assets written to", os.path.abspath(OUT))
 
 if __name__ == "__main__":

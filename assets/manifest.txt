@@ -1,4 +1,8 @@
 # name  file  frame_w frame_h frames  anchor_x anchor_y
-tiles   tiles.png   32 16 8   16 8
+tiles   tiles.png   32 16 10  16 8
 player  player.png  16 32 4   8 30
 rock    rock.png    32 32 1   16 26
+hound   hound.png   16 16 2   8 13
+corpse  corpse.png  16 10 1   8 7
+wall    wall.png    32 40 1   16 32
+cistern cistern.png 24 24 1   12 20
