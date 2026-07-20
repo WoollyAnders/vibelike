@@ -41,7 +41,7 @@ one-shots, parameterized worm-rumble channel (filtered noise + low sine).
 **Exit:** keypress plays a crunchy worm roar over an FM ambient track; no glitches while
 dragging the window.
 
-### E5 — RNG, saves, game seam ⬜
+### E5 — RNG, saves, game seam ✅
 pcg32 (streamed: world/combat/loot saved, fx firewalled), chunked binary save with CRC +
 atomic write, finalize `game.h` seam (`game_init/update/render/serialize`), stub harness
 proving the full seam.

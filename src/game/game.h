@@ -1,0 +1,35 @@
+#pragma once
+// The seam between platform/engine and game. The platform owns the window,
+// tick loop, input gathering, and present; the game owns everything else.
+// Plain free functions, one game instance per process.
+#include <cstdint>
+
+#include "engine/assets.h"
+#include "engine/audio.h"
+#include "engine/framebuffer.h"
+#include "engine/iso.h"
+#include "engine/palette.h"
+#include "engine/save.h"
+#include "platform/input.h"
+
+struct GameServices {
+    audio::Mixer* mixer;
+    const Assets* assets;
+    const Colormaps* cmaps;
+};
+
+void game_init(uint64_t seed, const GameServices& services);
+
+// Runs at a fixed 60Hz. Returns false when the game wants to quit.
+bool game_update(const InputState& input);
+
+void game_render(Framebuffer& frame);
+
+// Current global palette fade (damage flash, transitions). Applied at present.
+PaletteFade game_fade();
+
+void game_serialize(SaveWriter& w);
+bool game_deserialize(SaveReader& r);
+
+// Order-independent digest of gameplay state; drives the determinism test.
+uint64_t game_state_hash();

@@ -11,6 +11,7 @@ enum class Key : uint8_t {
     Wait,
     Confirm, Cancel,
     Inventory, Look, Powers, Sandwalk, Map,
+    Save, Load,
     Count
 };
 inline constexpr int kKeyCount = int(Key::Count);
