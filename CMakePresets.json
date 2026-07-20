@@ -1,0 +1,35 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "win-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "toolchainFile": "${sourceDir}/cmake/toolchain-mingw.cmake",
+      "binaryDir": "${sourceDir}/build/${presetName}"
+    },
+    {
+      "name": "win-debug",
+      "inherits": "win-base",
+      "displayName": "Windows Debug (MinGW cross)",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Debug" }
+    },
+    {
+      "name": "win-release",
+      "inherits": "win-base",
+      "displayName": "Windows Release (MinGW cross)",
+      "cacheVariables": { "CMAKE_BUILD_TYPE": "Release" }
+    },
+    {
+      "name": "msvc",
+      "displayName": "MSVC verification (run from Windows: cmake.exe --preset msvc)",
+      "generator": "Visual Studio 17 2022",
+      "binaryDir": "${sourceDir}/build/msvc",
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "win-debug", "configurePreset": "win-debug" },
+    { "name": "win-release", "configurePreset": "win-release" }
+  ]
+}
