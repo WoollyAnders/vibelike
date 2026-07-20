@@ -37,6 +37,14 @@ struct NoiseField {
     void clear() {
         for (int i = 0; i < map::N; ++i) at[i] = 0;
     }
+    // Sharply cut noise around a point (engine shutdown, dampeners).
+    void dampen(int cx, int cy, int r, int shift) {
+        for (int y = cy - r; y <= cy + r; ++y)
+            for (int x = cx - r; x <= cx + r; ++x) {
+                if (x < 0 || x >= map::W || y < 0 || y >= map::H) continue;
+                at[y * map::W + x] >>= shift;
+            }
+    }
     // loudest cell (returns value; xy out)
     int hottest(int& hx, int& hy) const {
         int best = 0, bi = 0;

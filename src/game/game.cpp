@@ -8,6 +8,7 @@
 #include "engine/render.h"
 #include "engine/rng.h"
 #include "game/map.h"
+#include "game/harvest.h"
 #include "game/tunables.h"
 #include "game/ui.h"
 #include "game/worm.h"
@@ -18,8 +19,8 @@ constexpr uint32_t kChunkGame = 0x454D4147;  // 'GAME'
 constexpr int kMaxEnts = 64;
 constexpr int kMaxDeltas = 192;
 
-enum class EType : uint8_t { None = 0, Player, Hound, Corpse, Thumper };
-enum class Ai : uint8_t { Idle = 0, Wander, Hunt };
+enum class EType : uint8_t { None = 0, Player, Hound, Corpse, Thumper, Trooper, Spotter };
+enum class Ai : uint8_t { Idle = 0, Wander, Hunt, Guard };
 
 struct Entity {
     EType type = EType::None;
@@ -37,6 +38,9 @@ struct Player {
     int exposure = 0;
     int turn = 0;
     int thumpers = 3;
+    int charges = 1;   // demolition
+    int poisons = 1;   // hold toxin
+    int spice = 0;     // grains
     bool sandwalk = false;
     bool dead = false;
 };
@@ -61,6 +65,9 @@ struct GameState {
 
     worm::Worm wrm;
     worm::NoiseField noise;
+    harvest::Op op;
+    int alarm_turns = 0;       // local reinforcement pressure after sabotage
+    int alarm_spawn_cd = 0;
     uint8_t noise_meter = 0;          // HUD value (near player)
     uint8_t seismo[64] = {};          // history ring for the trace
     uint8_t seismo_head = 0;
@@ -137,6 +144,70 @@ void spawn_zone_wildlife(uint8_t zone_id) {
     }
 }
 
+// Place the Deep Pan's harvest op: crawler on open sand, spotters on the
+// nearest rock, an escort ring of troopers. (M4 schedules these; M3 has one.)
+void spawn_op(uint8_t zone_id) {
+    if (zone_id != map::kZoneDeepPan || g.op.state != harvest::OpState::None) return;
+    map::Zone& z = g.zones[zone_id];
+
+    // find an open-sand anchor away from the west entry
+    int ax = 0, ay = 0, guard = 0;
+    while (++guard < 4000) {
+        const int x = g.rng.world.range(24, map::W - 8);
+        const int y = g.rng.world.range(8, map::H - 8);
+        bool clear = true;
+        for (int dy = -2; dy <= 1 && clear; ++dy)
+            for (int dx = -2; dx <= 1; ++dx)
+                if (!z.walkable(x + dx, y + dy)) { clear = false; break; }
+        if (!clear) continue;
+        ax = x; ay = y;
+        break;
+    }
+    if (!ax) return;
+
+    g.op = harvest::Op{};
+    g.op.state = harvest::OpState::Working;
+    g.op.x = int16_t(ax);
+    g.op.y = int16_t(ay);
+    g.op.zone = zone_id;
+
+    // crawler footprint blocks movement (but the worm eats through it)
+    for (int dy = -1; dy <= 0; ++dy)
+        for (int dx = -1; dx <= 0; ++dx)
+            z.flags[(ay + dy) * map::W + ax + dx] |= map::TF_BLOCK;
+
+    // spotters: two, on the nearest rock ground within 12 tiles (else sand)
+    int placed = 0;
+    for (int r = 2; r <= 14 && placed < 2; ++r) {
+        for (int dy = -r; dy <= r && placed < 2; ++dy)
+            for (int dx = -r; dx <= r && placed < 2; ++dx) {
+                if (dx * dx + dy * dy > r * r || dx * dx + dy * dy < (r - 1) * (r - 1)) continue;
+                const int x = ax + dx, y = ay + dy;
+                if (x < 1 || x >= map::W - 1 || y < 1 || y >= map::H - 1) continue;
+                if (!z.walkable(x, y) || entity_at(x, y, zone_id)) continue;
+                const uint8_t fl = z.floor[y * map::W + x];
+                const bool rocky = fl == 3 || fl == 4;
+                if (r <= 12 && !rocky) continue;  // prefer rock perches
+                if (Entity* e = alloc_entity()) {
+                    *e = Entity{EType::Spotter, Ai::Idle, zone_id,
+                                int16_t(x), int16_t(y), 4, 0, 0};
+                    ++placed;
+                }
+            }
+    }
+
+    // escort: three troopers around the crawler
+    for (int i = 0, tries = 0; i < 3 && tries < 200; ++tries) {
+        const int x = ax + g.rng.world.range(-4, 3);
+        const int y = ay + g.rng.world.range(-4, 3);
+        if (!z.walkable(x, y) || entity_at(x, y, zone_id) || g.op.tile_on(x, y)) continue;
+        if (Entity* e = alloc_entity()) {
+            *e = Entity{EType::Trooper, Ai::Guard, zone_id, int16_t(x), int16_t(y), 8, 0, 0};
+            ++i;
+        }
+    }
+}
+
 void apply_deltas(uint8_t zone_id) {
     for (int i = 0; i < g.delta_count; ++i)
         if (g.deltas[i].zone == zone_id)
@@ -194,6 +265,15 @@ void die(const char* cause) {
 
 // ---- worm callbacks ----------------------------------------------------------
 
+void op_denied(const char* how) {
+    if (g.op.denied_reported) return;
+    g.op.denied_reported = true;
+    g.log.push("%s", how);
+    g.log.push("The harvest is DENIED. The Baron will rage.");
+    g.alarm_turns = 50;
+    g.alarm_spawn_cd = 6;
+}
+
 void worm_cb_crush(void*, int x, int y) {
     for (Entity& e : g.ents) {
         if (e.type == EType::None || e.zone != g.cur_zone) continue;
@@ -202,8 +282,13 @@ void worm_cb_crush(void*, int x, int y) {
             die("Swallowed whole. The desert keeps its own.");
         } else {
             if (e.type == EType::Hound) g.log.push("A dust hound vanishes into the maw.");
+            if (e.type == EType::Trooper) g.log.push("A trooper is snatched screaming into the sand.");
             e.type = EType::None;
         }
+    }
+    if (g.op.live() && g.op.zone == g.cur_zone && g.op.tile_on(x, y)) {
+        g.op.state = harvest::OpState::Destroyed;
+        op_denied("The worm takes the crawler whole.");
     }
 }
 
@@ -239,6 +324,146 @@ void damage_player(int dmg, const char* cause) {
 }
 
 // ---- world turn --------------------------------------------------------------
+
+// Troopers guard the crawler; they hunt (and shout) if they spot you close.
+void trooper_act(Entity& e) {
+    const map::Zone& z = zone();
+    const Entity& p = player_ent();
+    const int pdist = g.dmap[e.y * map::W + e.x];
+    const bool sees = (z.vis[e.y * map::W + e.x] & map::V_VISIBLE) && pdist >= 0 &&
+                      pdist <= (g.alarm_turns > 0 ? 12 : 6);
+
+    if (sees && e.ai != Ai::Hunt) {
+        e.ai = Ai::Hunt;
+        g.log.push("A Harkonnen trooper shouts an alarm!");
+        g.noise.add(e.x, e.y, 15);
+    }
+    if (e.ai == Ai::Hunt) {
+        if (pdist < 0 || pdist > 14) { e.ai = Ai::Guard; return; }
+        if (pdist == 1) {
+            const int dmg = g.rng.combat.range(2, 3);
+            g.log.push("The trooper's blade finds you for %d.", dmg);
+            damage_player(dmg, "Cut down by Harkonnen steel.");
+            return;
+        }
+        int best_x = e.x, best_y = e.y;
+        int16_t best = INT16_MAX;
+        for (int dy = -1; dy <= 1; ++dy)
+            for (int dx = -1; dx <= 1; ++dx) {
+                if (!dx && !dy) continue;
+                const int nx = e.x + dx, ny = e.y + dy;
+                if (!z.walkable(nx, ny) || g.op.tile_on(nx, ny)) continue;
+                if (entity_at(nx, ny, e.zone)) continue;
+                if (nx == p.x && ny == p.y) continue;
+                const int16_t d = g.dmap[ny * map::W + nx];
+                if (d >= 0 && d < best) { best = d; best_x = nx; best_y = ny; }
+            }
+        e.x = int16_t(best_x);
+        e.y = int16_t(best_y);
+        g.noise.add(e.x, e.y, 4);
+    } else if (g.op.live() && g.rng.combat.chance(1, 3)) {
+        // drift back toward the crawler
+        const int gx = g.op.x, gy = g.op.y;
+        const int dx = gx > e.x ? 1 : gx < e.x ? -1 : 0;
+        const int dy = gy > e.y ? 1 : gy < e.y ? -1 : 0;
+        const int dist2 = (gx - e.x) * (gx - e.x) + (gy - e.y) * (gy - e.y);
+        if (dist2 > 25) {
+            const int nx = e.x + dx, ny = e.y + dy;
+            if (z.walkable(nx, ny) && !entity_at(nx, ny, e.zone) &&
+                !g.op.tile_on(nx, ny) && !(nx == p.x && ny == p.y)) {
+                e.x = int16_t(nx);
+                e.y = int16_t(ny);
+            }
+        }
+    }
+}
+
+bool spotters_alive() {
+    for (const Entity& e : g.ents)
+        if (e.type == EType::Spotter && e.zone == g.cur_zone) return true;
+    return false;
+}
+
+// One turn of the harvest operation.
+void op_turn() {
+    if (!g.op.live() || g.op.zone != g.cur_zone) return;
+    harvest::Op& op = g.op;
+    const bool stirring = int(g.wrm.state) >= int(worm::State::Stirring);
+    const bool hunting = int(g.wrm.state) >= int(worm::State::Hunting);
+
+    switch (op.state) {
+        case harvest::OpState::Working:
+            op.hold = int16_t(op.hold + harvest::kHoldPerTurn);
+            g.noise.add(op.x, op.y, harvest::kCrawlerNoise);
+            if (stirring && spotters_alive()) {
+                // hard shutdown: spotters kill the engines and the accumulated
+                // racket dies with them — this is what makes them worth knifing
+                op.state = harvest::OpState::Paused;
+                g.noise.dampen(op.x, op.y, 10, 3);
+                g.log.push("Spotters wave wormsign flags. The crawler falls silent.");
+            } else if (op.hold >= 100) {
+                op.state = harvest::OpState::Evac;
+                op.eta = harvest::kEvacTurns;
+                g.log.push("Hold full. The carryall is inbound.");
+            }
+            break;
+        case harvest::OpState::Paused:
+            g.noise.dampen(op.x, op.y, 4, 1);
+            if (hunting) {
+                op.state = harvest::OpState::Evac;
+                op.eta = harvest::kEvacTurns;
+                g.log.push("Too close! The carryall is called in early.");
+            } else if (!stirring) {
+                op.state = harvest::OpState::Working;
+                g.log.push("The crawler grinds back to life.");
+            }
+            break;
+        case harvest::OpState::Evac:
+            g.noise.add(op.x, op.y, 8);  // idling engines
+            if (--op.eta <= 0) {
+                op.state = harvest::OpState::Shipped;
+                if (op.poisoned) {
+                    op_denied("The load lifts away - laced with rot they will "
+                              "not find until the refinery.");
+                } else {
+                    g.log.push("The carryall lifts the load into the sky. Lost.");
+                }
+            }
+            break;
+        default: break;
+    }
+}
+
+// Reinforcement pressure after a denied harvest.
+void alarm_turn() {
+    if (g.alarm_turns <= 0) return;
+    --g.alarm_turns;
+    if (g.cur_zone == map::kZoneSietch) return;
+    if (--g.alarm_spawn_cd <= 0) {
+        g.alarm_spawn_cd = 12;
+        int troopers = 0;
+        for (const Entity& e : g.ents)
+            if (e.type == EType::Trooper && e.zone == g.cur_zone) ++troopers;
+        if (troopers < 6) {
+            map::Zone& z = zone();
+            for (int placed = 0, tries = 0; placed < 2 && tries < 100; ++tries) {
+                const int edge = int(g.rng.combat.below(4));
+                const int x = edge < 2 ? (edge == 0 ? 1 : map::W - 2)
+                                       : g.rng.combat.range(1, map::W - 2);
+                const int y = edge < 2 ? g.rng.combat.range(1, map::H - 2)
+                                       : (edge == 2 ? 1 : map::H - 2);
+                if (!z.walkable(x, y) || entity_at(x, y, g.cur_zone)) continue;
+                if (Entity* e = alloc_entity()) {
+                    *e = Entity{EType::Trooper, Ai::Hunt, g.cur_zone,
+                                int16_t(x), int16_t(y), 8, 0, 0};
+                    ++placed;
+                }
+            }
+            g.log.push("An ornithopter thunders over - troopers rope down!");
+            g.services.mixer->push({audio::Cmd::PlaySfx, 0, 160, 150});
+        }
+    }
+}
 
 void hound_act(Entity& e) {
     const map::Zone& z = zone();
@@ -340,6 +565,14 @@ void advance_world() {
             }
             continue;
         }
+        if (e.type == EType::Trooper) {
+            e.energy += 100;
+            while (e.energy >= 100 && !g.pl.dead) {
+                e.energy -= 100;
+                trooper_act(e);
+            }
+            continue;
+        }
         if (e.type != EType::Hound) continue;
         e.energy += 100;
         while (e.energy >= 100 && !g.pl.dead) {
@@ -347,6 +580,9 @@ void advance_world() {
             hound_act(e);
         }
     }
+
+    op_turn();
+    alarm_turn();
 
     // the worm's turn (also decays the noise field)
     const worm::State before = g.wrm.state;
@@ -394,6 +630,12 @@ void enter_zone(uint8_t id, bool use_spawn, int at_x = 0, int at_y = 0) {
     map::generate(zone(), g.seed, map::ZoneId(id), sx, sy);
     apply_deltas(id);
     spawn_zone_wildlife(id);
+    spawn_op(id);
+    // crawler footprint re-blocks after regen
+    if (g.op.live() && g.op.zone == id)
+        for (int dy = -1; dy <= 0; ++dy)
+            for (int dx = -1; dx <= 0; ++dx)
+                zone().flags[(g.op.y + dy) * map::W + g.op.x + dx] |= map::TF_BLOCK;
 
     // crossing a region resets the worm; it hunts by local noise
     g.wrm = worm::Worm{};
@@ -456,16 +698,34 @@ void try_move(int dx, int dy) {
         return;
     }
 
-    if (Entity* h = entity_at(nx, ny, g.cur_zone, EType::Hound)) {
-        h->hp -= tune::kPlayerAtk;
+    Entity* victim = entity_at(nx, ny, g.cur_zone, EType::Hound);
+    if (!victim) victim = entity_at(nx, ny, g.cur_zone, EType::Trooper);
+    if (!victim) victim = entity_at(nx, ny, g.cur_zone, EType::Spotter);
+    if (victim) {
+        victim->hp -= tune::kPlayerAtk;
         g.services.mixer->push({audio::Cmd::PlaySfx, 1, 200, 60});
-        g.noise.add(nx, ny, 12);
-        if (h->hp <= 0) {
-            g.log.push("The dust hound collapses. Its water is yours.");
-            *h = Entity{EType::Corpse, Ai::Idle, uint8_t(g.cur_zone),
-                        h->x, h->y, 0, 0, tune::kCorpseWaterHound};
+        g.noise.add(nx, ny, victim->type == EType::Spotter ? 4 : 12);  // blades are quiet
+        if (victim->hp <= 0) {
+            switch (victim->type) {
+                case EType::Hound:
+                    g.log.push("The dust hound collapses. Its water is yours.");
+                    break;
+                case EType::Trooper:
+                    g.log.push("The trooper falls. His water belongs to the tribe now.");
+                    break;
+                case EType::Spotter:
+                    g.log.push("The spotter crumples. No eyes on the sand now.");
+                    break;
+                default: break;
+            }
+            const int16_t yield_ = victim->type == EType::Hound
+                                       ? int16_t(tune::kCorpseWaterHound) : int16_t(140);
+            *victim = Entity{EType::Corpse, Ai::Idle, uint8_t(g.cur_zone),
+                             victim->x, victim->y, 0, 0, yield_};
         } else {
-            g.log.push("You slash the dust hound.");
+            g.log.push("You strike %s.",
+                       victim->type == EType::Hound ? "the dust hound" :
+                       victim->type == EType::Trooper ? "the trooper" : "the spotter");
         }
         advance_world();
         return;
@@ -519,8 +779,66 @@ void place_thumper() {
     advance_world();
 }
 
+bool player_adjacent_op() {
+    const Entity& p = player_ent();
+    return g.op.live() && g.op.zone == g.cur_zone && g.op.adjacent(p.x, p.y);
+}
+
+void try_plant() {
+    if (!player_adjacent_op()) {
+        g.log.push("Nothing here worth a charge.");
+        return;
+    }
+    if (g.pl.charges <= 0) {
+        g.log.push("No demolition charges.");
+        return;
+    }
+    ++g.op.plant_progress;
+    if (g.op.plant_progress < harvest::kPlantTurns) {
+        g.log.push("Working the charge into the hull seam... (%d/%d)",
+                   int(g.op.plant_progress), harvest::kPlantTurns);
+    } else {
+        --g.pl.charges;
+        g.op.state = harvest::OpState::Destroyed;
+        g.noise.add(g.op.x, g.op.y, 90);
+        g.services.mixer->push({audio::Cmd::PlaySfx, 0, 255, 140});
+        flash(255, 180, 60);
+        op_denied("The crawler blossoms into fire and shrapnel.");
+    }
+    advance_world();
+}
+
+void try_poison() {
+    if (!player_adjacent_op()) {
+        g.log.push("No spice hold in reach.");
+        return;
+    }
+    if (g.pl.poisons <= 0) {
+        g.log.push("No toxin vials left.");
+        return;
+    }
+    if (g.op.poisoned) {
+        g.log.push("The hold is already spoiled.");
+        return;
+    }
+    --g.pl.poisons;
+    g.op.poisoned = true;
+    g.log.push("You slip the toxin into the hold. No one sees a thing.");
+    advance_world();
+}
+
 void try_harvest() {
     Entity& p = player_ent();
+    // stealing from the crawler hold takes priority when adjacent to it
+    if (player_adjacent_op() && g.op.hold >= 15) {
+        g.op.hold = int16_t(g.op.hold - 15);
+        g.pl.spice += 5;
+        g.op.stolen = true;
+        g.noise.add(p.x, p.y, 8);
+        g.log.push("You scoop raw spice from the hold. +5 grains.");
+        advance_world();
+        return;
+    }
     if (Entity* c = entity_at(p.x, p.y, g.cur_zone, EType::Corpse)) {
         g.pl.water += c->data;
         if (g.pl.water > tune::kWaterMax) g.pl.water = tune::kWaterMax;
@@ -586,6 +904,8 @@ bool game_update(const InputState& in) {
     else if (in.pressed_or_repeat(Key::Wait)) advance_world();
     else if (in.was_pressed(Key::Harvest)) try_harvest();
     else if (in.was_pressed(Key::Thumper)) place_thumper();
+    else if (in.was_pressed(Key::Plant)) try_plant();
+    else if (in.was_pressed(Key::Poison)) try_poison();
     else if (in.was_pressed(Key::Sandwalk)) {
         g.pl.sandwalk = !g.pl.sandwalk;
         g.log.push(g.pl.sandwalk ? "You break your rhythm. Walk without wormsign."
@@ -641,6 +961,10 @@ void game_render(Framebuffer& frame) {
     const SpriteSheet* wormhead_spr = assets.get("wormhead");
     const SpriteSheet* wormseg_spr = assets.get("wormseg");
     const SpriteSheet* thumper_spr = assets.get("thumper");
+    const SpriteSheet* crawler_spr = assets.get("crawler");
+    const SpriteSheet* trooper_spr = assets.get("trooper");
+    const SpriteSheet* spotter_spr = assets.get("spotter");
+    const SpriteSheet* carryall_spr = assets.get("carryall");
 
     const map::Zone& z = zone();
     const bool night = is_night();
@@ -708,7 +1032,30 @@ void game_render(Framebuffer& frame) {
             case EType::Thumper:
                 g.draw_list.add(thumper_spr, (g.anim_tick / 8) % 2, sx, sy + 4, light, 1);
                 break;
+            case EType::Trooper:
+                g.draw_list.add(trooper_spr, (g.anim_tick / 8) % 2, sx, sy + 6, light, 1);
+                break;
+            case EType::Spotter:
+                g.draw_list.add(spotter_spr, (g.anim_tick / 14) % 2, sx, sy + 6, light, 1);
+                break;
             default: break;
+        }
+    }
+
+    // The harvest crawler + carryall shadow.
+    if (g.op.live() && g.op.zone == g.cur_zone) {
+        const int idx = g.op.y * map::W + g.op.x;
+        if (z.vis[idx] & (map::V_VISIBLE | map::V_REMEMBERED)) {
+            int sx, sy;
+            iso::tile_to_screen(g.op.x, g.op.y, g.cam, sx, sy);
+            const int light = (z.vis[idx] & map::V_VISIBLE) ? (night ? 18 : 31) : 7;
+            const bool churning = g.op.state == harvest::OpState::Working;
+            g.draw_list.add(crawler_spr, churning ? (g.anim_tick / 6) % 2 : 0,
+                            sx - 16, sy + 4, light, 1);
+            if (g.op.state == harvest::OpState::Evac && (z.vis[idx] & map::V_VISIBLE)) {
+                const int bob = (g.anim_tick / 12) % 3 - 1;
+                g.draw_list.add(carryall_spr, 0, sx - 10, sy - 40 + bob, light, 3);
+            }
         }
     }
 
@@ -753,6 +1100,36 @@ void game_render(Framebuffer& frame) {
                      g.pl.thumpers, g.pl.sandwalk};
     ui::draw_hud(ctx, hud, g.log, g.anim_tick);
 
+    // Harvest op status line (top of screen while an op is live in this zone).
+    if (g.op.zone == g.cur_zone && g.op.state != harvest::OpState::None) {
+        char buf[64];
+        switch (g.op.state) {
+            case harvest::OpState::Working:
+                std::snprintf(buf, sizeof buf, "CRAWLER WORKING - HOLD %d%%", int(g.op.hold));
+                break;
+            case harvest::OpState::Paused:
+                std::snprintf(buf, sizeof buf, "CRAWLER SILENT - wormsign hold %d%%", int(g.op.hold));
+                break;
+            case harvest::OpState::Evac:
+                std::snprintf(buf, sizeof buf, "CARRYALL INBOUND - %d turns", int(g.op.eta));
+                break;
+            case harvest::OpState::Shipped:
+                std::snprintf(buf, sizeof buf, g.op.poisoned ? "LOAD SHIPPED (SPOILED)" : "LOAD SHIPPED");
+                break;
+            case harvest::OpState::Destroyed:
+                std::snprintf(buf, sizeof buf, "HARVEST DENIED");
+                break;
+            default: buf[0] = 0; break;
+        }
+        draw_text_shadow(ctx, buf, 4, 4,
+                         g.op.state == harvest::OpState::Destroyed ? 245 :
+                         g.op.state == harvest::OpState::Evac ? 210 : 230, 1);
+        if (g.alarm_turns > 0) {
+            std::snprintf(buf, sizeof buf, "ALARM %d", g.alarm_turns);
+            draw_text_shadow(ctx, buf, 4, 14, 208, 1);
+        }
+    }
+
     if (g.pl.dead) {
         fill_rect(ctx, fb::W / 2 - 150, 120, 300, 74, 2);
         draw_text_shadow(ctx, "You are one with the sand now.", fb::W / 2 - 120, 132, 210, 1);
@@ -777,9 +1154,15 @@ void game_serialize(SaveWriter& w) {
     w.i32(g.pl.exposure);
     w.i32(g.pl.turn);
     w.i32(g.pl.thumpers);
+    w.i32(g.pl.charges);
+    w.i32(g.pl.poisons);
+    w.i32(g.pl.spice);
     w.u8(g.pl.sandwalk ? 1 : 0);
     w.u8(g.pl.dead ? 1 : 0);
     w.u8(g.spawned_mask);
+    w.bytes(&g.op, sizeof g.op);
+    w.i32(g.alarm_turns);
+    w.i32(g.alarm_spawn_cd);
     w.bytes(g.ents, sizeof g.ents);
     w.bytes(&g.rng.world, sizeof g.rng.world);
     w.bytes(&g.rng.combat, sizeof g.rng.combat);
@@ -801,9 +1184,16 @@ bool game_deserialize(SaveReader& r) {
     pl.exposure = r.i32();
     pl.turn = r.i32();
     pl.thumpers = r.i32();
+    pl.charges = r.i32();
+    pl.poisons = r.i32();
+    pl.spice = r.i32();
     pl.sandwalk = r.u8() != 0;
     pl.dead = r.u8() != 0;
     const uint8_t spawned = r.u8();
+    harvest::Op op;
+    r.bytes(&op, sizeof op);
+    const int alarm_turns = r.i32();
+    const int alarm_cd = r.i32();
     Entity ents[kMaxEnts];
     r.bytes(ents, sizeof ents);
     Pcg32 world, combat, loot;
@@ -825,6 +1215,9 @@ bool game_deserialize(SaveReader& r) {
     g.cur_zone = cur;
     g.pl = pl;
     g.spawned_mask = spawned;
+    g.op = op;
+    g.alarm_turns = alarm_turns;
+    g.alarm_spawn_cd = alarm_cd;
     std::memcpy(g.ents, ents, sizeof g.ents);
     g.rng.world = world;
     g.rng.combat = combat;
@@ -839,6 +1232,10 @@ bool game_deserialize(SaveReader& r) {
         apply_deltas(uint8_t(i));
         std::memcpy(g.zones[i].vis, vis[i], sizeof vis[i]);
     }
+    if (g.op.live())
+        for (int dy = -1; dy <= 0; ++dy)
+            for (int dx = -1; dx <= 0; ++dx)
+                g.zones[g.op.zone].flags[(g.op.y + dy) * map::W + g.op.x + dx] |= map::TF_BLOCK;
     g.shade_hour = -1;
     recompute_shade(g.cur_zone, hour_now());
     refresh_fov_and_paths();
@@ -848,6 +1245,27 @@ bool game_deserialize(SaveReader& r) {
 bool game_is_dead() { return g.pl.dead; }
 
 int game_worm_state() { return int(g.wrm.state); }
+
+void game_debug_warp(int zone_id, int x, int y) {
+    enter_zone(uint8_t(zone_id), false, x, y);
+}
+
+void game_debug_op_info(int* state, int* x, int* y) {
+    if (state) *state = int(g.op.state);
+    if (x) *x = g.op.x;
+    if (y) *y = g.op.y;
+}
+
+void game_debug_kill_spotters() {
+    for (Entity& e : g.ents)
+        if (e.type == EType::Spotter) e.type = EType::None;
+}
+
+void game_debug_refill() {
+    g.pl.water = tune::kWaterMax;
+    g.pl.hp = tune::kPlayerHpMax;
+    g.pl.exposure = 0;
+}
 
 uint64_t game_state_hash() {
     uint64_t h = 0xcbf29ce484222325ULL;

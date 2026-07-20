@@ -141,6 +141,8 @@ constexpr Binding kBindings[] = {
     {SDL_SCANCODE_M, Key::Map},
     {SDL_SCANCODE_G, Key::Harvest},
     {SDL_SCANCODE_T, Key::Thumper},
+    {SDL_SCANCODE_B, Key::Plant},
+    {SDL_SCANCODE_V, Key::Poison},
     {SDL_SCANCODE_F5, Key::Save},
     {SDL_SCANCODE_F9, Key::Load},
 };
@@ -348,19 +350,72 @@ int run_wormtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cma
     return pass ? 0 : 1;
 }
 
+// Headless harvest-op test: the spotter-kill route. Warp to the Deep Pan op,
+// silence the spotters, and wait — the unwarned crawler's own noise brings
+// the worm down on it.
+int run_optest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(9001, services);
+
+    InputState in;
+    auto tick_with = [&](Key k) {
+        in.pressed[int(k)] = true;
+        game_update(in);
+        in.end_tick();
+    };
+
+    game_debug_warp(2 /* Deep Pan */, 2, 32);  // entering spawns the op
+    int op_state = 0, ox = 0, oy = 0;
+    game_debug_op_info(&op_state, &ox, &oy);
+    if (op_state != 1) { std::printf("optest FAIL (no op)\n"); return 1; }
+    game_debug_warp(2, ox - 12 >= 1 ? ox - 12 : 1, oy);  // watch from a distance
+
+    // Phase 1 (control): spotters alive — the pause discipline must keep the
+    // crawler alive through 120 turns of worm cycles.
+    for (int t = 0; t < 120 && !game_is_dead(); ++t) {
+        if (t % 40 == 0) game_debug_refill();
+        tick_with(Key::Wait);
+    }
+    game_debug_op_info(&op_state, nullptr, nullptr);
+    const bool control_ok = !game_is_dead() && (op_state >= 1 && op_state <= 3);
+    std::printf("  control: after 120 turns op state %d (live=%d)\n", op_state,
+                control_ok ? 1 : 0);
+
+    // Phase 2: knife the spotters — with no wormsign warning, the crawler's
+    // own noise must doom it.
+    game_debug_kill_spotters();
+    int turns = 0;
+    while (turns < 150 && !game_is_dead()) {
+        if (turns % 40 == 0) game_debug_refill();
+        tick_with(Key::Wait);
+        game_debug_op_info(&op_state, nullptr, nullptr);
+        if (op_state >= 4) break;
+        ++turns;
+    }
+    game_debug_op_info(&op_state, nullptr, nullptr);
+    std::printf("  spotters killed: %d turns -> op state %d (worm %d)\n", turns,
+                op_state, game_worm_state());
+    const bool pass = control_ok && op_state == 5 && !game_is_dead();
+    std::printf("optest %s\n", pass ? "PASS" : "FAIL");
+    return pass ? 0 : 1;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
     audio::Mixer mixer;
     if (!audio_load(mixer)) return 1;
 
-    bool seamtest = false, slicetest = false, wormtest = false, autodemo = false;
+    bool seamtest = false, slicetest = false, wormtest = false, autodemo = false,
+         optest = false, opdemo = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
         if (SDL_strcmp(argv[i], "--seamtest") == 0) seamtest = true;
         if (SDL_strcmp(argv[i], "--slicetest") == 0) slicetest = true;
         if (SDL_strcmp(argv[i], "--wormtest") == 0) wormtest = true;
         if (SDL_strcmp(argv[i], "--autodemo") == 0) autodemo = true;
+        if (SDL_strcmp(argv[i], "--opdemo") == 0) { autodemo = true; opdemo = true; }
+        if (SDL_strcmp(argv[i], "--optest") == 0) optest = true;
     }
 
     Palette master;
@@ -377,6 +432,7 @@ int main(int argc, char** argv) {
     if (seamtest) return run_seamtest(mixer, assets, cmaps);
     if (slicetest) return run_slicetest(mixer, assets, cmaps);
     if (wormtest) return run_wormtest(mixer, assets, cmaps);
+    if (optest) return run_optest(mixer, assets, cmaps);
 
     Platform platform;
     if (!platform_init(platform, &mixer)) {
@@ -385,17 +441,29 @@ int main(int argc, char** argv) {
     }
 
     GameServices services{&mixer, &assets, &cmaps};
-    game_init(autodemo ? 4242 : uint64_t(SDL_GetPerformanceCounter()), services);
+    game_init(autodemo ? (opdemo ? 9001 : 4242) : uint64_t(SDL_GetPerformanceCounter()),
+              services);
     mixer.push({audio::Cmd::PlaySong, uint8_t(g_song_ambient), 0, 0});
 
     // --autodemo: the worm-bait scenario played by the game itself, one input
-    // every few ticks. Purely for demos/screenshots; no OS input needed.
+    // every few ticks. --opdemo instead warps beside the Deep Pan harvest op
+    // and watches it play out. Purely for demos/screenshots.
     struct DemoStep { Key key; int count; };
-    static const DemoStep kDemoScript[] = {
+    static const DemoStep kWormScript[] = {
         {Key::Down, 13}, {Key::Right, 8}, {Key::Thumper, 1}, {Key::Left, 7},
         {Key::Wait, 60},
     };
-    int demo_step = 0, demo_left = autodemo ? kDemoScript[0].count : 0, demo_cooldown = 0;
+    static const DemoStep kOpScript[] = {{Key::Wait, 220}};
+    const DemoStep* demo_script = opdemo ? kOpScript : kWormScript;
+    const int demo_script_len = opdemo ? int(SDL_arraysize(kOpScript))
+                                       : int(SDL_arraysize(kWormScript));
+    if (opdemo) {
+        game_debug_warp(2, 2, 32);
+        int st = 0, ox = 0, oy = 0;
+        game_debug_op_info(&st, &ox, &oy);
+        game_debug_warp(2, ox - 7 >= 1 ? ox - 7 : 1, oy - 2);
+    }
+    int demo_step = 0, demo_left = autodemo ? demo_script[0].count : 0, demo_cooldown = 0;
 
     Framebuffer frame{};
     InputState input;
@@ -448,12 +516,12 @@ int main(int argc, char** argv) {
         if (accum > 5 * tick_period) accum = 5 * tick_period;
 
         while (accum >= tick_period) {
-            if (autodemo && demo_step < int(SDL_arraysize(kDemoScript))) {
+            if (autodemo && demo_step < demo_script_len) {
                 if (--demo_cooldown <= 0) {
-                    input.pressed[int(kDemoScript[demo_step].key)] = true;
+                    input.pressed[int(demo_script[demo_step].key)] = true;
                     demo_cooldown = 6;
-                    if (--demo_left <= 0 && ++demo_step < int(SDL_arraysize(kDemoScript)))
-                        demo_left = kDemoScript[demo_step].count;
+                    if (--demo_left <= 0 && ++demo_step < demo_script_len)
+                        demo_left = demo_script[demo_step].count;
                 }
             }
             if (!game_update(input)) running = false;

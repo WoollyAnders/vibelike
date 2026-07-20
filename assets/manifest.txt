@@ -11,3 +11,7 @@ mound   mound.png   32 24 3   16 16
 wormhead wormhead.png 48 56 2  24 48
 wormseg wormseg.png 36 36 1   18 28
 thumper thumper.png 12 20 2   6 17
+crawler crawler.png 64 48 2   32 40
+trooper trooper.png 16 32 2   8 30
+spotter spotter.png 16 32 2   8 30
+carryall carryall.png 56 24 1  28 12
