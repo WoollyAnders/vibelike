@@ -17,7 +17,7 @@ FetchContent, `build.sh` (build → deploy exe+data to Windows temp → launch v
 size report script.
 **Exit:** an SDL window with a cleared color, cross-built from WSL and launched on Windows.
 
-### E1 — Indexed framebuffer + palette ⬜
+### E1 — Indexed framebuffer + palette ✅
 640x360 8-bit indexed buffer, palette LUT expand → 32-bit SDL streaming texture, integer
 scale + letterbox, vsynced fixed 60Hz tick, borderless-fullscreen toggle (Alt+Enter),
 palette fade machinery.

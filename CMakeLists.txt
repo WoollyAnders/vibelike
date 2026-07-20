@@ -21,6 +21,7 @@ FetchContent_MakeAvailable(SDL2)
 # ---- Game -------------------------------------------------------------------
 add_executable(dustfall
   src/platform/app.cpp
+  src/engine/palette.cpp
 )
 
 target_include_directories(dustfall PRIVATE src third_party)
