@@ -7,6 +7,8 @@
 #include "engine/assets.h"
 #include "engine/framebuffer.h"
 #include "engine/palette.h"
+// (SpriteSheet pixels now live in atlas pages; draw code is unchanged beyond
+// pitch being a field.)
 
 struct DrawCtx {
     Framebuffer* frame;

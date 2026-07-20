@@ -11,8 +11,8 @@
 
 namespace iso {
 
-inline constexpr int kHalfW = 16;  // half diamond width
-inline constexpr int kHalfH = 8;   // half diamond height
+inline constexpr int kHalfW = 32;  // half diamond width  (64x32 tiles, Diablo 1 scale)
+inline constexpr int kHalfH = 16;  // half diamond height
 
 struct Camera {
     int x = 0, y = 0;  // world pixels at screen center
@@ -27,12 +27,13 @@ inline void tile_to_screen(int tx, int ty, const Camera& cam, int& sx, int& sy) 
 inline void screen_to_tile(int sx, int sy, const Camera& cam, int& tx, int& ty) {
     const int wx = sx + cam.x - fb::W / 2;
     const int wy = sy + cam.y - fb::H / 2;
-    // tx = wx/32 + wy/16, ty = wy/16 - wx/32 — computed in 1/32 units with
-    // rounding toward nearest.
-    const int a = wx * 1 + wy * 2;   // 32*tx  (since wx=16(tx-ty), wy=8(tx+ty))
-    const int b = wy * 2 - wx * 1;   // 32*ty
-    tx = (a + (a >= 0 ? 16 : -16)) >> 5;
-    ty = (b + (b >= 0 ? 16 : -16)) >> 5;
+    // wx = (tx-ty)*kHalfW, wy = (tx+ty)*kHalfH
+    // => tx = wx/(2*kHalfW) + wy/(2*kHalfH), ty likewise with -wx.
+    const int a = wx + 2 * wy;       // (2*kHalfW) * tx, since kHalfW == 2*kHalfH
+    const int b = 2 * wy - wx;       // (2*kHalfW) * ty
+    constexpr int d = 2 * kHalfW;
+    tx = (a + (a >= 0 ? d / 2 : -d / 2)) / d;
+    ty = (b + (b >= 0 ? d / 2 : -d / 2)) / d;
 }
 
 // Deferred sprite draw, sorted by screen y (then an explicit layer bias) so
