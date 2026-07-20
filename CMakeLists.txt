@@ -29,7 +29,9 @@ add_executable(dustfall
   src/engine/wav.cpp
   src/engine/save.cpp
   src/engine/stb_image_impl.cpp
-  src/game/game_stub.cpp
+  src/game/game.cpp
+  src/game/map.cpp
+  src/game/ui.cpp
 )
 
 target_include_directories(dustfall PRIVATE src third_party)

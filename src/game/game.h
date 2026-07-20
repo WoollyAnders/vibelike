@@ -33,3 +33,6 @@ bool game_deserialize(SaveReader& r);
 
 // Order-independent digest of gameplay state; drives the determinism test.
 uint64_t game_state_hash();
+
+// Test/debug hooks.
+bool game_is_dead();

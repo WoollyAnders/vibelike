@@ -51,7 +51,7 @@ proving the full seam.
 
 ## Game milestones
 
-### M1 — Vertical slice ⬜
+### M1 — Vertical slice ✅
 Sietch interior + one desert region (procgen), energy-system turns, shadowcasting FOV
 (drives colormap light), Dijkstra map, bump combat vs dust hound, water drain + **heat
 curve + exposure meter** (static shade), deathstill corpse harvest, cistern, HUD orbs
