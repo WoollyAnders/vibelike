@@ -23,7 +23,7 @@ scale + letterbox, vsynced fixed 60Hz tick, borderless-fullscreen toggle (Alt+En
 palette fade machinery.
 **Exit:** palette-cycling gradient with a smooth fade-to-black at 60fps.
 
-### E2 — Input ⬜
+### E2 — Input ✅
 `InputState` with per-key down/pressed/released edges, key repeat, rebindable mapping
 table, mouse position → framebuffer coordinates.
 **Exit:** move a square around; input feels tick-exact.
