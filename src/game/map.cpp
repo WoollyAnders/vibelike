@@ -1,6 +1,7 @@
 #include "game/map.h"
 
 #include <cstring>
+#include <initializer_list>
 
 #include "engine/rng.h"
 
@@ -36,8 +37,10 @@ void generate_sietch(Zone& z, int& spawn_x, int& spawn_y) {
     spawn_y = 30;
 }
 
-void generate_desert(Zone& z, uint64_t seed, int& spawn_x, int& spawn_y) {
-    const uint32_t s = uint32_t(seed ^ (seed >> 32));
+void generate_desert(Zone& z, uint64_t seed, ZoneId id, int& spawn_x, int& spawn_y) {
+    const uint32_t s = uint32_t(seed ^ (seed >> 32)) + uint32_t(id) * 7919u;
+    // Deep Pan is open erg: far less rock, far more worm country.
+    const int rock_threshold = id == kZoneDeepPan ? 225 : 190;
     for (int y = 0; y < H; ++y) {
         for (int x = 0; x < W; ++x) {
             const uint32_t coarse = hash_combine(s, hash_combine(x >> 3, y >> 3)) & 255;
@@ -45,7 +48,7 @@ void generate_desert(Zone& z, uint64_t seed, int& spawn_x, int& spawn_y) {
             const int v = int(coarse * 3 + fine) / 4;
             uint8_t floor;
             uint8_t flags = 0;
-            if (v > 190) {
+            if (v > rock_threshold) {
                 floor = uint8_t(3 + (fine & 1));  // rock ground
                 if (fine > 215) flags |= TF_ROCKPROP | TF_BLOCK | TF_OPAQUE;
             } else if (v < 40) {
@@ -75,18 +78,30 @@ void generate_desert(Zone& z, uint64_t seed, int& spawn_x, int& spawn_y) {
                 }
         }
 
-    // Door back to the sietch at the map's west edge area; clear around it.
-    const int dx = 4, dy = 32;
-    for (int y = dy - 2; y <= dy + 2; ++y)
-        for (int x = dx - 2; x <= dx + 2; ++x) {
-            z.flags[y * W + x] &= uint8_t(~(TF_BLOCK | TF_ROCKPROP | TF_OPAQUE));
-            if (z.floor[y * W + x] > 6) z.floor[y * W + x] = 0;
-        }
-    z.flags[dy * W + dx] |= TF_DOOR;
-    z.floor[dy * W + dx] = 9;
+    if (id == kZoneDesert) {
+        // Door back to the sietch at the west edge; clear around it.
+        const int dx = 4, dy = 32;
+        for (int y = dy - 2; y <= dy + 2; ++y)
+            for (int x = dx - 2; x <= dx + 2; ++x) {
+                z.flags[y * W + x] &= uint8_t(~(TF_BLOCK | TF_ROCKPROP | TF_OPAQUE));
+                if (z.floor[y * W + x] > 6) z.floor[y * W + x] = 0;
+            }
+        z.flags[dy * W + dx] |= TF_DOOR;
+        z.floor[dy * W + dx] = 9;
+        spawn_x = dx + 1;
+        spawn_y = dy;
+    } else {
+        spawn_x = 2;
+        spawn_y = H / 2;
+    }
 
-    spawn_x = dx + 1;
-    spawn_y = dy;
+    // Keep the east and west edge columns traversable somewhere: clear a lane
+    // so zone-edge travel always has crossings.
+    for (int x : {0, 1, W - 2, W - 1})
+        for (int y = H / 2 - 3; y <= H / 2 + 3; ++y) {
+            z.flags[y * W + x] &= uint8_t(~(TF_BLOCK | TF_ROCKPROP | TF_OPAQUE));
+            if (z.floor[y * W + x] > 6) z.floor[y * W + x] = uint8_t((x + y) % 3);
+        }
 }
 
 }  // namespace
@@ -96,7 +111,7 @@ void generate(Zone& z, uint64_t seed, ZoneId id, int& spawn_x, int& spawn_y) {
     if (id == kZoneSietch)
         generate_sietch(z, spawn_x, spawn_y);
     else
-        generate_desert(z, seed, spawn_x, spawn_y);
+        generate_desert(z, seed, id, spawn_x, spawn_y);
 }
 
 // ---- FOV: recursive shadowcasting (8 octants) ---------------------------------

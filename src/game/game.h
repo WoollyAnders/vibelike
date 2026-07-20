@@ -36,3 +36,4 @@ uint64_t game_state_hash();
 
 // Test/debug hooks.
 bool game_is_dead();
+int game_worm_state();  // worm::State as int

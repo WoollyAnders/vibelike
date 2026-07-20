@@ -140,6 +140,7 @@ constexpr Binding kBindings[] = {
     {SDL_SCANCODE_C, Key::Sandwalk},
     {SDL_SCANCODE_M, Key::Map},
     {SDL_SCANCODE_G, Key::Harvest},
+    {SDL_SCANCODE_T, Key::Thumper},
     {SDL_SCANCODE_F5, Key::Save},
     {SDL_SCANCODE_F9, Key::Load},
 };
@@ -277,17 +278,89 @@ int run_slicetest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cm
     return pass ? 0 : 1;
 }
 
+// Writes the indexed framebuffer through a LUT as a 24-bit BMP (debug/demo).
+bool bmp_save(const char* path, const Framebuffer& frame, const uint32_t lut[256]) {
+    FILE* f = std::fopen(path, "wb");
+    if (!f) return false;
+    const int w = fb::W, h = fb::H;
+    const uint32_t row = uint32_t(w * 3 + 3) & ~3u;
+    const uint32_t data = row * h;
+    uint8_t hdr[54] = {'B', 'M'};
+    auto put32 = [&](int o, uint32_t v) {
+        hdr[o] = v & 255; hdr[o + 1] = (v >> 8) & 255;
+        hdr[o + 2] = (v >> 16) & 255; hdr[o + 3] = v >> 24;
+    };
+    put32(2, 54 + data);
+    put32(10, 54);
+    put32(14, 40);
+    put32(18, uint32_t(w));
+    put32(22, uint32_t(h));
+    hdr[26] = 1;
+    hdr[28] = 24;
+    put32(34, data);
+    std::fwrite(hdr, 1, 54, f);
+    std::vector<uint8_t> line(row, 0);
+    for (int y = h - 1; y >= 0; --y) {
+        for (int x = 0; x < w; ++x) {
+            const uint32_t c = lut[frame.px[y * w + x]];
+            line[x * 3] = c & 255;
+            line[x * 3 + 1] = (c >> 8) & 255;
+            line[x * 3 + 2] = (c >> 16) & 255;
+        }
+        std::fwrite(line.data(), 1, row, f);
+    }
+    std::fclose(f);
+    return true;
+}
+
+// Headless worm test: leave the sietch, walk into the sand, plant a thumper,
+// fall back, and watch the state machine escalate to a surfaced worm.
+int run_wormtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(4242, services);
+
+    InputState in;
+    auto tick_with = [&](Key k) {
+        in.pressed[int(k)] = true;
+        game_update(in);
+        in.end_tick();
+    };
+
+    for (int i = 0; i < 12; ++i) tick_with(Key::Down);   // out of the sietch
+    for (int i = 0; i < 8; ++i) tick_with(Key::Right);   // onto open sand
+    tick_with(Key::Thumper);
+    for (int i = 0; i < 7; ++i) tick_with(Key::Left);    // fall back
+
+    int max_state = 0;
+    int turns = 0;
+    while (turns < 120 && !game_is_dead()) {
+        tick_with(Key::Wait);
+        if (game_worm_state() > max_state) {
+            max_state = game_worm_state();
+            std::printf("turn %3d worm state -> %d\n", turns, max_state);
+        }
+        if (max_state >= 4) break;
+        ++turns;
+    }
+    const bool pass = max_state >= 4 && !game_is_dead();
+    std::printf("wormtest %s (max state %d, dead %d)\n",
+                pass ? "PASS" : "FAIL", max_state, game_is_dead() ? 1 : 0);
+    return pass ? 0 : 1;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
     audio::Mixer mixer;
     if (!audio_load(mixer)) return 1;
 
-    bool seamtest = false, slicetest = false;
+    bool seamtest = false, slicetest = false, wormtest = false, autodemo = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
         if (SDL_strcmp(argv[i], "--seamtest") == 0) seamtest = true;
         if (SDL_strcmp(argv[i], "--slicetest") == 0) slicetest = true;
+        if (SDL_strcmp(argv[i], "--wormtest") == 0) wormtest = true;
+        if (SDL_strcmp(argv[i], "--autodemo") == 0) autodemo = true;
     }
 
     Palette master;
@@ -303,6 +376,7 @@ int main(int argc, char** argv) {
 
     if (seamtest) return run_seamtest(mixer, assets, cmaps);
     if (slicetest) return run_slicetest(mixer, assets, cmaps);
+    if (wormtest) return run_wormtest(mixer, assets, cmaps);
 
     Platform platform;
     if (!platform_init(platform, &mixer)) {
@@ -311,8 +385,17 @@ int main(int argc, char** argv) {
     }
 
     GameServices services{&mixer, &assets, &cmaps};
-    game_init(uint64_t(SDL_GetPerformanceCounter()), services);
+    game_init(autodemo ? 4242 : uint64_t(SDL_GetPerformanceCounter()), services);
     mixer.push({audio::Cmd::PlaySong, uint8_t(g_song_ambient), 0, 0});
+
+    // --autodemo: the worm-bait scenario played by the game itself, one input
+    // every few ticks. Purely for demos/screenshots; no OS input needed.
+    struct DemoStep { Key key; int count; };
+    static const DemoStep kDemoScript[] = {
+        {Key::Down, 13}, {Key::Right, 8}, {Key::Thumper, 1}, {Key::Left, 7},
+        {Key::Wait, 60},
+    };
+    int demo_step = 0, demo_left = autodemo ? kDemoScript[0].count : 0, demo_cooldown = 0;
 
     Framebuffer frame{};
     InputState input;
@@ -365,6 +448,14 @@ int main(int argc, char** argv) {
         if (accum > 5 * tick_period) accum = 5 * tick_period;
 
         while (accum >= tick_period) {
+            if (autodemo && demo_step < int(SDL_arraysize(kDemoScript))) {
+                if (--demo_cooldown <= 0) {
+                    input.pressed[int(kDemoScript[demo_step].key)] = true;
+                    demo_cooldown = 6;
+                    if (--demo_left <= 0 && ++demo_step < int(SDL_arraysize(kDemoScript)))
+                        demo_left = kDemoScript[demo_step].count;
+                }
+            }
             if (!game_update(input)) running = false;
             input.end_tick();
             accum -= tick_period;
@@ -375,6 +466,15 @@ int main(int argc, char** argv) {
         uint32_t lut[256];
         palette_build_lut(master, game_fade(), 0, 0, 0, lut);
         present(platform, frame, lut);
+
+        if (autodemo) {
+            static int demo_ticks = 0, shot = 0;
+            if (++demo_ticks % 24 == 0 && shot < 24) {
+                char name[32];
+                std::snprintf(name, sizeof name, "demo_%02d.bmp", shot++);
+                bmp_save(name, frame, lut);
+            }
+        }
 
         ++fps_frames;
         if (now - fps_last >= SDL_GetPerformanceFrequency()) {

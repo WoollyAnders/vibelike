@@ -59,7 +59,7 @@ curve + exposure meter** (static shade), deathstill corpse harvest, cistern, HUD
 **Exit:** leave the sietch at noon and cook, or at dusk and dehydrate slower; kill a
 hound, drink it, die.
 
-### M2 — The sandworm ⬜
+### M2 — The sandworm ✅
 Noise heatmap + worm brain (DORMANT→STIRRING→HUNTING→BREACHING→SURFACED), segment-chain
 entity (body-follows-head, crush/swallow, armored segments + weak points,
 retreat-when-hurt), ripple/mound/breach set pieces, screen shake + rumble channel,
@@ -90,6 +90,20 @@ etiquette, hallucination/chatter text, look-mode polish, FM music pass (~6–8 t
 tuning pass against `tunables.h`, seed-race determinism test.
 **Exit:** same seed + same input script twice → identical final state hash; a full
 season plays with all systems live.
+
+### M6 — Art & UI overhaul ⬜
+Replace all programmer art with a proper hand-crafted pass: curated master
+palette (desert-graded ramps, dithering conventions), redrawn terrain sets
+(dune flow across tiles, rock forms, spice blows that shimmer), character
+sprites with real silhouettes and 4-8 frame walk/action cycles, the worm as a
+showpiece (layered segments, breach eruption frames, dust clouds), prop and
+architecture sets for sietch/harvester/wreckage. UI restyle: Diablo-quality
+bottom panel (carved-stone frame, glass orbs with meniscus/bubble shimmer,
+etched seismograph bezel), a proper serif-flavored bitmap font alongside the
+8x8, iconography for items/statuses, styled modal frames (inventory, trade,
+dialogue), title screen + death screen art, palette-fade transitions.
+**Exit:** a side-by-side before/after where every screen reads as a finished
+retro game, not a prototype; no placeholder sprite remains in the manifest.
 
 ---
 

@@ -9,7 +9,8 @@ namespace map {
 inline constexpr int W = 64, H = 64;
 inline constexpr int N = W * H;
 
-enum ZoneId : uint8_t { kZoneSietch = 0, kZoneDesert = 1 };
+enum ZoneId : uint8_t { kZoneSietch = 0, kZoneDesert = 1, kZoneDeepPan = 2 };
+inline constexpr int kZoneCount = 3;
 
 // tile flags
 inline constexpr uint8_t TF_BLOCK = 1 << 0;   // impassable

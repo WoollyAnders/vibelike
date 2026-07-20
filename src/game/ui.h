@@ -26,6 +26,12 @@ struct HudState {
     int ambient;   // 1..9
     int day;
     bool indoors;
+    uint8_t noise_meter;       // 0..100, max noise near the player
+    uint8_t worm_state;        // worm::State as int (0 dormant .. 4 surfaced)
+    const uint8_t* seismo;     // 64-entry history ring
+    uint8_t seismo_head;
+    int thumpers;
+    bool sandwalk;
 };
 
 void draw_hud(DrawCtx& ctx, const HudState& s, const Log& log, int anim_tick);

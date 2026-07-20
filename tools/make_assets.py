@@ -306,6 +306,104 @@ def make_blip():
         out.append(s * 0.5 * (1.0 - t))
     return out
 
+def make_ripple():
+    """32x16 sand-ripple overlay, 2 frames — the moving wormsign."""
+    frames = []
+    for i in range(2):
+        img = new_indexed(32, 16)
+        px = img.load()
+        for y, x0, x1 in diamond_rows():
+            for x in range(x0, x1):
+                d = (abs(x - 16) + abs((y - 8) * 2) + i * 3) % 7
+                if d == 0:
+                    px[x, y] = 90   # bright sand crest
+                elif d == 1:
+                    px[x, y] = 44   # trough shadow
+        frames.append(img)
+    return sheet_from(frames, 32, 16)
+
+def make_mound():
+    """32x24 breach mound, 3 frames (growing)."""
+    frames = []
+    for i in range(3):
+        img = new_indexed(32, 24)
+        px = img.load()
+        h = 5 + i * 5
+        for y in range(24 - h, 24):
+            t = (y - (24 - h)) / max(1, h)
+            half = int(4 + t * 11)
+            for x in range(16 - half, 16 + half):
+                px[x, y] = 60 + int(t * 16) + ((x * 3 + y) % 3)
+        # crest cracks
+        for x in range(13, 19):
+            px[x, 24 - h] = 40
+        frames.append(img)
+    return sheet_from(frames, 32, 24)
+
+def make_worm_head():
+    """48x56 the maw, 2 frames (open pulse)."""
+    frames = []
+    for i in range(2):
+        img = new_indexed(48, 56)
+        px = img.load()
+        gape = 2 + i * 3
+        for y in range(6, 52):
+            for x in range(4, 44):
+                dx, dy = (x - 24) / 19.0, (y - 30) / 24.0
+                r = dx * dx + dy * dy
+                if r < 1.0:
+                    shade = 110 + int((1 - r) * 12)
+                    px[x, y] = shade
+        # segmented rings
+        for y in range(10, 52, 7):
+            for x in range(6, 42):
+                dx = (x - 24) / 19.0
+                if dx * dx < 0.9:
+                    px[x, y] = 100
+        # the maw: dark circle ringed by crystal teeth
+        for y in range(12 - gape, 30 + gape):
+            for x in range(12, 36):
+                dx, dy = (x - 24) / (11.0 + gape), (y - 21) / (9.0 + gape)
+                if dx * dx + dy * dy < 1.0:
+                    px[x, y] = 2
+        import math as _m
+        for a in range(0, 360, 24):
+            tx = int(24 + _m.cos(_m.radians(a)) * (10 + gape))
+            ty = int(21 + _m.sin(_m.radians(a)) * (8 + gape))
+            for oy in (0, 1):
+                if 0 <= ty + oy < 56:
+                    px[tx, ty + oy] = 28
+        frames.append(img)
+    return sheet_from(frames, 48, 56)
+
+def make_worm_segment():
+    """36x36 body arc segment."""
+    img = new_indexed(36, 36)
+    px = img.load()
+    for y in range(8, 34):
+        for x in range(2, 34):
+            dx, dy = (x - 18) / 15.0, (y - 22) / 12.0
+            r = dx * dx + dy * dy
+            if r < 1.0:
+                px[x, y] = 108 + int((1 - r) * 14) - (2 if (y % 6) < 2 else 0)
+    return img
+
+def make_thumper():
+    """12x20 deployed thumper post, 2 frames (piston up/down)."""
+    frames = []
+    for i in range(2):
+        img = new_indexed(12, 20)
+        px = img.load()
+        for y in range(8, 19):
+            for x in range(4, 8):
+                px[x, y] = 20
+        top = 3 if i == 0 else 6
+        for y in range(top, top + 3):
+            for x in range(3, 9):
+                px[x, y] = 232
+        frames.append(img)
+    return sheet_from(frames, 12, 20)
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     os.makedirs(os.path.join(OUT, "sfx"), exist_ok=True)
@@ -319,6 +417,11 @@ def main():
     make_corpse().save(os.path.join(OUT, "corpse.png"), transparency=0)
     make_wall().save(os.path.join(OUT, "wall.png"), transparency=0)
     make_cistern().save(os.path.join(OUT, "cistern.png"), transparency=0)
+    make_ripple().save(os.path.join(OUT, "ripple.png"), transparency=0)
+    make_mound().save(os.path.join(OUT, "mound.png"), transparency=0)
+    make_worm_head().save(os.path.join(OUT, "wormhead.png"), transparency=0)
+    make_worm_segment().save(os.path.join(OUT, "wormseg.png"), transparency=0)
+    make_thumper().save(os.path.join(OUT, "thumper.png"), transparency=0)
     with open(os.path.join(OUT, "manifest.txt"), "w") as f:
         f.write("# name  file  frame_w frame_h frames  anchor_x anchor_y\n")
         f.write("tiles   tiles.png   32 16 10  16 8\n")
@@ -328,6 +431,11 @@ def main():
         f.write("corpse  corpse.png  16 10 1   8 7\n")
         f.write("wall    wall.png    32 40 1   16 32\n")
         f.write("cistern cistern.png 24 24 1   12 20\n")
+        f.write("ripple  ripple.png  32 16 2   16 8\n")
+        f.write("mound   mound.png   32 24 3   16 16\n")
+        f.write("wormhead wormhead.png 48 56 2  24 48\n")
+        f.write("wormseg wormseg.png 36 36 1   18 28\n")
+        f.write("thumper thumper.png 12 20 2   6 17\n")
     print("assets written to", os.path.abspath(OUT))
 
 if __name__ == "__main__":

@@ -80,6 +80,33 @@ void draw_hud(DrawCtx& ctx, const HudState& s, const Log& log, int anim_tick) {
         std::snprintf(buf, sizeof buf, "EXPOSURE %d", s.exposure);
         draw_text_shadow(ctx, buf, bx, by + 22, 210, 1);
     }
+
+    // Seismograph: 64-sample noise trace, colored by worm state.
+    {
+        const int gx = 452, gw = 64, gy = kPanelY + 8, gh = 24;
+        fill_rect(ctx, gx - 2, gy - 2, gw + 4, gh + 4, 2);
+        uint8_t trace;
+        switch (s.worm_state) {
+            case 0: trace = 246; break;              // dormant: green
+            case 1: trace = 232; break;              // stirring: amber
+            default: trace = 208; break;             // hunting+: red
+        }
+        for (int i = 0; i < gw; ++i) {
+            const uint8_t v = s.seismo[(s.seismo_head + i) & 63];
+            const int h = 1 + v * (gh - 2) / 100;
+            const int x = gx + i;
+            ctx.frame->at(x, gy + gh - 1 - h) = trace;
+            if (i == gw - 1)
+                for (int yy = gy + gh - h; yy < gy + gh; ++yy)
+                    ctx.frame->at(x, yy) = trace;
+        }
+        draw_text(ctx, "WORMSIGN", gx - 2, gy + gh + 3, uint8_t(s.worm_state >= 2 ? 208 : 14));
+    }
+
+    // Gear line: thumpers + sandwalk indicator.
+    std::snprintf(buf, sizeof buf, "thumpers %d%s", s.thumpers,
+                  s.sandwalk ? "  [sandwalk]" : "");
+    draw_text(ctx, buf, 56, kPanelY + 2, uint8_t(s.sandwalk ? 240 : 14));
 }
 
 }  // namespace ui
