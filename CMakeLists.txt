@@ -22,10 +22,18 @@ FetchContent_MakeAvailable(SDL2)
 add_executable(dustfall
   src/platform/app.cpp
   src/engine/palette.cpp
+  src/engine/assets.cpp
+  src/engine/render.cpp
+  src/engine/iso.cpp
+  src/engine/stb_image_impl.cpp
 )
 
 target_include_directories(dustfall PRIVATE src third_party)
-target_compile_options(dustfall PRIVATE -fno-exceptions -fno-rtti -Wall -Wextra)
+target_compile_options(dustfall PRIVATE
+  -Wall -Wextra
+  $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions -fno-rtti>)
+set_source_files_properties(src/engine/stb_image_impl.cpp
+  PROPERTIES COMPILE_OPTIONS "-Wno-unused-function")
 
 target_link_libraries(dustfall PRIVATE SDL2::SDL2main SDL2::SDL2-static)
 

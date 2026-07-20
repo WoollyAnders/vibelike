@@ -1,5 +1,57 @@
 #include "engine/palette.h"
 
+#include <cstdio>
+
+bool palette_load(const char* path, Palette& out) {
+    FILE* f = std::fopen(path, "r");
+    if (!f) return false;
+    char magic[16] = {};
+    int count = 0;
+    if (std::fscanf(f, "%15s %d", magic, &count) != 2 || count != 256) {
+        std::fclose(f);
+        return false;
+    }
+    for (int i = 0; i < 256; ++i) {
+        int r, g, b;
+        if (std::fscanf(f, "%d %d %d", &r, &g, &b) != 3) {
+            std::fclose(f);
+            return false;
+        }
+        out.color[i] = 0xFF000000u | (uint32_t(r) << 16) | (uint32_t(g) << 8) | uint32_t(b);
+    }
+    std::fclose(f);
+    out.color[0] = 0xFF000000u;  // transparent key renders black if ever shown
+    return true;
+}
+
+static int color_dist2(uint32_t a, int r, int g, int b) {
+    const int ar = (a >> 16) & 0xFF, ag = (a >> 8) & 0xFF, ab = a & 0xFF;
+    return (ar - r) * (ar - r) + (ag - g) * (ag - g) + (ab - b) * (ab - b);
+}
+
+void colormaps_build(const Palette& master, Colormaps& out) {
+    for (int level = 0; level < 32; ++level) {
+        out.map[level][0] = 0;
+        for (int i = 1; i < 256; ++i) {
+            const uint32_t c = master.color[i];
+            // darken: scale by (level+1)/32
+            const int r = int((c >> 16) & 0xFF) * (level + 1) / 32;
+            const int g = int((c >> 8) & 0xFF) * (level + 1) / 32;
+            const int b = int(c & 0xFF) * (level + 1) / 32;
+            if (level == 31) {  // identity by construction
+                out.map[level][i] = uint8_t(i);
+                continue;
+            }
+            int best = 1, best_d = color_dist2(master.color[1], r, g, b);
+            for (int j = 2; j < 256; ++j) {
+                const int d = color_dist2(master.color[j], r, g, b);
+                if (d < best_d) { best = j; best_d = d; }
+            }
+            out.map[level][i] = uint8_t(best);
+        }
+    }
+}
+
 static uint32_t lerp_color(uint32_t c, uint8_t r, uint8_t g, uint8_t b, uint16_t t) {
     // t: 0..256
     const uint32_t cr = (c >> 16) & 0xFF, cg = (c >> 8) & 0xFF, cb = c & 0xFF;

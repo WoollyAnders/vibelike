@@ -1,0 +1,4 @@
+# name  file  frame_w frame_h frames  anchor_x anchor_y
+tiles   tiles.png   32 16 8   16 8
+player  player.png  16 32 4   8 30
+rock    rock.png    32 32 1   16 26

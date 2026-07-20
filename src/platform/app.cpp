@@ -1,11 +1,15 @@
 // DUSTFALL — platform layer: SDL window, indexed framebuffer present path,
-// fixed 60Hz tick, logical input. E2: tick-exact movable square demo.
+// fixed 60Hz tick, logical input. E3 demo: scrolling isometric desert with
+// animated sprite, colormap night lighting, mouse tile picking, text.
 #include <SDL.h>
 
 #include <cstdio>
 
+#include "engine/assets.h"
 #include "engine/framebuffer.h"
+#include "engine/iso.h"
 #include "engine/palette.h"
+#include "engine/render.h"
 #include "platform/input.h"
 
 namespace {
@@ -61,8 +65,6 @@ void toggle_fullscreen(Platform& p) {
 
 // ---- input mapping ----------------------------------------------------------
 
-// Rebindable scancode -> logical key table. Multiple physical keys may map to
-// the same logical key (arrows + WASD + numpad).
 struct Binding { SDL_Scancode sc; Key key; };
 constexpr Binding kBindings[] = {
     {SDL_SCANCODE_UP, Key::Up},       {SDL_SCANCODE_W, Key::Up},     {SDL_SCANCODE_KP_8, Key::Up},
@@ -79,6 +81,7 @@ constexpr Binding kBindings[] = {
     {SDL_SCANCODE_Z, Key::Powers},
     {SDL_SCANCODE_C, Key::Sandwalk},
     {SDL_SCANCODE_M, Key::Map},
+    {SDL_SCANCODE_N, Key::Sandwalk},  // demo reuse: N toggles night
 };
 
 void map_scancode(InputState& in, SDL_Scancode sc, bool is_down) {
@@ -100,7 +103,6 @@ void update_mouse(const Platform& p, InputState& in, int wx, int wy) {
     in.mouse_y = inside ? fy : -1;
 }
 
-// Expand indexed pixels through the LUT and present with integer scaling.
 void present(Platform& p, const Framebuffer& frame, const uint32_t lut[256]) {
     void* pixels = nullptr;
     int pitch = 0;
@@ -127,48 +129,120 @@ void present(Platform& p, const Framebuffer& frame, const uint32_t lut[256]) {
     SDL_RenderPresent(p.renderer);
 }
 
-// ---- E2 demo: tick-exact movable square -------------------------------------
+// ---- E3 demo: iso desert ----------------------------------------------------
+
+constexpr int kMapW = 64, kMapH = 64;
+
+uint32_t hash2(int x, int y) {
+    uint32_t h = uint32_t(x) * 374761393u + uint32_t(y) * 668265263u + 0x9E3779B9u;
+    h = (h ^ (h >> 13)) * 1274126177u;
+    return h ^ (h >> 16);
+}
 
 struct Demo {
-    int sq_x = fb::W / 2, sq_y = fb::H / 2;
-    bool demolog = false;
+    uint8_t floor[kMapW * kMapH];  // tile frame index into "tiles"
+    bool rock_prop[kMapW * kMapH];
+    iso::Camera cam;
+    bool night = false;
+    int tick = 0;
+    bool shot = false;  // --shot: exit after writing framebuffer state proof
+
+    void generate() {
+        for (int y = 0; y < kMapH; ++y) {
+            for (int x = 0; x < kMapW; ++x) {
+                const uint32_t coarse = hash2(x >> 3, y >> 3) & 255;
+                const uint32_t fine = hash2(x, y) & 255;
+                const int v = int(coarse * 3 + fine) / 4;
+                uint8_t f;
+                bool prop = false;
+                if (v > 190) {           // rock islands
+                    f = uint8_t(3 + (fine & 1));
+                    prop = fine > 236;
+                } else if (v < 40) {     // spice-flecked pans
+                    f = 5;
+                } else if (fine > 251) { // rare drum sand
+                    f = 6;
+                } else {
+                    f = uint8_t(fine % 3);  // sand variants
+                }
+                floor[y * kMapW + x] = f;
+                rock_prop[y * kMapW + x] = prop;
+            }
+        }
+        int cx, cy;
+        iso::tile_to_screen(kMapW / 2, kMapH / 2, iso::Camera{}, cx, cy);
+        cam.x = cx - fb::W / 2;
+        cam.y = cy - fb::H / 2;
+    }
 };
 
 void demo_tick(Demo& d, const InputState& in) {
-    const int step = 4;
-    int dx = 0, dy = 0;
-    if (in.pressed_or_repeat(Key::Up)) dy -= step;
-    if (in.pressed_or_repeat(Key::Down)) dy += step;
-    if (in.pressed_or_repeat(Key::Left)) dx -= step;
-    if (in.pressed_or_repeat(Key::Right)) dx += step;
-    d.sq_x = SDL_clamp(d.sq_x + dx, 8, fb::W - 8);
-    d.sq_y = SDL_clamp(d.sq_y + dy, 8, fb::H - 8);
-    if (in.mouse_pressed[0] && in.mouse_x >= 0) {
-        d.sq_x = SDL_clamp(in.mouse_x, 8, fb::W - 8);
-        d.sq_y = SDL_clamp(in.mouse_y, 8, fb::H - 8);
-    }
+    ++d.tick;
+    const int speed = 4;
+    if (in.is_down(Key::Up)) d.cam.y -= speed;
+    if (in.is_down(Key::Down)) d.cam.y += speed;
+    if (in.is_down(Key::Left)) d.cam.x -= speed;
+    if (in.is_down(Key::Right)) d.cam.x += speed;
+    if (in.was_pressed(Key::Sandwalk)) d.night = !d.night;
 }
 
-void demo_draw(Framebuffer& frame, const Demo& d, const InputState& in) {
-    // Dim sand backdrop with a subtle grid so motion reads.
-    for (int y = 0; y < fb::H; ++y)
-        for (int x = 0; x < fb::W; ++x)
-            frame.at(x, y) = uint8_t((x % 32 == 0 || y % 32 == 0) ? 40 : 36);
+void demo_draw(Framebuffer& frame, const Demo& d, const Assets& assets,
+               const Colormaps& cmaps, const InputState& in, iso::DrawList& list) {
+    DrawCtx ctx{&frame, &cmaps};
+    frame.clear(1);  // near-black backdrop
 
-    // The square: bright spice orange.
-    for (int y = d.sq_y - 8; y < d.sq_y + 8; ++y)
-        for (int x = d.sq_x - 8; x < d.sq_x + 8; ++x)
-            frame.at(x, y) = 156;
+    const SpriteSheet* tiles = assets.get("tiles");
+    const SpriteSheet* player = assets.get("player");
+    const SpriteSheet* rock = assets.get("rock");
+    const int light = d.night ? 13 : 31;
 
-    // Mouse crosshair, if inside the framebuffer.
-    if (in.mouse_x >= 0) {
-        for (int o = -3; o <= 3; ++o) {
-            int cx = SDL_clamp(in.mouse_x + o, 0, fb::W - 1);
-            int cy = SDL_clamp(in.mouse_y + o, 0, fb::H - 1);
-            frame.at(cx, SDL_clamp(in.mouse_y, 0, fb::H - 1)) = 31;
-            frame.at(SDL_clamp(in.mouse_x, 0, fb::W - 1), cy) = 31;
+    // Floors, painter's order (no overlap between floor diamonds, so direct).
+    for (int ty = 0; ty < kMapH; ++ty) {
+        for (int tx = 0; tx < kMapW; ++tx) {
+            int sx, sy;
+            iso::tile_to_screen(tx, ty, d.cam, sx, sy);
+            if (sx < -32 || sx > fb::W + 32 || sy < -32 || sy > fb::H + 32) continue;
+            draw_sprite(ctx, *tiles, d.floor[ty * kMapW + tx], sx, sy, light);
         }
     }
+
+    // Mouse tile highlight, over floors and under sprites.
+    int mtx = -1, mty = -1;
+    if (in.mouse_x >= 0) {
+        iso::screen_to_tile(in.mouse_x, in.mouse_y, d.cam, mtx, mty);
+        if (mtx >= 0 && mtx < kMapW && mty >= 0 && mty < kMapH) {
+            int sx, sy;
+            iso::tile_to_screen(mtx, mty, d.cam, sx, sy);
+            draw_sprite(ctx, *tiles, 7, sx, sy, 31);
+        }
+    }
+
+    // Props + the animated wanderer, y-sorted together.
+    for (int ty = 0; ty < kMapH; ++ty) {
+        for (int tx = 0; tx < kMapW; ++tx) {
+            if (!d.rock_prop[ty * kMapW + tx]) continue;
+            int sx, sy;
+            iso::tile_to_screen(tx, ty, d.cam, sx, sy);
+            if (sx < -48 || sx > fb::W + 48 || sy < -48 || sy > fb::H + 48) continue;
+            list.add(rock, 0, sx, sy + 6, light, 0);
+        }
+    }
+    {
+        int sx, sy;
+        iso::tile_to_screen(kMapW / 2, kMapH / 2, d.cam, sx, sy);
+        list.add(player, (d.tick / 9) % 4, sx, sy + 6, light, 1);
+    }
+    list.flush(ctx);
+
+    // Text overlay.
+    draw_text_shadow(ctx, "DUSTFALL iso demo", 4, 4, 230, 1);
+    draw_text_shadow(ctx, "arrows scroll  N night  mouse picks tile", 4, 14, 24, 1);
+    if (mtx >= 0) {
+        char buf[32];
+        std::snprintf(buf, sizeof buf, "tile %d,%d", mtx, mty);
+        draw_text_shadow(ctx, buf, 4, 24, 24, 1);
+    }
+    if (d.night) draw_text_shadow(ctx, "NIGHT", fb::W - 48, 4, 170, 1);
 }
 
 }  // namespace
@@ -180,12 +254,27 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    const Palette master = palette_make_default();
+    Palette master;
+    if (!palette_load("data/palette.pal", master)) {
+        std::fprintf(stderr, "palette: data/palette.pal missing, using built-in\n");
+        master = palette_make_default();
+    }
+    Colormaps cmaps;
+    colormaps_build(master, cmaps);
+
+    Assets assets;
+    if (!assets.load_all("data", master)) {
+        platform_shutdown(platform);
+        return 1;
+    }
+
     Framebuffer frame{};
     InputState input;
+    iso::DrawList draw_list;
     Demo demo;
+    demo.generate();
     for (int i = 1; i < argc; ++i)
-        if (SDL_strcmp(argv[i], "--demolog") == 0) demo.demolog = true;
+        if (SDL_strcmp(argv[i], "--night") == 0) demo.night = true;
 
     uint64_t prev = SDL_GetPerformanceCounter();
     const double tick_period = 1.0 / kTickHz;
@@ -200,7 +289,7 @@ int main(int argc, char** argv) {
             switch (ev.type) {
                 case SDL_QUIT: running = false; break;
                 case SDL_KEYDOWN:
-                    if (ev.key.repeat) break;  // repeat is tick-driven, not OS-driven
+                    if (ev.key.repeat) break;
                     if (ev.key.keysym.sym == SDLK_RETURN && (ev.key.keysym.mod & KMOD_ALT)) {
                         toggle_fullscreen(platform);
                         break;
@@ -233,7 +322,7 @@ int main(int argc, char** argv) {
         const uint64_t now = SDL_GetPerformanceCounter();
         accum += double(now - prev) / double(SDL_GetPerformanceFrequency());
         prev = now;
-        if (accum > 5 * tick_period) accum = 5 * tick_period;  // clamp after stalls
+        if (accum > 5 * tick_period) accum = 5 * tick_period;
 
         while (accum >= tick_period) {
             demo_tick(demo, input);
@@ -241,26 +330,18 @@ int main(int argc, char** argv) {
             accum -= tick_period;
         }
 
-        demo_draw(frame, demo, input);
+        demo_draw(frame, demo, assets, cmaps, input, draw_list);
 
         uint32_t lut[256];
         palette_build_lut(master, PaletteFade{}, 0, 0, 0, lut);
         present(platform, frame, lut);
 
-        // FPS in the window title, once a second.
         ++fps_frames;
         if (now - fps_last >= SDL_GetPerformanceFrequency()) {
             char title[64];
             std::snprintf(title, sizeof title, "DUSTFALL — %llu fps",
                           static_cast<unsigned long long>(fps_frames));
             SDL_SetWindowTitle(platform.window, title);
-            if (demo.demolog) {
-                if (FILE* log = std::fopen("demolog.txt", "a")) {
-                    std::fprintf(log, "sq=%d,%d mouse=%d,%d\n",
-                                 demo.sq_x, demo.sq_y, input.mouse_x, input.mouse_y);
-                    std::fclose(log);
-                }
-            }
             fps_frames = 0;
             fps_last = now;
         }
