@@ -32,29 +32,51 @@ SPRITES = {
                "standing pose, full body, facing slightly left",
     "hound":   "a lean sinewy desert hound predator, mangy tan-grey hide, "
                "ember-orange eyes, prowling stance, side view, full body",
-    "corpse":  "a fallen desert warrior's corpse half-buried in sand, lying flat, "
-               "viewed from above at an angle, tattered dark robes",
+    "corpse":  "a fallen desert warrior's corpse lying flat on its back, "
+               "tattered dark robes, viewed from above at an isometric angle, "
+               "isolated figure on a fully transparent background, no ground, "
+               "no sand, no scene",
     "wall":    "a tall carved sandstone cave wall block segment, rectangular "
                "monolithic slab, hewn stone texture with chisel marks",
     "cistern": "an ancient stone water cistern basin, round carved rock rim, "
                "still dark water surface glinting inside, small pipes",
     "rock":    "a weathered desert rock outcrop boulder cluster, wind-carved "
                "sandstone, rounded forms",
-    "wormhead": "the gaping circular maw of a colossal sandworm rising from sand, "
+    "wormhead": "the gaping circular maw of a colossal sandworm rearing up, "
                 "rings of crystalline teeth around a black gullet, segmented "
-                "leathery hide, terrifying, front view",
+                "leathery hide, terrifying, front view, isolated single "
+                "creature on a fully transparent background, no ground, no "
+                "sand base, no border, no frame",
     "wormseg": "one massive segmented body arc of a colossal sandworm emerging "
                "from sand, leathery ringed hide, arch shape",
-    "thumper": "a small metal spike device planted in sand with a piston hammer "
-               "on top, red activation band, utilitarian survival tech",
+    "thumper": "a single narrow metal stake device with a cylindrical piston "
+               "hammer head on top, red activation band around the shaft, "
+               "utilitarian desert survival tool, upright, isolated object on "
+               "a fully transparent background, no ground, no sand, no scene",
     "crawler": "a massive industrial sand-harvester crawler machine on wide "
                "tracks, rusted orange-brown armored hull, dust intakes, "
-               "smokestack with beacon, three-quarter isometric view",
+               "smokestack with beacon, three-quarter isometric view, isolated "
+               "vehicle on a fully transparent background, no ground, no sand "
+               "base, no border, no frame",
     "trooper": "a brutal soldier in dark segmented armor with a sealed helmet "
                "and narrow red visor slit, holding a short blade, standing, "
                "full body",
     "spotter": "a military observer in dark fatigues and goggles holding up a "
                "long brass telescope, standing on watch, full body",
+}
+
+# UI elements: stretched to fill their exact frame (no aspect-fit).
+UI = {
+    "ui_panel":  "long horizontal fantasy game HUD panel frame, dark carved "
+                 "sandstone and aged bronze, desert-tribal etched motifs, "
+                 "rivets and worn edges, mostly flat empty center band for "
+                 "widgets, wide thin strip composition",
+    "ui_socket": "ornate circular orb socket ring for a fantasy game HUD, aged "
+                 "bronze and carved stone ring with desert etchings, fully "
+                 "open transparent hole in the center, front view",
+    "ui_plaque": "ornate horizontal metal banner plaque for a fantasy game HUD, "
+                 "dark aged bronze with rivets and etched border, empty center "
+                 "for text, wide thin strip",
 }
 
 # Terrain textures: generated once, then diamonds are cut from random crops.
@@ -118,8 +140,44 @@ def read_meta():
             meta[name] = (fname, int(fw), int(fh), int(frames), int(ax), int(ay))
     return meta
 
+def strip_background(img):
+    """If the model painted a backdrop despite background=transparent, remove
+    it: flood from every edge pixel, clearing anything close to the corner
+    colors. No-op when the image already has real transparency."""
+    w, h = img.size
+    px = img.load()
+    corners = [px[0, 0], px[w - 1, 0], px[0, h - 1], px[w - 1, h - 1]]
+    if any(c[3] < 128 for c in corners):
+        return img  # already transparent
+
+    def near(c, ref, tol=42):
+        return (abs(c[0] - ref[0]) + abs(c[1] - ref[1]) + abs(c[2] - ref[2])) <= tol * 3
+
+    from collections import deque
+    seen = bytearray(w * h)
+    q = deque()
+    for x in range(w):
+        q.append((x, 0)); q.append((x, h - 1))
+    for y in range(h):
+        q.append((0, y)); q.append((w - 1, y))
+    while q:
+        x, y = q.popleft()
+        i = y * w + x
+        if seen[i]:
+            continue
+        seen[i] = 1
+        c = px[x, y]
+        if c[3] < 128 or any(near(c, ref) for ref in corners):
+            px[x, y] = (0, 0, 0, 0)
+            if x > 0: q.append((x - 1, y))
+            if x < w - 1: q.append((x + 1, y))
+            if y > 0: q.append((x, y - 1))
+            if y < h - 1: q.append((x, y + 1))
+    return img
+
 def fit_sprite(img, fw, fh):
     """Alpha-crop, scale to fit the frame, anchor at bottom-center."""
+    img = strip_background(img)
     bbox = img.getbbox()
     if bbox:
         img = img.crop(bbox)
@@ -130,6 +188,13 @@ def fit_sprite(img, fw, fh):
     frame.paste(img, ((fw - img.width) // 2, fh - img.height - 1), img)
     return frame
 
+def fit_stretch(img, fw, fh):
+    """Alpha-crop, then stretch to exactly fill the frame (UI strips)."""
+    bbox = img.getbbox()
+    if bbox:
+        img = img.crop(bbox)
+    return img.resize((fw, fh), Image.LANCZOS)
+
 def make_sheet(frame_img, fw, fh, frames):
     """Frame 0 = base; alternate frames get a 1px bob (until real anim art)."""
     sheet = Image.new("RGBA", (fw * frames, fh), (0, 0, 0, 0))
@@ -139,10 +204,13 @@ def make_sheet(frame_img, fw, fh, frames):
     return sheet
 
 def diamond_mask(w, h):
-    mask = Image.new("L", (w, h), 0)
-    d = ImageDraw.Draw(mask)
-    d.polygon([(w // 2, 0), (w - 1, h // 2), (w // 2, h - 1), (0, h // 2)], fill=255)
-    return mask
+    # Rasterize oversized at 4x then downsample: full coverage to the very
+    # edge so adjacent floor diamonds tessellate without seams.
+    big = Image.new("L", (w * 4, h * 4), 0)
+    d = ImageDraw.Draw(big)
+    d.polygon([(w * 2, -4), (w * 4 + 4, h * 2), (w * 2, h * 4 + 4), (-4, h * 2)],
+              fill=255)
+    return big.resize((w, h), Image.BILINEAR).point(lambda v: 255 if v > 32 else 0)
 
 def cut_diamond(tex, w, h, rng, brightness=1.0):
     x = rng.randint(0, tex.width - w - 1)
@@ -221,6 +289,19 @@ def main():
         sheet = make_sheet(fit_sprite(img, fw, fh), fw, fh, frames)
         sheet.save(os.path.join(RAW, f"{name}.png"))
         print(f"  {name}: {fw}x{fh} x{frames}")
+
+    for name, prompt in UI.items():
+        if name not in meta:
+            print(f"  {name}: not in meta.txt, skipped")
+            continue
+        img = generate(key, name, prompt, transparent=True)
+        _, fw, fh, frames, _, _ = meta[name]
+        fitted = fit_stretch(img, fw, fh)
+        sheet = Image.new("RGBA", (fw * frames, fh), (0, 0, 0, 0))
+        for i in range(frames):
+            sheet.paste(fitted, (i * fw, 0), fitted)
+        sheet.save(os.path.join(RAW, f"{name}.png"))
+        print(f"  {name}: {fw}x{fh} x{frames} (ui)")
 
     print("genart: raw art updated — build to run quantize+atlas.")
     return 0

@@ -506,6 +506,41 @@ def make_carryall_shadow():
                     px[x, y] = 2
     return img
 
+# ---- UI stand-ins (replaced by generated art) ---------------------------------
+
+def make_ui_panel():
+    """320x22 HUD panel strip (drawn 2x by SCALE -> 640x44)."""
+    img = new_indexed(320, 22)
+    px = img.load()
+    for y in range(22):
+        for x in range(320):
+            shade = 4 + (1 if y < 2 else 0) + ((x * 7 + y * 13) % 3 == 0)
+            px[x, y] = shade
+    return img
+
+def make_ui_socket():
+    """22x22 orb socket ring."""
+    img = new_indexed(22, 22)
+    px = img.load()
+    for y in range(22):
+        for x in range(22):
+            d2 = (x - 11) ** 2 + (y - 11) ** 2
+            if 81 <= d2 <= 121:
+                px[x, y] = 230
+    return img
+
+def make_ui_plaque():
+    """120x12 banner plaque."""
+    img = new_indexed(120, 12)
+    px = img.load()
+    for y in range(12):
+        for x in range(120):
+            if x < 2 or x > 117 or y < 1 or y > 10:
+                px[x, y] = 228
+            else:
+                px[x, y] = 3
+    return img
+
 # name -> (builder, fw, fh, frames, ax, ay) at authoring (half) scale
 SHEETS = {
     "tiles":    (lambda: make_tiles(), 32, 16, 10, 16, 8),
@@ -524,6 +559,9 @@ SHEETS = {
     "trooper":  (lambda: make_trooper(), 16, 32, 2, 8, 30),
     "spotter":  (lambda: make_spotter(), 16, 32, 2, 8, 30),
     "carryall": (lambda: make_carryall_shadow(), 56, 24, 1, 28, 12),
+    "ui_panel": (lambda: make_ui_panel(), 320, 22, 1, 0, 0),
+    "ui_socket": (lambda: make_ui_socket(), 22, 22, 1, 11, 11),
+    "ui_plaque": (lambda: make_ui_plaque(), 120, 12, 1, 0, 0),
 }
 
 def main():
@@ -537,12 +575,14 @@ def main():
     with open(os.path.join(OUT_RAW, "meta.txt"), "w") as meta:
         meta.write("# name  file  frame_w frame_h frames  anchor_x anchor_y\n")
         for name, (build, fw, fh, frames, ax, ay) in SHEETS.items():
-            img = build()
-            img = img.resize((img.width * SCALE, img.height * SCALE), Image.NEAREST)
-            img.save(os.path.join(OUT_RAW, f"{name}.png"), transparency=0)
+            path = os.path.join(OUT_RAW, f"{name}.png")
+            if not os.path.exists(path):  # never clobber generated art
+                img = build()
+                img = img.resize((img.width * SCALE, img.height * SCALE), Image.NEAREST)
+                img.save(path, transparency=0)
             meta.write(f"{name} {name}.png {fw*SCALE} {fh*SCALE} {frames} "
                        f"{ax*SCALE} {ay*SCALE}\n")
-    print("raw stand-in art written to", os.path.abspath(OUT_RAW))
+    print("raw stand-in art updated in", os.path.abspath(OUT_RAW))
 
 if __name__ == "__main__":
     main()

@@ -2,6 +2,7 @@
 // HUD: blood + water orbs, message log, sun-arc thermometer, day clock.
 #include <cstdint>
 
+#include "engine/assets.h"
 #include "engine/render.h"
 
 namespace ui {
@@ -34,6 +35,7 @@ struct HudState {
     bool sandwalk;
 };
 
-void draw_hud(DrawCtx& ctx, const HudState& s, const Log& log, int anim_tick);
+void draw_hud(DrawCtx& ctx, const HudState& s, const Log& log, int anim_tick,
+              const Assets& assets);
 
 }  // namespace ui

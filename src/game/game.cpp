@@ -1154,10 +1154,12 @@ void pass_ui(RenderCtx& r) {
                      (z.at(player_ent().x, player_ent().y) & map::TF_INDOOR) != 0,
                      g.noise_meter, uint8_t(g.wrm.state), g.seismo, g.seismo_head,
                      g.pl.thumpers, g.pl.sandwalk};
-    ui::draw_hud(ctx, hud, g.log, g.anim_tick);
+    ui::draw_hud(ctx, hud, g.log, g.anim_tick, *r.assets);
 
     // Harvest op status line (top of screen while an op is live in this zone).
     if (g.op.zone == g.cur_zone && g.op.state != harvest::OpState::None) {
+        if (const SpriteSheet* plaque = r.assets->get("ui_plaque"))
+            draw_sprite(ctx, *plaque, 0, 2, 1, 31);
         char buf[64];
         switch (g.op.state) {
             case harvest::OpState::Working:
@@ -1177,12 +1179,12 @@ void pass_ui(RenderCtx& r) {
                 break;
             default: buf[0] = 0; break;
         }
-        draw_text_shadow(ctx, buf, 4, 4,
+        draw_text_shadow(ctx, buf, 12, 9,
                          g.op.state == harvest::OpState::Destroyed ? 245 :
                          g.op.state == harvest::OpState::Evac ? 210 : 230, 1);
         if (g.alarm_turns > 0) {
             std::snprintf(buf, sizeof buf, "ALARM %d", g.alarm_turns);
-            draw_text_shadow(ctx, buf, 4, 14, 208, 1);
+            draw_text_shadow(ctx, buf, 12, 28, 208, 1);
         }
     }
 

@@ -44,13 +44,19 @@ void draw_orb(DrawCtx& ctx, int cx, int cy, int r, int fill_permille,
 
 }  // namespace
 
-void draw_hud(DrawCtx& ctx, const HudState& s, const Log& log, int anim_tick) {
+void draw_hud(DrawCtx& ctx, const HudState& s, const Log& log, int anim_tick,
+              const Assets& assets) {
     fill_rect(ctx, 0, kPanelY, fb::W, kPanelH, 4);
+    if (const SpriteSheet* panel = assets.get("ui_panel"))
+        draw_sprite(ctx, *panel, 0, 0, kPanelY, 31);
     fill_rect(ctx, 0, kPanelY, fb::W, 1, 12);
 
-    // Blood orb (left) and water orb (right).
+    // Blood orb (left) and water orb (right), seated in their sockets.
     const int oy = kPanelY + kPanelH / 2 + 2;
+    const SpriteSheet* socket = assets.get("ui_socket");
+    if (socket) draw_sprite(ctx, *socket, 0, 26, oy, 31);
     draw_orb(ctx, 26, oy, 17, s.hp_max ? s.hp * 1000 / s.hp_max : 0, 198, 96);
+    if (socket) draw_sprite(ctx, *socket, 0, fb::W - 26, oy, 31);
     draw_orb(ctx, fb::W - 26, oy, 17, s.water_max ? s.water * 1000 / s.water_max : 0, 172, 96);
     draw_text(ctx, "BLOOD", 6, kPanelY + 2, 14);
     draw_text(ctx, "WATER", fb::W - 46, kPanelY + 2, 14);
