@@ -91,19 +91,32 @@ tuning pass against `tunables.h`, seed-race determinism test.
 **Exit:** same seed + same input script twice → identical final state hash; a full
 season plays with all systems live.
 
-### M6 — Art & UI overhaul ⬜
-Replace all programmer art with a proper hand-crafted pass: curated master
-palette (desert-graded ramps, dithering conventions), redrawn terrain sets
-(dune flow across tiles, rock forms, spice blows that shimmer), character
-sprites with real silhouettes and 4-8 frame walk/action cycles, the worm as a
-showpiece (layered segments, breach eruption frames, dust clouds), prop and
-architecture sets for sietch/harvester/wreckage. UI restyle: Diablo-quality
-bottom panel (carved-stone frame, glass orbs with meniscus/bubble shimmer,
-etched seismograph bezel), a proper serif-flavored bitmap font alongside the
-8x8, iconography for items/statuses, styled modal frames (inventory, trade,
-dialogue), title screen + death screen art, palette-fade transitions.
+### M6 — Art & UI overhaul (Diablo 1 vibes) ⬜
+Target the look and feel of Diablo 1 at its native **640x480** (done: the
+framebuffer is now 4:3, pillarboxed by integer scaling on modern displays).
+**AI-generated art pipeline**: `tools/genart.py` calls the OpenAI image API
+(gpt-image-1) with per-asset prompts, then post-processes — downscale to
+target sprite size, quantize to the master 256-color palette, key out
+backgrounds, slice into aligned sheet frames — and rewrites the manifest.
+Regenerate every asset class: terrain floor sets (dune flow, rock, spice
+blows), character sprites (player, Fremen, Harkonnen types), the worm as a
+showpiece (layered segments, breach eruption), crawler/carryall machinery,
+sietch architecture, props. UI restyle to Diablo-quality: carved-stone bottom
+panel frame, glass orbs with meniscus shimmer, etched seismograph bezel,
+gothic-flavored bitmap font, styled modal frames, title + death screens.
 **Exit:** a side-by-side before/after where every screen reads as a finished
-retro game, not a prototype; no placeholder sprite remains in the manifest.
+retro game; no placeholder sprite remains in the manifest.
+
+### M7 — Lighting ⬜
+Diablo-style proper lighting on the colormap infrastructure: per-tile light
+levels composed from multiple sources (player torch radius, glowglobes,
+crawler floodlights, spice-blow ember glow, explosion flashes), radial
+falloff with dithered band transitions, night that is actually *dark* beyond
+your light, interiors lit by pools of lamplight, worm breach lightning-dust
+flashes, and light-radius items (glowglobe, suit lamp). FOV and light unify:
+you see what your light touches.
+**Exit:** standing in the open erg at midnight with a glowglobe reads like
+Tristram at night — a warm pool of light in a black desert.
 
 ---
 
