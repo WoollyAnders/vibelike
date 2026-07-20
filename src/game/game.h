@@ -36,4 +36,8 @@ uint64_t game_state_hash();
 
 // Test/debug hooks.
 bool game_is_dead();
-int game_worm_state();  // worm::State as int
+int game_worm_state();   // worm::State as int
+void game_debug_warp(int zone, int x, int y);
+void game_debug_op_info(int* state, int* x, int* y);  // harvest::OpState as int
+void game_debug_kill_spotters();
+void game_debug_refill();  // water + hp top-up (test harness only)

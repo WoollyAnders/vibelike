@@ -404,6 +404,105 @@ def make_thumper():
         frames.append(img)
     return sheet_from(frames, 12, 20)
 
+def make_crawler():
+    """64x48 harvester crawler, 2 frames (intake churn)."""
+    frames = []
+    for i in range(2):
+        img = new_indexed(64, 48)
+        px = img.load()
+        # tracked hull: big slab
+        for y in range(18, 42):
+            for x in range(6, 58):
+                dx = abs(x - 32) / 27.0
+                dy = abs(y - 30) / 13.0
+                if dx + dy < 1.25:
+                    shade = 14 + int((1 - dy) * 6)
+                    px[x, y] = shade
+        # deck plating lines
+        for y in range(20, 40, 4):
+            for x in range(10, 54):
+                if abs(x - 32) / 27.0 + abs(y - 30) / 13.0 < 1.15:
+                    px[x, y] = 11
+        # intake maw at front-right, churning
+        for y in range(30, 42):
+            for x in range(48, 60):
+                if (x + y + i * 2) % 4 < 2:
+                    px[min(63, x), y] = 8
+        # spice hopper glow on top
+        for y in range(14, 20):
+            for x in range(22, 42):
+                if (x + y) % 3 != 0:
+                    px[x, y] = 140 + ((x * y) % 6)
+        # stack + beacon
+        for y in range(6, 16):
+            for x in range(14, 18):
+                px[x, y] = 12
+        px[15, 5] = 210 if i == 0 else 200
+        frames.append(img)
+    return sheet_from(frames, 64, 48)
+
+def make_trooper():
+    """16x32 Harkonnen trooper, 2 frames."""
+    frames = []
+    for i in range(2):
+        img = new_indexed(16, 32)
+        px = img.load()
+        bob = i
+        # armored bulk
+        for y in range(10 + bob, 27):
+            half = 4 if y < 20 else 3
+            for x in range(8 - half, 8 + half):
+                px[x, y] = 100 + (y % 3)
+        # helmet
+        for y in range(4 + bob, 10 + bob):
+            for x in range(5, 11):
+                px[x, y] = 13
+        px[7, 7 + bob] = 210  # visor slit
+        px[8, 7 + bob] = 210
+        # weapon slab
+        for y in range(14 + bob, 17 + bob):
+            for x in range(11, 15):
+                px[x, y] = 9
+        for x in (4, 11):
+            px[x, 28] = 10
+            px[x, 29] = 10
+        frames.append(img)
+    return sheet_from(frames, 16, 32)
+
+def make_spotter():
+    """16x32 spotter with scope glint, 2 frames."""
+    frames = []
+    for i in range(2):
+        img = new_indexed(16, 32)
+        px = img.load()
+        for y in range(12, 28):
+            half = 3
+            for x in range(8 - half, 8 + half):
+                px[x, y] = 98 + (y % 2)
+        for y in range(5, 12):
+            for x in range(5, 11):
+                px[x, y] = 12
+        # raised scope
+        for x in range(10, 15):
+            px[x, 8] = 9
+        px[14, 8] = 30 if i == 0 else 224  # lens flash
+        for x in (5, 10):
+            px[x, 29] = 10
+        frames.append(img)
+    return sheet_from(frames, 16, 32)
+
+def make_carryall_shadow():
+    """56x24 looming carryall shadow."""
+    img = new_indexed(56, 24)
+    px = img.load()
+    for y in range(4, 20):
+        for x in range(4, 52):
+            dx, dy = (x - 28) / 25.0, (y - 12) / 9.0
+            if dx * dx + dy * dy < 1.0:
+                if (x + y) % 2 == 0:
+                    px[x, y] = 2
+    return img
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     os.makedirs(os.path.join(OUT, "sfx"), exist_ok=True)
@@ -422,6 +521,10 @@ def main():
     make_worm_head().save(os.path.join(OUT, "wormhead.png"), transparency=0)
     make_worm_segment().save(os.path.join(OUT, "wormseg.png"), transparency=0)
     make_thumper().save(os.path.join(OUT, "thumper.png"), transparency=0)
+    make_crawler().save(os.path.join(OUT, "crawler.png"), transparency=0)
+    make_trooper().save(os.path.join(OUT, "trooper.png"), transparency=0)
+    make_spotter().save(os.path.join(OUT, "spotter.png"), transparency=0)
+    make_carryall_shadow().save(os.path.join(OUT, "carryall.png"), transparency=0)
     with open(os.path.join(OUT, "manifest.txt"), "w") as f:
         f.write("# name  file  frame_w frame_h frames  anchor_x anchor_y\n")
         f.write("tiles   tiles.png   32 16 10  16 8\n")
@@ -436,6 +539,10 @@ def main():
         f.write("wormhead wormhead.png 48 56 2  24 48\n")
         f.write("wormseg wormseg.png 36 36 1   18 28\n")
         f.write("thumper thumper.png 12 20 2   6 17\n")
+        f.write("crawler crawler.png 64 48 2   32 40\n")
+        f.write("trooper trooper.png 16 32 2   8 30\n")
+        f.write("spotter spotter.png 16 32 2   8 30\n")
+        f.write("carryall carryall.png 56 24 1  28 12\n")
     print("assets written to", os.path.abspath(OUT))
 
 if __name__ == "__main__":

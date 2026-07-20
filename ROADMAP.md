@@ -68,7 +68,7 @@ delta persistence.
 **Exit:** sand-shortcut-vs-rock-road is a real decision; you can watch the worm surface
 and eat a patrol you baited.
 
-### M3 — First harvest op ⬜
+### M3 — First harvest op ✅
 Harvester crawler (big animated multi-sprite machine) + hold timer + carryall extraction,
 spotter crew, escort AI, all five sabotage methods (thumper bait / demolition / kill
 spotters / contaminate / steal), local alarm + escape phase.
