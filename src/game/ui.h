@@ -7,7 +7,7 @@
 namespace ui {
 
 inline constexpr int kPanelH = 44;
-inline constexpr int kPanelY = 360 - kPanelH;
+inline constexpr int kPanelY = fb::H - kPanelH;
 
 struct Log {
     static constexpr int kLines = 8;

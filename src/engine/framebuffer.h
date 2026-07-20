@@ -1,11 +1,12 @@
 #pragma once
-// The game's render target: a 640x360 8-bit indexed surface. 16:9, so it
-// integer-scales exactly to 720p (2x), 1080p (3x), 1440p (4x), and 4K (6x).
+// The game's render target: a 640x480 8-bit indexed surface — Diablo 1's
+// resolution, 4:3. Integer scaling pillarboxes on modern 16:9 displays
+// (2x on 1080p, 3x on 1440p), exactly like playing the classics.
 #include <cstdint>
 
 namespace fb {
 inline constexpr int W = 640;
-inline constexpr int H = 360;
+inline constexpr int H = 480;
 }  // namespace fb
 
 struct Framebuffer {
