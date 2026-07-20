@@ -28,7 +28,7 @@ palette fade machinery.
 table, mouse position → framebuffer coordinates.
 **Exit:** move a square around; input feels tick-exact.
 
-### E3 — Assets + isometric renderer ⬜
+### E3 — Assets + isometric renderer ✅
 Manifest + indexed-PNG loader (RGB→palette-index mapping, off-palette pixels are errors),
 2:1 diamond tilemap rendering (32x16 floors), y-sorted sprites with anchors and animation
 frames, Doom-style colormap lighting bands, bitmap font, smooth-scrolling camera,
