@@ -10,13 +10,15 @@
 #include "game/map.h"
 #include "game/tunables.h"
 #include "game/ui.h"
+#include "game/worm.h"
 
 namespace {
 
 constexpr uint32_t kChunkGame = 0x454D4147;  // 'GAME'
 constexpr int kMaxEnts = 64;
+constexpr int kMaxDeltas = 192;
 
-enum class EType : uint8_t { None = 0, Player, Hound, Corpse };
+enum class EType : uint8_t { None = 0, Player, Hound, Corpse, Thumper };
 enum class Ai : uint8_t { Idle = 0, Wander, Hunt };
 
 struct Entity {
@@ -34,7 +36,14 @@ struct Player {
     int water = tune::kStartWater;
     int exposure = 0;
     int turn = 0;
+    int thumpers = 3;
+    bool sandwalk = false;
     bool dead = false;
+};
+
+// Persistent per-zone terrain change (worm churn); replayed after regen.
+struct Delta {
+    uint8_t zone, x, y, floor;
 };
 
 struct GameState {
@@ -42,11 +51,22 @@ struct GameState {
     RngSet rng;
     uint64_t seed = 0;
 
-    map::Zone zones[2];
+    map::Zone zones[map::kZoneCount];
     uint8_t cur_zone = map::kZoneSietch;
+    uint8_t spawned_mask = 0;  // zones whose wildlife has been placed
+    int shade_hour = -1;       // hour the shade map was computed for
 
     Entity ents[kMaxEnts];  // ents[0] = player
     Player pl;
+
+    worm::Worm wrm;
+    worm::NoiseField noise;
+    uint8_t noise_meter = 0;          // HUD value (near player)
+    uint8_t seismo[64] = {};          // history ring for the trace
+    uint8_t seismo_head = 0;
+
+    Delta deltas[kMaxDeltas];
+    int delta_count = 0;
 
     int16_t dmap[map::N];
     iso::Camera cam;
@@ -58,6 +78,13 @@ struct GameState {
     uint8_t fade_r = 255, fade_g = 255, fade_b = 255;
 };
 GameState g;
+
+worm::Tuning worm_tuning() {
+    worm::Tuning t;
+    t.active = g.cur_zone != map::kZoneSietch;
+    if (g.cur_zone == map::kZoneDeepPan) { t.stir_threshold = 25; t.hunt_threshold = 50; }
+    return t;
+}
 
 Entity& player_ent() { return g.ents[0]; }
 map::Zone& zone() { return g.zones[g.cur_zone]; }
@@ -91,20 +118,67 @@ Entity* alloc_entity() {
     return nullptr;
 }
 
-void spawn_hounds() {
-    map::Zone& desert = g.zones[map::kZoneDesert];
-    int placed = 0;
-    int guard = 0;
-    while (placed < tune::kHoundCount && ++guard < 2000) {
+void spawn_zone_wildlife(uint8_t zone_id) {
+    if (g.spawned_mask & (1 << zone_id)) return;
+    g.spawned_mask |= uint8_t(1 << zone_id);
+    if (zone_id == map::kZoneSietch) return;
+    map::Zone& z = g.zones[zone_id];
+    const int want = zone_id == map::kZoneDeepPan ? 4 : tune::kHoundCount;
+    int placed = 0, guard = 0;
+    while (placed < want && ++guard < 2000) {
         const int x = g.rng.world.range(8, map::W - 2);
         const int y = g.rng.world.range(2, map::H - 2);
-        if (!desert.walkable(x, y) || entity_at(x, y, map::kZoneDesert)) continue;
+        if (!z.walkable(x, y) || entity_at(x, y, zone_id)) continue;
         Entity* e = alloc_entity();
         if (!e) break;
-        *e = Entity{EType::Hound, Ai::Wander, map::kZoneDesert,
+        *e = Entity{EType::Hound, Ai::Wander, zone_id,
                     int16_t(x), int16_t(y), tune::kHoundHp, 0, 0};
         ++placed;
     }
+}
+
+void apply_deltas(uint8_t zone_id) {
+    for (int i = 0; i < g.delta_count; ++i)
+        if (g.deltas[i].zone == zone_id)
+            g.zones[zone_id].floor[g.deltas[i].y * map::W + g.deltas[i].x] = g.deltas[i].floor;
+}
+
+// Sun-tracked shade: shadows fall away from the sun. Morning sun in the east
+// casts westward shade; afternoon the reverse; midday almost none.
+void recompute_shade(uint8_t zone_id, int hour) {
+    map::Zone& z = g.zones[zone_id];
+    for (int i = 0; i < map::N; ++i) z.flags[i] &= uint8_t(~map::TF_SHADE);
+    if (zone_id == map::kZoneSietch) return;
+
+    int dir, len;
+    if (hour < 6 || hour > 18) { dir = 0; len = 1; }        // night: lee of rock
+    else if (hour < 10) { dir = -1; len = 2; }              // long west shadows
+    else if (hour <= 14) { dir = -1; len = 0; }             // overhead: none
+    else { dir = 1; len = 2; }                              // long east shadows
+
+    for (int y = 0; y < map::H; ++y)
+        for (int x = 0; x < map::W; ++x) {
+            if (!(z.flags[y * map::W + x] & (map::TF_ROCKPROP | map::TF_WALL))) continue;
+            if (len == 0 && dir != 0) continue;
+            if (dir == 0) {
+                // night "shade" = adjacent to rock (wind lee, warmth)
+                for (int dy = -1; dy <= 1; ++dy)
+                    for (int dx = -1; dx <= 1; ++dx) {
+                        const int nx = x + dx, ny = y + dy;
+                        if (nx >= 0 && nx < map::W && ny >= 0 && ny < map::H &&
+                            !(z.flags[ny * map::W + nx] & map::TF_BLOCK))
+                            z.flags[ny * map::W + nx] |= map::TF_SHADE;
+                    }
+            } else {
+                for (int d = 1; d <= len; ++d) {
+                    const int nx = x + dir * d;
+                    if (nx < 0 || nx >= map::W) break;
+                    if (z.flags[y * map::W + nx] & map::TF_BLOCK) break;
+                    z.flags[y * map::W + nx] |= map::TF_SHADE;
+                }
+            }
+        }
+    g.shade_hour = hour;
 }
 
 void refresh_fov_and_paths() {
@@ -116,6 +190,46 @@ void die(const char* cause) {
     g.pl.dead = true;
     g.log.push("%s", cause);
     g.services.mixer->push({audio::Cmd::PlaySfx, 0 /* roar */, 200, 96});
+}
+
+// ---- worm callbacks ----------------------------------------------------------
+
+void worm_cb_crush(void*, int x, int y) {
+    for (Entity& e : g.ents) {
+        if (e.type == EType::None || e.zone != g.cur_zone) continue;
+        if (e.x != x || e.y != y) continue;
+        if (e.type == EType::Player) {
+            die("Swallowed whole. The desert keeps its own.");
+        } else {
+            if (e.type == EType::Hound) g.log.push("A dust hound vanishes into the maw.");
+            e.type = EType::None;
+        }
+    }
+}
+
+void worm_cb_message(void*, const char* text) { g.log.push("%s", text); }
+
+void worm_cb_churn(void*, int x, int y) {
+    if (x < 0 || x >= map::W || y < 0 || y >= map::H) return;
+    map::Zone& z = g.zones[g.cur_zone];
+    if (z.flags[y * map::W + x] & map::TF_BLOCK) return;
+    if (z.floor[y * map::W + x] == 6) return;
+    z.floor[y * map::W + x] = 6;  // churned sand (loud, disturbed)
+    if (g.delta_count < kMaxDeltas)
+        g.deltas[g.delta_count++] = Delta{g.cur_zone, uint8_t(x), uint8_t(y), 6};
+}
+
+worm::Callbacks worm_callbacks() {
+    return worm::Callbacks{nullptr, worm_cb_crush, worm_cb_message, worm_cb_churn};
+}
+
+// Noise made by the player stepping on a floor type.
+int step_noise(uint8_t floor) {
+    int n = 0;
+    if (floor <= 2 || floor == 5) n = 8;   // sand, spice pan
+    else if (floor == 6) n = 30;           // drum / churned sand booms
+    if (g.pl.sandwalk) n /= 2;
+    return n;
 }
 
 void damage_player(int dmg, const char* cause) {
@@ -217,26 +331,85 @@ void advance_world() {
     refresh_fov_and_paths();
     for (int i = 1; i < kMaxEnts; ++i) {
         Entity& e = g.ents[i];
-        if (e.type != EType::Hound || e.zone != g.cur_zone) continue;
+        if (e.zone != g.cur_zone) continue;
+        if (e.type == EType::Thumper) {
+            g.noise.add(e.x, e.y, 40);
+            if (--e.data <= 0) {
+                e.type = EType::None;
+                g.log.push("The thumper falls silent.");
+            }
+            continue;
+        }
+        if (e.type != EType::Hound) continue;
         e.energy += 100;
         while (e.energy >= 100 && !g.pl.dead) {
             e.energy -= 100;
             hound_act(e);
         }
     }
+
+    // the worm's turn (also decays the noise field)
+    const worm::State before = g.wrm.state;
+    worm::turn(g.wrm, g.noise, zone(), g.rng.combat, worm_tuning(), worm_callbacks());
+    if (g.wrm.state != before) {
+        int intensity = 0;
+        switch (g.wrm.state) {
+            case worm::State::Dormant: intensity = 0; break;
+            case worm::State::Stirring: intensity = 60; break;
+            case worm::State::Hunting: intensity = 140; break;
+            case worm::State::Breaching: intensity = 230; break;
+            case worm::State::Surfaced: intensity = 190; break;
+        }
+        g.services.mixer->push({audio::Cmd::Rumble, 0, uint8_t(intensity), 0});
+        if (g.wrm.state == worm::State::Surfaced)
+            g.services.mixer->push({audio::Cmd::PlaySfx, 0, 255, 110});
+    }
+
+    // hour changed? re-cast the shadows
+    if (hour_now() != g.shade_hour) recompute_shade(g.cur_zone, hour_now());
+
+    // HUD meter + seismograph history
+    const int nn = g.noise.near(player_ent().x, player_ent().y, 3);
+    g.noise_meter = uint8_t(nn > 100 ? 100 : nn);
+    g.seismo[g.seismo_head] = g.noise_meter;
+    g.seismo_head = (g.seismo_head + 1) & 63;
+
     refresh_fov_and_paths();
+}
+
+bool worm_occupies(int x, int y) {
+    if (g.wrm.state != worm::State::Surfaced) return false;
+    if (g.wrm.x == x && g.wrm.y == y) return true;
+    for (int i = 0; i < worm::kSegments; ++i)
+        if (g.wrm.seg_x[i] == x && g.wrm.seg_y[i] == y) return true;
+    return false;
 }
 
 // ---- player actions ------------------------------------------------------------
 
-void enter_zone(uint8_t id) {
+// use_spawn: reposition the player at the zone's default spawn point.
+void enter_zone(uint8_t id, bool use_spawn, int at_x = 0, int at_y = 0) {
     g.cur_zone = id;
     int sx, sy;
     map::generate(zone(), g.seed, map::ZoneId(id), sx, sy);
-    // zone regen wipes vis but entities persist (they store their zone)
-    player_ent().x = int16_t(sx);
-    player_ent().y = int16_t(sy);
-    player_ent().zone = id;
+    apply_deltas(id);
+    spawn_zone_wildlife(id);
+
+    // crossing a region resets the worm; it hunts by local noise
+    g.wrm = worm::Worm{};
+    g.noise.clear();
+    g.services.mixer->push({audio::Cmd::Rumble, 0, 0, 0});
+
+    Entity& p = player_ent();
+    if (use_spawn) { p.x = int16_t(sx); p.y = int16_t(sy); }
+    else { p.x = int16_t(at_x); p.y = int16_t(at_y); }
+    // nudge to walkable if the landing tile is blocked
+    for (int r = 0; r < 6 && !zone().walkable(p.x, p.y); ++r) {
+        if (zone().walkable(p.x, p.y + r)) p.y = int16_t(p.y + r);
+        else if (zone().walkable(p.x, p.y - r)) p.y = int16_t(p.y - r);
+    }
+    p.zone = id;
+    recompute_shade(id, hour_now());
     refresh_fov_and_paths();
     flash(10, 10, 10);
 }
@@ -246,8 +419,30 @@ void try_move(int dx, int dy) {
     const int nx = p.x + dx, ny = p.y + dy;
     map::Zone& z = zone();
 
+    // walking off the east/west edge travels between desert regions
+    if (nx >= map::W && g.cur_zone == map::kZoneDesert) {
+        g.log.push("You cross into the Deep Pan. Open erg. Worm country.");
+        enter_zone(map::kZoneDeepPan, false, 1, p.y);
+        advance_world();
+        return;
+    }
+    if (nx < 0 && g.cur_zone == map::kZoneDeepPan) {
+        g.log.push("Back across the Rimwall fringe.");
+        enter_zone(map::kZoneDesert, false, map::W - 2, p.y);
+        advance_world();
+        return;
+    }
     if (nx < 0 || nx >= map::W || ny < 0 || ny >= map::H) return;
     const uint8_t tf = z.at(nx, ny);
+
+    // the surfaced worm is a wall of flesh — bump = strike
+    if (worm_occupies(nx, ny)) {
+        const int dealt = worm::hit(g.wrm, nx, ny, tune::kPlayerAtk, worm_callbacks());
+        if (dealt > 0) g.log.push("Your blade bites the soft flesh of the maw!");
+        g.noise.add(p.x, p.y, 12);
+        advance_world();
+        return;
+    }
 
     if (tf & map::TF_CISTERN) {
         if (g.pl.water < tune::kWaterMax) {
@@ -264,6 +459,7 @@ void try_move(int dx, int dy) {
     if (Entity* h = entity_at(nx, ny, g.cur_zone, EType::Hound)) {
         h->hp -= tune::kPlayerAtk;
         g.services.mixer->push({audio::Cmd::PlaySfx, 1, 200, 60});
+        g.noise.add(nx, ny, 12);
         if (h->hp <= 0) {
             g.log.push("The dust hound collapses. Its water is yours.");
             *h = Entity{EType::Corpse, Ai::Idle, uint8_t(g.cur_zone),
@@ -283,16 +479,43 @@ void try_move(int dx, int dy) {
     if (tf & map::TF_DOOR) {
         if (g.cur_zone == map::kZoneSietch) {
             g.log.push("You step out into the Tanzerouft.");
-            enter_zone(map::kZoneDesert);
+            enter_zone(map::kZoneDesert, true);
         } else {
             g.log.push("You slip back into the sietch's cool dark.");
-            enter_zone(map::kZoneSietch);
+            enter_zone(map::kZoneSietch, true);
         }
         advance_world();
         return;
     }
+
+    const uint8_t floor = z.floor[ny * map::W + nx];
+    const int noise = step_noise(floor);
+    if (noise > 0) g.noise.add(nx, ny, noise);
+    if (floor == 6 && noise >= 20) g.log.push("BOOM. Drum sand resounds underfoot.");
+
     if (entity_at(nx, ny, g.cur_zone, EType::Corpse))
         g.log.push("A corpse lies here. G harvests its water.");
+
+    advance_world();
+    if (g.pl.sandwalk && !g.pl.dead) advance_world();  // slow, broken rhythm
+}
+
+void place_thumper() {
+    if (g.cur_zone == map::kZoneSietch) {
+        g.log.push("Not inside the sietch.");
+        return;
+    }
+    if (g.pl.thumpers <= 0) {
+        g.log.push("No thumpers left.");
+        return;
+    }
+    Entity* t = alloc_entity();
+    if (!t) return;
+    Entity& p = player_ent();
+    *t = Entity{EType::Thumper, Ai::Idle, g.cur_zone, p.x, p.y, 1, 0, 15};
+    --g.pl.thumpers;
+    g.log.push("Thumper planted. lump... lump... lump...");
+    g.services.mixer->push({audio::Cmd::PlaySfx, 1, 180, 70});
     advance_world();
 }
 
@@ -328,13 +551,10 @@ void game_init(uint64_t seed, const GameServices& services) {
     map::generate(g.zones[map::kZoneSietch], seed, map::kZoneSietch, sx, sy);
     g.ents[0] = Entity{EType::Player, Ai::Idle, map::kZoneSietch,
                        int16_t(sx), int16_t(sy), int16_t(tune::kPlayerHpMax), 0, 0};
-    // desert generated now for hound spawns; regenerated identically on entry
-    int dx_, dy_;
-    map::generate(g.zones[map::kZoneDesert], seed, map::kZoneDesert, dx_, dy_);
-    spawn_hounds();
+    g.spawned_mask = 1 << map::kZoneSietch;
 
     g.log.push("The Naib's word: deny them the spice. Go.");
-    g.log.push("Arrows move. G harvests. F5/F9 save/load.");
+    g.log.push("Arrows move. G harvest. T thumper. C sandwalk.");
     refresh_fov_and_paths();
 
     int px, py;
@@ -365,6 +585,12 @@ bool game_update(const InputState& in) {
     if (dx || dy) try_move(dx, dy);
     else if (in.pressed_or_repeat(Key::Wait)) advance_world();
     else if (in.was_pressed(Key::Harvest)) try_harvest();
+    else if (in.was_pressed(Key::Thumper)) place_thumper();
+    else if (in.was_pressed(Key::Sandwalk)) {
+        g.pl.sandwalk = !g.pl.sandwalk;
+        g.log.push(g.pl.sandwalk ? "You break your rhythm. Walk without wormsign."
+                                 : "You stride freely again.");
+    }
 
     if (in.was_pressed(Key::Save)) {
         SaveWriter w;
@@ -410,9 +636,30 @@ void game_render(Framebuffer& frame) {
     const SpriteSheet* rock_spr = assets.get("rock");
     const SpriteSheet* wall_spr = assets.get("wall");
     const SpriteSheet* cistern_spr = assets.get("cistern");
+    const SpriteSheet* ripple_spr = assets.get("ripple");
+    const SpriteSheet* mound_spr = assets.get("mound");
+    const SpriteSheet* wormhead_spr = assets.get("wormhead");
+    const SpriteSheet* wormseg_spr = assets.get("wormseg");
+    const SpriteSheet* thumper_spr = assets.get("thumper");
 
     const map::Zone& z = zone();
     const bool night = is_night();
+
+    // screen shake (visual only; fx stream never touches gameplay)
+    iso::Camera cam = g.cam;
+    int shake = 0;
+    switch (g.wrm.state) {
+        case worm::State::Hunting: shake = 1; break;
+        case worm::State::Breaching: shake = 3; break;
+        case worm::State::Surfaced: shake = 2; break;
+        default: break;
+    }
+    if (shake > 0) {
+        cam.x += int(g.rng.fx.below(uint32_t(shake * 2 + 1))) - shake;
+        cam.y += int(g.rng.fx.below(uint32_t(shake * 2 + 1))) - shake;
+    }
+    const iso::Camera saved_cam = g.cam;
+    g.cam = cam;
 
     for (int ty = 0; ty < map::H; ++ty) {
         for (int tx = 0; tx < map::W; ++tx) {
@@ -458,15 +705,52 @@ void game_render(Framebuffer& frame) {
             case EType::Corpse:
                 g.draw_list.add(corpse_spr, 0, sx, sy + 6, light, 0);
                 break;
+            case EType::Thumper:
+                g.draw_list.add(thumper_spr, (g.anim_tick / 8) % 2, sx, sy + 4, light, 1);
+                break;
+            default: break;
+        }
+    }
+
+    // The worm. Burrowed states telegraph with ripples; breaching mounds;
+    // surfaced draws the whole segment chain.
+    {
+        const int wlight = night ? 18 : 31;
+        int sx, sy;
+        switch (g.wrm.state) {
+            case worm::State::Hunting:
+                for (int i = 0; i < worm::kSegments; i += 2) {
+                    iso::tile_to_screen(g.wrm.seg_x[i], g.wrm.seg_y[i], g.cam, sx, sy);
+                    g.draw_list.add(ripple_spr, (g.anim_tick / 6 + i) % 2, sx, sy, wlight, 0);
+                }
+                iso::tile_to_screen(g.wrm.x, g.wrm.y, g.cam, sx, sy);
+                g.draw_list.add(ripple_spr, (g.anim_tick / 4) % 2, sx, sy, wlight, 0);
+                break;
+            case worm::State::Breaching:
+                iso::tile_to_screen(g.wrm.x, g.wrm.y, g.cam, sx, sy);
+                g.draw_list.add(mound_spr, 2 - (g.wrm.timer > 2 ? 2 : g.wrm.timer), sx,
+                                sy + 8, wlight, 1);
+                break;
+            case worm::State::Surfaced:
+                for (int i = worm::kSegments - 1; i >= 0; --i) {
+                    iso::tile_to_screen(g.wrm.seg_x[i], g.wrm.seg_y[i], g.cam, sx, sy);
+                    g.draw_list.add(wormseg_spr, 0, sx, sy + 10, wlight, 1);
+                }
+                iso::tile_to_screen(g.wrm.x, g.wrm.y, g.cam, sx, sy);
+                g.draw_list.add(wormhead_spr, (g.anim_tick / 10) % 2, sx, sy + 12, wlight, 2);
+                break;
             default: break;
         }
     }
     g.draw_list.flush(ctx);
+    g.cam = saved_cam;
 
     ui::HudState hud{g.pl.hp, tune::kPlayerHpMax, g.pl.water, tune::kWaterMax,
                      g.pl.exposure, hour_now(), ambient_now(),
                      g.pl.turn / tune::kTurnsPerDay + 1,
-                     (z.at(player_ent().x, player_ent().y) & map::TF_INDOOR) != 0};
+                     (z.at(player_ent().x, player_ent().y) & map::TF_INDOOR) != 0,
+                     g.noise_meter, uint8_t(g.wrm.state), g.seismo, g.seismo_head,
+                     g.pl.thumpers, g.pl.sandwalk};
     ui::draw_hud(ctx, hud, g.log, g.anim_tick);
 
     if (g.pl.dead) {
@@ -492,17 +776,23 @@ void game_serialize(SaveWriter& w) {
     w.i32(g.pl.water);
     w.i32(g.pl.exposure);
     w.i32(g.pl.turn);
+    w.i32(g.pl.thumpers);
+    w.u8(g.pl.sandwalk ? 1 : 0);
     w.u8(g.pl.dead ? 1 : 0);
+    w.u8(g.spawned_mask);
     w.bytes(g.ents, sizeof g.ents);
     w.bytes(&g.rng.world, sizeof g.rng.world);
     w.bytes(&g.rng.combat, sizeof g.rng.combat);
     w.bytes(&g.rng.loot, sizeof g.rng.loot);
-    w.bytes(g.zones[0].vis, sizeof g.zones[0].vis);
-    w.bytes(g.zones[1].vis, sizeof g.zones[1].vis);
+    w.bytes(&g.wrm, sizeof g.wrm);
+    w.bytes(g.noise.at, sizeof g.noise.at);
+    w.i32(g.delta_count);
+    w.bytes(g.deltas, sizeof g.deltas);
+    for (int i = 0; i < map::kZoneCount; ++i)
+        w.bytes(g.zones[i].vis, sizeof g.zones[i].vis);
 }
 
 bool game_deserialize(SaveReader& r) {
-    GameState fresh{};
     const uint64_t seed = r.u64();
     const uint8_t cur = r.u8();
     Player pl;
@@ -510,35 +800,54 @@ bool game_deserialize(SaveReader& r) {
     pl.water = r.i32();
     pl.exposure = r.i32();
     pl.turn = r.i32();
+    pl.thumpers = r.i32();
+    pl.sandwalk = r.u8() != 0;
     pl.dead = r.u8() != 0;
+    const uint8_t spawned = r.u8();
     Entity ents[kMaxEnts];
     r.bytes(ents, sizeof ents);
     Pcg32 world, combat, loot;
     r.bytes(&world, sizeof world);
     r.bytes(&combat, sizeof combat);
     r.bytes(&loot, sizeof loot);
-    uint8_t vis0[map::N], vis1[map::N];
-    r.bytes(vis0, sizeof vis0);
-    r.bytes(vis1, sizeof vis1);
-    if (!r.ok() || cur > 1) return false;
+    worm::Worm wrm;
+    r.bytes(&wrm, sizeof wrm);
+    static int16_t noise_buf[map::N];
+    r.bytes(noise_buf, sizeof noise_buf);
+    const int delta_count = r.i32();
+    Delta deltas[kMaxDeltas];
+    r.bytes(deltas, sizeof deltas);
+    static uint8_t vis[map::kZoneCount][map::N];
+    for (int i = 0; i < map::kZoneCount; ++i) r.bytes(vis[i], sizeof vis[i]);
+    if (!r.ok() || cur >= map::kZoneCount || delta_count > kMaxDeltas) return false;
 
     g.seed = seed;
     g.cur_zone = cur;
     g.pl = pl;
+    g.spawned_mask = spawned;
     std::memcpy(g.ents, ents, sizeof g.ents);
     g.rng.world = world;
     g.rng.combat = combat;
     g.rng.loot = loot;
+    g.wrm = wrm;
+    std::memcpy(g.noise.at, noise_buf, sizeof noise_buf);
+    g.delta_count = delta_count;
+    std::memcpy(g.deltas, deltas, sizeof g.deltas);
     int sx_, sy_;
-    map::generate(g.zones[0], seed, map::kZoneSietch, sx_, sy_);
-    map::generate(g.zones[1], seed, map::kZoneDesert, sx_, sy_);
-    std::memcpy(g.zones[0].vis, vis0, sizeof vis0);
-    std::memcpy(g.zones[1].vis, vis1, sizeof vis1);
+    for (int i = 0; i < map::kZoneCount; ++i) {
+        map::generate(g.zones[i], seed, map::ZoneId(i), sx_, sy_);
+        apply_deltas(uint8_t(i));
+        std::memcpy(g.zones[i].vis, vis[i], sizeof vis[i]);
+    }
+    g.shade_hour = -1;
+    recompute_shade(g.cur_zone, hour_now());
     refresh_fov_and_paths();
     return true;
 }
 
 bool game_is_dead() { return g.pl.dead; }
+
+int game_worm_state() { return int(g.wrm.state); }
 
 uint64_t game_state_hash() {
     uint64_t h = 0xcbf29ce484222325ULL;
