@@ -5,6 +5,8 @@
 #include <cstdio>
 #include <cstring>
 
+#include "engine/particles.h"
+#include "engine/passes.h"
 #include "engine/render.h"
 #include "engine/rng.h"
 #include "game/map.h"
@@ -78,6 +80,7 @@ struct GameState {
     int16_t dmap[map::N];
     iso::Camera cam;
     iso::DrawList draw_list;
+    particles::Pool particles;
     ui::Log log;
 
     int anim_tick = 0;
@@ -944,81 +947,124 @@ bool game_update(const InputState& in) {
     return !in.was_pressed(Key::Cancel);
 }
 
-void game_render(Framebuffer& frame) {
-    DrawCtx ctx{&frame, g.services.cmaps};
-    frame.clear(1);
+// ---- render passes (engine/passes.h documents the order) ----------------------
 
-    const Assets& assets = *g.services.assets;
-    const SpriteSheet* tiles = assets.get("tiles");
-    const SpriteSheet* player_spr = assets.get("player");
-    const SpriteSheet* hound_spr = assets.get("hound");
-    const SpriteSheet* corpse_spr = assets.get("corpse");
-    const SpriteSheet* rock_spr = assets.get("rock");
-    const SpriteSheet* wall_spr = assets.get("wall");
-    const SpriteSheet* cistern_spr = assets.get("cistern");
-    const SpriteSheet* ripple_spr = assets.get("ripple");
-    const SpriteSheet* mound_spr = assets.get("mound");
-    const SpriteSheet* wormhead_spr = assets.get("wormhead");
-    const SpriteSheet* wormseg_spr = assets.get("wormseg");
-    const SpriteSheet* thumper_spr = assets.get("thumper");
-    const SpriteSheet* crawler_spr = assets.get("crawler");
-    const SpriteSheet* trooper_spr = assets.get("trooper");
-    const SpriteSheet* spotter_spr = assets.get("spotter");
-    const SpriteSheet* carryall_spr = assets.get("carryall");
+namespace {
 
-    const map::Zone& z = zone();
-    const bool night = is_night();
+struct RenderCtx {
+    DrawCtx ctx;
+    const map::Zone* z;
+    bool night;
+    int base_light;    // full-bright level for the time of day
+    const Assets* assets;
+};
 
-    // screen shake (visual only; fx stream never touches gameplay)
-    iso::Camera cam = g.cam;
-    int shake = 0;
-    switch (g.wrm.state) {
-        case worm::State::Hunting: shake = 1; break;
-        case worm::State::Breaching: shake = 3; break;
-        case worm::State::Surfaced: shake = 2; break;
-        default: break;
-    }
-    if (shake > 0) {
-        cam.x += int(g.rng.fx.below(uint32_t(shake * 2 + 1))) - shake;
-        cam.y += int(g.rng.fx.below(uint32_t(shake * 2 + 1))) - shake;
-    }
-    const iso::Camera saved_cam = g.cam;
-    g.cam = cam;
+int tile_light(const RenderCtx& r, int idx) {
+    const uint8_t vis = r.z->vis[idx];
+    if (!(vis & map::V_VISIBLE)) return 7;  // remembered
+    int light = r.night ? 16 : 31;
+    if (!(r.z->flags[idx] & map::TF_INDOOR) && (r.z->flags[idx] & map::TF_SHADE) && !r.night)
+        light = 24;  // shade reads visibly cooler
+    if (r.z->flags[idx] & map::TF_INDOOR) light = 20;
+    return light;
+}
 
-    for (int ty = 0; ty < map::H; ++ty) {
+// Ground: floor diamonds, immediate (no overlap between floors).
+void pass_ground(RenderCtx& r) {
+    const SpriteSheet* tiles = r.assets->get("tiles");
+    for (int ty = 0; ty < map::H; ++ty)
         for (int tx = 0; tx < map::W; ++tx) {
             const int idx = ty * map::W + tx;
-            const uint8_t vis = z.vis[idx];
-            if (!(vis & (map::V_VISIBLE | map::V_REMEMBERED))) continue;
+            if (!(r.z->vis[idx] & (map::V_VISIBLE | map::V_REMEMBERED))) continue;
             int sx, sy;
             iso::tile_to_screen(tx, ty, g.cam, sx, sy);
             if (sx < -64 || sx > fb::W + 64 || sy < -96 || sy > fb::H + 96) continue;
+            draw_sprite(r.ctx, *tiles, r.z->floor[idx], sx, sy, tile_light(r, idx));
+        }
+}
 
-            int light;
-            if (vis & map::V_VISIBLE) {
-                light = night ? 16 : 31;
-                if (!(z.flags[idx] & map::TF_INDOOR) && (z.flags[idx] & map::TF_SHADE) && !night)
-                    light = 24;  // shade reads visibly cooler
-                if (z.flags[idx] & map::TF_INDOOR) light = 20;
-            } else {
-                light = 7;  // remembered
-            }
+// GroundDecals: flat-on-sand overlays — wormsign ripples (hunt telegraph).
+void pass_ground_decals(RenderCtx& r) {
+    if (g.wrm.state != worm::State::Hunting) return;
+    const SpriteSheet* ripple = r.assets->get("ripple");
+    int sx, sy;
+    for (int i = 0; i < worm::kSegments; i += 2) {
+        iso::tile_to_screen(g.wrm.seg_x[i], g.wrm.seg_y[i], g.cam, sx, sy);
+        draw_sprite(r.ctx, *ripple, (g.anim_tick / 6 + i) % 2, sx, sy, r.base_light);
+    }
+    iso::tile_to_screen(g.wrm.x, g.wrm.y, g.cam, sx, sy);
+    draw_sprite(r.ctx, *ripple, (g.anim_tick / 4) % 2, sx, sy, r.base_light);
+}
 
-            draw_sprite(ctx, *tiles, z.floor[idx], sx, sy, light);
-            const uint8_t tf = z.flags[idx];
-            if (tf & map::TF_WALL) g.draw_list.add(wall_spr, 0, sx, sy + 16, light, 0);
-            if (tf & map::TF_ROCKPROP) g.draw_list.add(rock_spr, 0, sx, sy + 12, light, 0);
-            if (tf & map::TF_CISTERN) g.draw_list.add(cistern_spr, 0, sx, sy + 8, light, 0);
+// Walls: architecture, into the shared y-sorted scene list.
+void pass_walls(RenderCtx& r) {
+    const SpriteSheet* wall = r.assets->get("wall");
+    for (int ty = 0; ty < map::H; ++ty)
+        for (int tx = 0; tx < map::W; ++tx) {
+            const int idx = ty * map::W + tx;
+            if (!(r.z->flags[idx] & map::TF_WALL)) continue;
+            if (!(r.z->vis[idx] & (map::V_VISIBLE | map::V_REMEMBERED))) continue;
+            int sx, sy;
+            iso::tile_to_screen(tx, ty, g.cam, sx, sy);
+            if (sx < -64 || sx > fb::W + 64 || sy < -96 || sy > fb::H + 96) continue;
+            g.draw_list.add(wall, 0, sx, sy + 16, tile_light(r, idx), 0);
+        }
+}
+
+// Objects: props and machinery, into the scene list.
+void pass_objects(RenderCtx& r) {
+    const SpriteSheet* rock = r.assets->get("rock");
+    const SpriteSheet* cistern = r.assets->get("cistern");
+    for (int ty = 0; ty < map::H; ++ty)
+        for (int tx = 0; tx < map::W; ++tx) {
+            const int idx = ty * map::W + tx;
+            const uint8_t tf = r.z->flags[idx];
+            if (!(tf & (map::TF_ROCKPROP | map::TF_CISTERN))) continue;
+            if (!(r.z->vis[idx] & (map::V_VISIBLE | map::V_REMEMBERED))) continue;
+            int sx, sy;
+            iso::tile_to_screen(tx, ty, g.cam, sx, sy);
+            if (sx < -64 || sx > fb::W + 64 || sy < -96 || sy > fb::H + 96) continue;
+            const int light = tile_light(r, idx);
+            if (tf & map::TF_ROCKPROP) g.draw_list.add(rock, 0, sx, sy + 12, light, 0);
+            if (tf & map::TF_CISTERN) g.draw_list.add(cistern, 0, sx, sy + 8, light, 0);
+        }
+
+    // crawler (remembered like architecture) + breach mound
+    if (g.op.live() && g.op.zone == g.cur_zone) {
+        const int idx = g.op.y * map::W + g.op.x;
+        if (r.z->vis[idx] & (map::V_VISIBLE | map::V_REMEMBERED)) {
+            int sx, sy;
+            iso::tile_to_screen(g.op.x, g.op.y, g.cam, sx, sy);
+            const int light = (r.z->vis[idx] & map::V_VISIBLE) ? r.base_light : 7;
+            const bool churning = g.op.state == harvest::OpState::Working;
+            g.draw_list.add(r.assets->get("crawler"), churning ? (g.anim_tick / 6) % 2 : 0,
+                            sx - 32, sy + 8, light, 1);
         }
     }
+    if (g.wrm.state == worm::State::Breaching) {
+        int sx, sy;
+        iso::tile_to_screen(g.wrm.x, g.wrm.y, g.cam, sx, sy);
+        g.draw_list.add(r.assets->get("mound"), 2 - (g.wrm.timer > 2 ? 2 : g.wrm.timer),
+                        sx, sy + 16, r.base_light, 1);
+    }
+}
+
+// Entities: actors (and the surfaced worm), into the scene list.
+void pass_entities(RenderCtx& r) {
+    const SpriteSheet* player_spr = r.assets->get("player");
+    const SpriteSheet* hound_spr = r.assets->get("hound");
+    const SpriteSheet* corpse_spr = r.assets->get("corpse");
+    const SpriteSheet* thumper_spr = r.assets->get("thumper");
+    const SpriteSheet* trooper_spr = r.assets->get("trooper");
+    const SpriteSheet* spotter_spr = r.assets->get("spotter");
 
     for (const Entity& e : g.ents) {
         if (e.type == EType::None || e.zone != g.cur_zone) continue;
         const int idx = e.y * map::W + e.x;
-        if (!(z.vis[idx] & map::V_VISIBLE)) continue;
+        if (!(r.z->vis[idx] & map::V_VISIBLE)) continue;
         int sx, sy;
         iso::tile_to_screen(e.x, e.y, g.cam, sx, sy);
-        const int light = night ? 18 : 31;
+        const int light = r.night ? 18 : 31;
         switch (e.type) {
             case EType::Player:
                 g.draw_list.add(player_spr, (g.anim_tick / 9) % 4, sx, sy + 12, light, 1);
@@ -1042,55 +1088,65 @@ void game_render(Framebuffer& frame) {
         }
     }
 
-    // The harvest crawler + carryall shadow.
-    if (g.op.live() && g.op.zone == g.cur_zone) {
+    if (g.wrm.state == worm::State::Surfaced) {
+        const SpriteSheet* seg = r.assets->get("wormseg");
+        int sx, sy;
+        for (int i = worm::kSegments - 1; i >= 0; --i) {
+            iso::tile_to_screen(g.wrm.seg_x[i], g.wrm.seg_y[i], g.cam, sx, sy);
+            g.draw_list.add(seg, 0, sx, sy + 20, r.base_light, 1);
+        }
+        iso::tile_to_screen(g.wrm.x, g.wrm.y, g.cam, sx, sy);
+        g.draw_list.add(r.assets->get("wormhead"), (g.anim_tick / 10) % 2, sx, sy + 24,
+                        r.base_light, 2);
+    }
+}
+
+// Effects: above-scene sprites — the looming carryall shadow.
+void pass_effects(RenderCtx& r) {
+    if (g.op.state == harvest::OpState::Evac && g.op.zone == g.cur_zone) {
         const int idx = g.op.y * map::W + g.op.x;
-        if (z.vis[idx] & (map::V_VISIBLE | map::V_REMEMBERED)) {
+        if (r.z->vis[idx] & map::V_VISIBLE) {
             int sx, sy;
             iso::tile_to_screen(g.op.x, g.op.y, g.cam, sx, sy);
-            const int light = (z.vis[idx] & map::V_VISIBLE) ? (night ? 18 : 31) : 7;
-            const bool churning = g.op.state == harvest::OpState::Working;
-            g.draw_list.add(crawler_spr, churning ? (g.anim_tick / 6) % 2 : 0,
-                            sx - 32, sy + 8, light, 1);
-            if (g.op.state == harvest::OpState::Evac && (z.vis[idx] & map::V_VISIBLE)) {
-                const int bob = (g.anim_tick / 12) % 3 - 1;
-                g.draw_list.add(carryall_spr, 0, sx - 20, sy - 80 + bob, light, 3);
-            }
+            const int bob = (g.anim_tick / 12) % 3 - 1;
+            draw_sprite(r.ctx, *r.assets->get("carryall"), 0, sx - 20, sy - 80 + bob,
+                        r.base_light);
         }
     }
+}
 
-    // The worm. Burrowed states telegraph with ripples; breaching mounds;
-    // surfaced draws the whole segment chain.
-    {
-        const int wlight = night ? 18 : 31;
-        int sx, sy;
-        switch (g.wrm.state) {
-            case worm::State::Hunting:
-                for (int i = 0; i < worm::kSegments; i += 2) {
-                    iso::tile_to_screen(g.wrm.seg_x[i], g.wrm.seg_y[i], g.cam, sx, sy);
-                    g.draw_list.add(ripple_spr, (g.anim_tick / 6 + i) % 2, sx, sy, wlight, 0);
-                }
-                iso::tile_to_screen(g.wrm.x, g.wrm.y, g.cam, sx, sy);
-                g.draw_list.add(ripple_spr, (g.anim_tick / 4) % 2, sx, sy, wlight, 0);
-                break;
-            case worm::State::Breaching:
-                iso::tile_to_screen(g.wrm.x, g.wrm.y, g.cam, sx, sy);
-                g.draw_list.add(mound_spr, 2 - (g.wrm.timer > 2 ? 2 : g.wrm.timer), sx,
-                                sy + 16, wlight, 1);
-                break;
-            case worm::State::Surfaced:
-                for (int i = worm::kSegments - 1; i >= 0; --i) {
-                    iso::tile_to_screen(g.wrm.seg_x[i], g.wrm.seg_y[i], g.cam, sx, sy);
-                    g.draw_list.add(wormseg_spr, 0, sx, sy + 20, wlight, 1);
-                }
-                iso::tile_to_screen(g.wrm.x, g.wrm.y, g.cam, sx, sy);
-                g.draw_list.add(wormhead_spr, (g.anim_tick / 10) % 2, sx, sy + 24, wlight, 2);
-                break;
-            default: break;
+// Particles: dust from the worm's violence, crawler intake haze.
+void pass_particles(RenderCtx& r) {
+    int sx, sy;
+    if (g.wrm.state == worm::State::Breaching) {
+        iso::tile_to_screen(g.wrm.x, g.wrm.y, g.cam, sx, sy);
+        if (g.anim_tick % 3 == 0) g.particles.burst_dust(g.rng.fx, sx, sy + 8, 3, 68);
+    }
+    if (g.wrm.state == worm::State::Surfaced && g.anim_tick % 4 == 0) {
+        iso::tile_to_screen(g.wrm.x, g.wrm.y, g.cam, sx, sy);
+        g.particles.burst_dust(g.rng.fx, sx, sy - 10, 2, 70);
+    }
+    if (g.op.state == harvest::OpState::Working && g.op.zone == g.cur_zone &&
+        g.anim_tick % 10 == 0) {
+        const int idx = g.op.y * map::W + g.op.x;
+        if (r.z->vis[idx] & map::V_VISIBLE) {
+            iso::tile_to_screen(g.op.x, g.op.y, g.cam, sx, sy);
+            g.particles.burst_dust(g.rng.fx, sx + 20, sy, 1, 140);
         }
     }
-    g.draw_list.flush(ctx);
-    g.cam = saved_cam;
+    g.particles.step_and_draw(r.ctx);
+}
+
+// Lighting: M7 — per-tile light-source composition remaps this framebuffer.
+void pass_lighting(RenderCtx&) {}
+
+// Weather: M5/M7 — sandstorm haze, palette weather.
+void pass_weather(RenderCtx&) {}
+
+// UI: HUD panel, banners, death screen.
+void pass_ui(RenderCtx& r) {
+    DrawCtx& ctx = r.ctx;
+    const map::Zone& z = *r.z;
 
     ui::HudState hud{g.pl.hp, tune::kPlayerHpMax, g.pl.water, tune::kWaterMax,
                      g.pl.exposure, hour_now(), ambient_now(),
@@ -1139,6 +1195,43 @@ void game_render(Framebuffer& frame) {
         draw_text_shadow(ctx, buf, fb::W / 2 - 60, 164, 14, 1);
         draw_text_shadow(ctx, "ENTER: rise again", fb::W / 2 - 68, 178, 230, 1);
     }
+}
+
+}  // namespace
+
+void game_render(Framebuffer& frame) {
+    frame.clear(1);
+
+    RenderCtx r{DrawCtx{&frame, g.services.cmaps}, &zone(), is_night(),
+                is_night() ? 18 : 31, g.services.assets};
+
+    // screen shake (visual only; fx stream never touches gameplay)
+    const iso::Camera saved_cam = g.cam;
+    int shake = 0;
+    switch (g.wrm.state) {
+        case worm::State::Hunting: shake = 1; break;
+        case worm::State::Breaching: shake = 3; break;
+        case worm::State::Surfaced: shake = 2; break;
+        default: break;
+    }
+    if (shake > 0) {
+        g.cam.x += int(g.rng.fx.below(uint32_t(shake * 2 + 1))) - shake;
+        g.cam.y += int(g.rng.fx.below(uint32_t(shake * 2 + 1))) - shake;
+    }
+
+    pass_ground(r);
+    pass_ground_decals(r);
+    pass_walls(r);      // \
+    pass_objects(r);    //  > populate the y-sorted scene list
+    pass_entities(r);   // /
+    g.draw_list.flush(r.ctx);
+    pass_effects(r);
+    pass_particles(r);
+    pass_lighting(r);
+    pass_weather(r);
+
+    g.cam = saved_cam;
+    pass_ui(r);
 }
 
 PaletteFade game_fade() {
