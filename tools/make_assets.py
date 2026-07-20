@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
-"""Generates DUSTFALL's placeholder art: palette.pal, tile and sprite sheets.
+"""Procedural stand-in art for the asset pipeline (until genart.py replaces it).
 
-The palette written here is the single source of truth — the engine loads
-data/palette.pal, and every PNG in assets/ must use only these colors
-(index 0 = transparent for sprites).
+Draws at classic scale, then upsamples 2x nearest so everything matches the
+64x32-tile world. Output goes to assets_src/raw/ (+ meta.txt) as if it were
+AI-generated art; palette.pal and sfx stay in assets/. The palette written
+here is the single source of truth.
 """
 import os
 import random
 from PIL import Image
 
 OUT = os.path.join(os.path.dirname(__file__), "..", "assets")
+OUT_RAW = os.path.join(os.path.dirname(__file__), "..", "assets_src", "raw")
+SCALE = 2  # stand-ins are authored at half scale and upsampled
 random.seed(1965)  # deterministic art
 
 # ---- palette (mirrors the ramps designed in E1) ------------------------------
@@ -503,47 +506,43 @@ def make_carryall_shadow():
                     px[x, y] = 2
     return img
 
+# name -> (builder, fw, fh, frames, ax, ay) at authoring (half) scale
+SHEETS = {
+    "tiles":    (lambda: make_tiles(), 32, 16, 10, 16, 8),
+    "player":   (lambda: make_player(), 16, 32, 4, 8, 30),
+    "rock":     (lambda: make_rock_prop(), 32, 32, 1, 16, 26),
+    "hound":    (lambda: make_hound(), 16, 16, 2, 8, 13),
+    "corpse":   (lambda: make_corpse(), 16, 10, 1, 8, 7),
+    "wall":     (lambda: make_wall(), 32, 40, 1, 16, 32),
+    "cistern":  (lambda: make_cistern(), 24, 24, 1, 12, 20),
+    "ripple":   (lambda: make_ripple(), 32, 16, 2, 16, 8),
+    "mound":    (lambda: make_mound(), 32, 24, 3, 16, 16),
+    "wormhead": (lambda: make_worm_head(), 48, 56, 2, 24, 48),
+    "wormseg":  (lambda: make_worm_segment(), 36, 36, 1, 18, 28),
+    "thumper":  (lambda: make_thumper(), 12, 20, 2, 6, 17),
+    "crawler":  (lambda: make_crawler(), 64, 48, 2, 32, 40),
+    "trooper":  (lambda: make_trooper(), 16, 32, 2, 8, 30),
+    "spotter":  (lambda: make_spotter(), 16, 32, 2, 8, 30),
+    "carryall": (lambda: make_carryall_shadow(), 56, 24, 1, 28, 12),
+}
+
 def main():
     os.makedirs(OUT, exist_ok=True)
+    os.makedirs(OUT_RAW, exist_ok=True)
     os.makedirs(os.path.join(OUT, "sfx"), exist_ok=True)
     write_pal(os.path.join(OUT, "palette.pal"))
-    make_tiles().save(os.path.join(OUT, "tiles.png"), transparency=0)
-    make_player().save(os.path.join(OUT, "player.png"), transparency=0)
-    make_rock_prop().save(os.path.join(OUT, "rock.png"), transparency=0)
     write_wav8(os.path.join(OUT, "sfx", "worm_roar.wav"), make_worm_roar())
     write_wav8(os.path.join(OUT, "sfx", "blip.wav"), make_blip())
-    make_hound().save(os.path.join(OUT, "hound.png"), transparency=0)
-    make_corpse().save(os.path.join(OUT, "corpse.png"), transparency=0)
-    make_wall().save(os.path.join(OUT, "wall.png"), transparency=0)
-    make_cistern().save(os.path.join(OUT, "cistern.png"), transparency=0)
-    make_ripple().save(os.path.join(OUT, "ripple.png"), transparency=0)
-    make_mound().save(os.path.join(OUT, "mound.png"), transparency=0)
-    make_worm_head().save(os.path.join(OUT, "wormhead.png"), transparency=0)
-    make_worm_segment().save(os.path.join(OUT, "wormseg.png"), transparency=0)
-    make_thumper().save(os.path.join(OUT, "thumper.png"), transparency=0)
-    make_crawler().save(os.path.join(OUT, "crawler.png"), transparency=0)
-    make_trooper().save(os.path.join(OUT, "trooper.png"), transparency=0)
-    make_spotter().save(os.path.join(OUT, "spotter.png"), transparency=0)
-    make_carryall_shadow().save(os.path.join(OUT, "carryall.png"), transparency=0)
-    with open(os.path.join(OUT, "manifest.txt"), "w") as f:
-        f.write("# name  file  frame_w frame_h frames  anchor_x anchor_y\n")
-        f.write("tiles   tiles.png   32 16 10  16 8\n")
-        f.write("player  player.png  16 32 4   8 30\n")
-        f.write("rock    rock.png    32 32 1   16 26\n")
-        f.write("hound   hound.png   16 16 2   8 13\n")
-        f.write("corpse  corpse.png  16 10 1   8 7\n")
-        f.write("wall    wall.png    32 40 1   16 32\n")
-        f.write("cistern cistern.png 24 24 1   12 20\n")
-        f.write("ripple  ripple.png  32 16 2   16 8\n")
-        f.write("mound   mound.png   32 24 3   16 16\n")
-        f.write("wormhead wormhead.png 48 56 2  24 48\n")
-        f.write("wormseg wormseg.png 36 36 1   18 28\n")
-        f.write("thumper thumper.png 12 20 2   6 17\n")
-        f.write("crawler crawler.png 64 48 2   32 40\n")
-        f.write("trooper trooper.png 16 32 2   8 30\n")
-        f.write("spotter spotter.png 16 32 2   8 30\n")
-        f.write("carryall carryall.png 56 24 1  28 12\n")
-    print("assets written to", os.path.abspath(OUT))
+
+    with open(os.path.join(OUT_RAW, "meta.txt"), "w") as meta:
+        meta.write("# name  file  frame_w frame_h frames  anchor_x anchor_y\n")
+        for name, (build, fw, fh, frames, ax, ay) in SHEETS.items():
+            img = build()
+            img = img.resize((img.width * SCALE, img.height * SCALE), Image.NEAREST)
+            img.save(os.path.join(OUT_RAW, f"{name}.png"), transparency=0)
+            meta.write(f"{name} {name}.png {fw*SCALE} {fh*SCALE} {frames} "
+                       f"{ax*SCALE} {ay*SCALE}\n")
+    print("raw stand-in art written to", os.path.abspath(OUT_RAW))
 
 if __name__ == "__main__":
     main()

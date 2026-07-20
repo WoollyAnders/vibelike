@@ -11,7 +11,7 @@ void draw_sprite(DrawCtx& ctx, const SpriteSheet& sheet, int frame_index,
     const int x0 = x - sheet.ax;
     const int y0 = y - sheet.ay;
     const uint8_t* src = sheet.frame_ptr(frame_index);
-    const int pitch = sheet.pitch();
+    const int pitch = sheet.pitch;
 
     int sy0 = 0, sy1 = sheet.fh;
     if (y0 < 0) sy0 = -y0;

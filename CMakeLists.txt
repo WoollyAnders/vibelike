@@ -28,7 +28,6 @@ add_executable(dustfall
   src/engine/audio.cpp
   src/engine/wav.cpp
   src/engine/save.cpp
-  src/engine/stb_image_impl.cpp
   src/game/game.cpp
   src/game/map.cpp
   src/game/worm.cpp
@@ -39,8 +38,6 @@ target_include_directories(dustfall PRIVATE src third_party)
 target_compile_options(dustfall PRIVATE
   -Wall -Wextra
   $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions -fno-rtti>)
-set_source_files_properties(src/engine/stb_image_impl.cpp
-  PROPERTIES COMPILE_OPTIONS "-Wno-unused-function")
 
 target_link_libraries(dustfall PRIVATE SDL2::SDL2main SDL2::SDL2-static)
 
@@ -53,11 +50,12 @@ endif()
 # for stdout logging.
 set_target_properties(dustfall PROPERTIES WIN32_EXECUTABLE $<CONFIG:Release>)
 
-# ---- Data + size report -----------------------------------------------------
+# ---- Asset pipeline + size report ---------------------------------------------
+# raw art (genart/make_assets) -> palette quantizer -> atlas builder -> data/
 add_custom_command(TARGET dustfall POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E copy_directory
-          ${CMAKE_SOURCE_DIR}/assets $<TARGET_FILE_DIR:dustfall>/data
+  COMMAND python3 ${CMAKE_SOURCE_DIR}/tools/build_assets.py
+          $<TARGET_FILE_DIR:dustfall>/data
   COMMAND bash ${CMAKE_SOURCE_DIR}/scripts/size_report.sh
           $<TARGET_FILE:dustfall> $<TARGET_FILE_DIR:dustfall>/data
-  COMMENT "Deploying data/ and running size report"
+  COMMENT "Running asset pipeline and size report"
 )

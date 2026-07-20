@@ -1,0 +1,17 @@
+# name  file  frame_w frame_h frames  anchor_x anchor_y
+tiles tiles.png 64 32 10 32 16
+player player.png 32 64 4 16 60
+rock rock.png 64 64 1 32 52
+hound hound.png 32 32 2 16 26
+corpse corpse.png 32 20 1 16 14
+wall wall.png 64 80 1 32 64
+cistern cistern.png 48 48 1 24 40
+ripple ripple.png 64 32 2 32 16
+mound mound.png 64 48 3 32 32
+wormhead wormhead.png 96 112 2 48 96
+wormseg wormseg.png 72 72 1 36 56
+thumper thumper.png 24 40 2 12 34
+crawler crawler.png 128 96 2 64 80
+trooper trooper.png 32 64 2 16 60
+spotter spotter.png 32 64 2 16 60
+carryall carryall.png 112 48 1 56 24

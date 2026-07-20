@@ -427,7 +427,7 @@ int main(int argc, char** argv) {
     colormaps_build(master, cmaps);
 
     Assets assets;
-    if (!assets.load_all("data", master)) return 1;
+    if (!assets.load_all("data")) return 1;
 
     if (seamtest) return run_seamtest(mixer, assets, cmaps);
     if (slicetest) return run_slicetest(mixer, assets, cmaps);

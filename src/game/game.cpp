@@ -992,7 +992,7 @@ void game_render(Framebuffer& frame) {
             if (!(vis & (map::V_VISIBLE | map::V_REMEMBERED))) continue;
             int sx, sy;
             iso::tile_to_screen(tx, ty, g.cam, sx, sy);
-            if (sx < -32 || sx > fb::W + 32 || sy < -48 || sy > fb::H + 48) continue;
+            if (sx < -64 || sx > fb::W + 64 || sy < -96 || sy > fb::H + 96) continue;
 
             int light;
             if (vis & map::V_VISIBLE) {
@@ -1006,9 +1006,9 @@ void game_render(Framebuffer& frame) {
 
             draw_sprite(ctx, *tiles, z.floor[idx], sx, sy, light);
             const uint8_t tf = z.flags[idx];
-            if (tf & map::TF_WALL) g.draw_list.add(wall_spr, 0, sx, sy + 8, light, 0);
-            if (tf & map::TF_ROCKPROP) g.draw_list.add(rock_spr, 0, sx, sy + 6, light, 0);
-            if (tf & map::TF_CISTERN) g.draw_list.add(cistern_spr, 0, sx, sy + 4, light, 0);
+            if (tf & map::TF_WALL) g.draw_list.add(wall_spr, 0, sx, sy + 16, light, 0);
+            if (tf & map::TF_ROCKPROP) g.draw_list.add(rock_spr, 0, sx, sy + 12, light, 0);
+            if (tf & map::TF_CISTERN) g.draw_list.add(cistern_spr, 0, sx, sy + 8, light, 0);
         }
     }
 
@@ -1021,22 +1021,22 @@ void game_render(Framebuffer& frame) {
         const int light = night ? 18 : 31;
         switch (e.type) {
             case EType::Player:
-                g.draw_list.add(player_spr, (g.anim_tick / 9) % 4, sx, sy + 6, light, 1);
+                g.draw_list.add(player_spr, (g.anim_tick / 9) % 4, sx, sy + 12, light, 1);
                 break;
             case EType::Hound:
-                g.draw_list.add(hound_spr, (g.anim_tick / 7) % 2, sx, sy + 6, light, 1);
+                g.draw_list.add(hound_spr, (g.anim_tick / 7) % 2, sx, sy + 12, light, 1);
                 break;
             case EType::Corpse:
-                g.draw_list.add(corpse_spr, 0, sx, sy + 6, light, 0);
+                g.draw_list.add(corpse_spr, 0, sx, sy + 12, light, 0);
                 break;
             case EType::Thumper:
-                g.draw_list.add(thumper_spr, (g.anim_tick / 8) % 2, sx, sy + 4, light, 1);
+                g.draw_list.add(thumper_spr, (g.anim_tick / 8) % 2, sx, sy + 8, light, 1);
                 break;
             case EType::Trooper:
-                g.draw_list.add(trooper_spr, (g.anim_tick / 8) % 2, sx, sy + 6, light, 1);
+                g.draw_list.add(trooper_spr, (g.anim_tick / 8) % 2, sx, sy + 12, light, 1);
                 break;
             case EType::Spotter:
-                g.draw_list.add(spotter_spr, (g.anim_tick / 14) % 2, sx, sy + 6, light, 1);
+                g.draw_list.add(spotter_spr, (g.anim_tick / 14) % 2, sx, sy + 12, light, 1);
                 break;
             default: break;
         }
@@ -1051,10 +1051,10 @@ void game_render(Framebuffer& frame) {
             const int light = (z.vis[idx] & map::V_VISIBLE) ? (night ? 18 : 31) : 7;
             const bool churning = g.op.state == harvest::OpState::Working;
             g.draw_list.add(crawler_spr, churning ? (g.anim_tick / 6) % 2 : 0,
-                            sx - 16, sy + 4, light, 1);
+                            sx - 32, sy + 8, light, 1);
             if (g.op.state == harvest::OpState::Evac && (z.vis[idx] & map::V_VISIBLE)) {
                 const int bob = (g.anim_tick / 12) % 3 - 1;
-                g.draw_list.add(carryall_spr, 0, sx - 10, sy - 40 + bob, light, 3);
+                g.draw_list.add(carryall_spr, 0, sx - 20, sy - 80 + bob, light, 3);
             }
         }
     }
@@ -1076,15 +1076,15 @@ void game_render(Framebuffer& frame) {
             case worm::State::Breaching:
                 iso::tile_to_screen(g.wrm.x, g.wrm.y, g.cam, sx, sy);
                 g.draw_list.add(mound_spr, 2 - (g.wrm.timer > 2 ? 2 : g.wrm.timer), sx,
-                                sy + 8, wlight, 1);
+                                sy + 16, wlight, 1);
                 break;
             case worm::State::Surfaced:
                 for (int i = worm::kSegments - 1; i >= 0; --i) {
                     iso::tile_to_screen(g.wrm.seg_x[i], g.wrm.seg_y[i], g.cam, sx, sy);
-                    g.draw_list.add(wormseg_spr, 0, sx, sy + 10, wlight, 1);
+                    g.draw_list.add(wormseg_spr, 0, sx, sy + 20, wlight, 1);
                 }
                 iso::tile_to_screen(g.wrm.x, g.wrm.y, g.cam, sx, sy);
-                g.draw_list.add(wormhead_spr, (g.anim_tick / 10) % 2, sx, sy + 12, wlight, 2);
+                g.draw_list.add(wormhead_spr, (g.anim_tick / 10) % 2, sx, sy + 24, wlight, 2);
                 break;
             default: break;
         }
