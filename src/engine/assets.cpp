@@ -14,13 +14,13 @@ struct AtlasHeader {
 };
 #pragma pack(push, 1)
 struct AtlasEntry {
-    char name[24];
+    char name[32];
     uint16_t fw, fh, frames;
     int16_t ax, ay;
     uint16_t page, x, y;
 };
 #pragma pack(pop)
-static_assert(sizeof(AtlasEntry) == 40, "atlas entry layout");
+static_assert(sizeof(AtlasEntry) == 48, "atlas entry layout");
 }  // namespace
 
 bool Assets::load_all(const char* data_dir) {
@@ -37,8 +37,8 @@ bool Assets::load_all(const char* data_dir) {
         std::fread(&hdr.page_count, 2, 1, f) != 1 ||
         std::fread(&hdr.entry_count, 2, 1, f) != 1 ||
         std::fread(&hdr.page_w, 2, 1, f) != 1 || std::fread(&hdr.page_h, 2, 1, f) != 1 ||
-        hdr.magic != 0x4C544144u || hdr.version != 1) {
-        std::fprintf(stderr, "assets: %s is not a v1 atlas\n", path);
+        hdr.magic != 0x4C544144u || hdr.version != 2) {
+        std::fprintf(stderr, "assets: %s is not a v2 atlas\n", path);
         std::fclose(f);
         return false;
     }

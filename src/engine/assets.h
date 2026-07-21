@@ -24,7 +24,7 @@ public:
 
 private:
     struct Entry {
-        char name[24];
+        char name[32];
         SpriteSheet sheet;
     };
     std::vector<std::vector<uint8_t>> pages_;

@@ -171,6 +171,7 @@ GameState g;
 
 void op_denied(const char* how);
 void op_shipped_quota();
+uint8_t facing_from_tile_delta(int dx, int dy);
 void apply_deltas(uint8_t zone_id);
 void end_season(uint8_t ending);
 void spawn_zone_wildlife(uint8_t zone_id);
@@ -746,6 +747,7 @@ void trooper_act(Entity& e) {
     if (e.ai == Ai::Hunt) {
         if (pdist < 0 || pdist > 14) { e.ai = Ai::Guard; return; }
         if (pdist == 1) {
+            e.anim.facing = facing_from_tile_delta(p.x - e.x, p.y - e.y);
             const int dmg = g.rng.combat.range(2, 3);
             g.log.push("The trooper's blade finds you for %d.", dmg);
             damage_player(dmg, "Cut down by Harkonnen steel.");
@@ -974,6 +976,7 @@ void hound_act(Entity& e) {
 
     if (e.ai == Ai::Hunt) {
         if (pdist == 1) {  // adjacent: bite
+            e.anim.facing = facing_from_tile_delta(p.x - e.x, p.y - e.y);
             const int dmg = g.rng.combat.range(tune::kHoundAtkMin, tune::kHoundAtkMax);
             g.log.push("The dust hound bites you for %d.", dmg);
             damage_player(dmg, "Torn apart by dust hounds.");
@@ -1452,6 +1455,7 @@ void try_move(int dx, int dy) {
     if (!victim) victim = entity_at(nx, ny, g.cur_zone, EType::Hermit);
     if (!victim) victim = entity_at(nx, ny, g.cur_zone, EType::HunterSeeker);
     if (victim) {
+        player_ent().anim.facing = facing_from_tile_delta(dx, dy);
         if (victim->type == EType::ShieldTrooper && !g.pl.sandwalk) {
             g.log.push("Your quick blade GLANCES off the shield shimmer.");
             g.log.push("The slow blade penetrates. (C: sandwalk, then strike.)");
@@ -1685,6 +1689,7 @@ void restart() {
     game_init(seed, services);  // interactive runs return to the chooser
 }
 
+
 }  // namespace
 
 void game_init(uint64_t seed, const GameServices& services) {
@@ -1711,6 +1716,20 @@ void game_init(uint64_t seed, const GameServices& services) {
     iso::tile_to_screen(g.ents[0].x, g.ents[0].y, iso::Camera{}, px, py);
     g.cam.x = px - fb::W / 2;
     g.cam.y = py - fb::H / 2;
+}
+
+namespace {
+
+uint8_t facing_from_tile_delta(int dx, int dy) {
+    const int wx = dx - dy, wy = dx + dy;  // world-pixel direction sign
+    if (wx > 0 && wy == 0) return 0;
+    if (wx > 0 && wy < 0) return 1;
+    if (wx == 0 && wy < 0) return 2;
+    if (wx < 0 && wy < 0) return 3;
+    if (wx < 0 && wy == 0) return 4;
+    if (wx < 0 && wy > 0) return 5;
+    if (wx == 0 && wy > 0) return 6;
+    return 7;
 }
 
 // ---- G1: visual glide + animator ------------------------------------------------
@@ -1828,6 +1847,8 @@ const char* describe_at(int tx, int ty) {
         default: return "open sand";
     }
 }
+
+}  // namespace
 
 bool game_update(const InputState& in) {
     ++g.anim_tick;
@@ -2180,7 +2201,9 @@ void pass_entities(RenderCtx& r) {
             if (sheet) {
                 const int sx = e.vpx - g.cam.x + fb::W / 2;
                 const int sy = e.vpy - g.cam.y + fb::H / 2;
-                const bool flip = e.anim.facing >= 3 && e.anim.facing <= 5;
+                int view_;
+                bool flip;
+                anim::facing_to_view5(e.anim.facing, view_, flip);
                 const bool riding = e.type == EType::Player && g.pl.riding;
                 g.draw_list.add(sheet, frame, sx, sy + (riding ? -20 : 12),
                                 g.lightmap[idx], riding ? 3 : 1, flip);

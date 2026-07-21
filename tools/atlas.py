@@ -6,12 +6,12 @@ can address frame N as px + N*fw) into 1024x1024 indexed pages with a simple
 shelf packer, and writes a single binary the game loads at startup.
 
 Format (little-endian):
-  u32 magic 'DATL'   u16 version=1
+  u32 magic 'DATL'   u16 version=2
   u16 page_count     u16 entry_count
   u16 page_w         u16 page_h
   pages: page_count * page_w*page_h bytes (indexed pixels)
   entries: entry_count * {
-      char name[24]  u16 fw  u16 fh  u16 frames
+      char name[32]  u16 fw  u16 fh  u16 frames
       i16 ax  i16 ay  u16 page  u16 x  u16 y
   }
 """
@@ -67,12 +67,13 @@ def main(indexed_dir, meta_path, out_path):
         placed.append((name, fw, fh, frames, ax, ay, pi, x, y))
 
     with open(out_path, "wb") as f:
-        f.write(struct.pack("<IHHHHH", 0x4C544144, 1, len(pages), len(placed),
+        f.write(struct.pack("<IHHHHH", 0x4C544144, 2, len(pages), len(placed),
                             PAGE_W, PAGE_H))
         for p in pages:
             f.write(p)
         for name, fw, fh, frames, ax, ay, pi, x, y in placed:
-            f.write(struct.pack("<24sHHHhhHHH", name.encode()[:24].ljust(24, b"\0"),
+            assert len(name) < 32, f"atlas name too long: {name}"
+            f.write(struct.pack("<32sHHHhhHHH", name.encode()[:32].ljust(32, b"\0"),
                                 fw, fh, frames, ax, ay, pi, x, y))
     total = os.path.getsize(out_path)
     print(f"atlas: {len(placed)} entries on {len(pages)} page(s), {total//1024}KB -> {out_path}")

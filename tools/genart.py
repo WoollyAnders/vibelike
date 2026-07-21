@@ -135,6 +135,31 @@ TEXTURES = {
                   "agitated disturbed sand",
 }
 
+# Turnaround sheets: 5 views of the same figure, sliced into direction strips.
+TURN_STYLE = ("video game character turnaround sheet, exactly five full-body "
+              "views of the SAME character standing in one horizontal row: "
+              "front view, three-quarter front-right view, right side profile "
+              "view, three-quarter back-right view, back view. identical "
+              "costume, colors and proportions in every view, evenly spaced, "
+              "feet on one baseline, isolated on a fully transparent "
+              "background, no labels, no grid, no frame")
+
+TURNAROUNDS = {
+    "player_fedaykin": "a fierce desert commando warrior in a fitted dark "
+                       "stillsuit with chest-crossed straps and a tribal "
+                       "headband, gripping a curved pale crystalline knife",
+    "player_saboteur": "a lean desert saboteur in a hooded dark stillsuit hung "
+                       "with satchels, det-cord coils and small charges",
+    "player_sayyadina": "a desert mystic seeress in flowing indigo-shadowed "
+                        "robes over a stillsuit, veiled face with glowing "
+                        "blue-within-blue eyes",
+    "trooper": "a brutal soldier in dark segmented armor with a sealed helmet "
+               "and narrow red visor slit, blade sheathed at the hip, arms at "
+               "sides, nothing on the ground",
+    "hound": "a lean sinewy desert hound predator, mangy tan-grey hide, "
+             "ember-orange eyes, standing alert",
+}
+
 # Specials: generated once, frames synthesized in post.
 SPECIALS = {
     "mound":    "a swelling mound of disturbed desert sand bulging upward with "
@@ -401,6 +426,24 @@ def main():
         sheet = make_sheet(fit_sprite(img, fw, fh), fw, fh, frames)
         sheet.save(os.path.join(RAW, f"{name}.png"))
         print(f"  {name}: {fw}x{fh} x{frames}")
+
+    # turnaround sheets -> aligned 5-view direction strips (+ meta entries)
+    from slice_rotation import slice_turnaround
+    meta_appends = []
+    for name, prompt in TURNAROUNDS.items():
+        if name not in meta:
+            continue
+        img = generate(key, f"{name}_turn", f"{prompt}, {TURN_STYLE}", transparent=True)
+        _, fw, fh, _, ax, ay = meta[name]
+        strip = slice_turnaround(img, fw, fh, 5)
+        dir_name = f"{name}_dir"
+        strip.save(os.path.join(RAW, f"{dir_name}.png"))
+        if dir_name not in meta:
+            meta_appends.append(f"{dir_name} {dir_name}.png {fw} {fh} 5 {ax} {ay}")
+        print(f"  {dir_name}: 5 views at {fw}x{fh}")
+    if meta_appends:
+        with open(os.path.join(RAW, "meta.txt"), "a") as f:
+            f.write("\n".join(meta_appends) + "\n")
 
     for name, prompt in UI.items():
         if name not in meta:

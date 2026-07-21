@@ -27,7 +27,7 @@ The foundation everything else sits on.
 **Exit:** the player glides tile-to-tile with a looping walk cycle and stops
 into an idle breathe loop; a debug overlay shows state/frame/facing.
 
-## G2 — Directional character ⬜
+## G2 — Directional character ✅
 - **Facing**: 8-way, tracked from the last move/attack input; W/NW/SW render
   as mirrored E/NE/SE so only 5 generated directions are needed (S, SE, E,
   NE, N).
