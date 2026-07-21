@@ -7,7 +7,7 @@
 #include <vector>
 
 inline constexpr uint32_t kSaveMagic = 0x54535544;  // 'DUST'
-inline constexpr uint16_t kSaveVersion = 3;  // v3: Entity gained hurt_flash
+inline constexpr uint16_t kSaveVersion = 4;  // v4: RPG stats, items, talents
 
 class SaveWriter {
 public:

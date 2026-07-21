@@ -13,6 +13,7 @@
 #include "game/campaign.h"
 #include "game/map.h"
 #include "game/harvest.h"
+#include "game/items.h"
 #include "game/light.h"
 #include "game/tunables.h"
 #include "game/ui.h"
@@ -26,7 +27,7 @@ constexpr int kMaxDeltas = 192;
 
 enum class EType : uint8_t { None = 0, Player, Hound, Corpse, Thumper, Trooper, Spotter,
                              Glowglobe, ShieldTrooper, Naib, Sayyadina, Smuggler,
-                             PanAdder, Hermit, HunterSeeker, SpiceCache };
+                             PanAdder, Hermit, HunterSeeker, SpiceCache, Loot };
 enum class Ai : uint8_t { Idle = 0, Wander, Hunt, Guard };
 
 struct Entity {
@@ -36,7 +37,8 @@ struct Entity {
     int16_t x = 0, y = 0;
     int16_t hp = 0;
     int16_t energy = 0;
-    int16_t data = 0;  // corpse: water yield
+    int16_t data = 0;   // corpse: water yield | loot: def|prefix<<8
+    int16_t data2 = 0;  // loot: suffix|rarity<<8
     // G1 presentation-only state (persisted with the entity, never gameplay):
     int16_t vpx = 0, vpy = 0;   // visual world-pixel position (glides)
     anim::Animator anim;
@@ -60,7 +62,34 @@ constexpr BackgroundDef kBackgrounds[] = {
      "The spice has opened one eye.", "Carries spice; the desert drinks slower."},
 };
 
+// X3: talents — three branches, three talents each, ranks 0..3.
+// Blade:      0 Crysknife Discipline (+2 dmg/rank)
+//             1 Slow Blade Mastery   (+3 dmg/rank while sandwalking)
+//             2 Red Rhythm           (+4% crit/rank)
+// Stealth:    3 Featherstep          (-2 step noise/rank)
+//             4 Demolitions          (charge plants 1 turn faster/rank, min 1)
+//             5 Scavenger            (+8% loot chance/rank)
+// Prescience: 6 Spice Economy        (power costs -1 spice at rank 2)
+//             7 Water Discipline     (thirst -12%/rank)
+//             8 Inner Eye            (+4 dodge/rank)
+inline constexpr int kTalentCount = 9;
+inline constexpr const char* kTalentNames[kTalentCount] = {
+    "Crysknife Discipline", "Slow Blade Mastery", "Red Rhythm",
+    "Featherstep", "Demolitions", "Scavenger",
+    "Spice Economy", "Water Discipline", "Inner Eye",
+};
+
+struct CharStats {
+    int16_t str = 12, dex = 12, vit = 12;
+    int16_t level = 1, statpts = 0, talentpts = 0;
+    int32_t xp = 0;
+    uint8_t talents[kTalentCount] = {};
+};
+
 struct Player {
+    CharStats st;
+    items::Inst inv[12];
+    items::Inst equip[4];  // by items::Slot
     int hp = tune::kPlayerHpMax;
     int water = tune::kStartWater;
     int exposure = 0;
@@ -89,7 +118,7 @@ void apply_background(Player& pl, Background bg) {
     pl.background = bg;
     switch (bg) {
         case Background::Fedaykin:
-            pl.atk = tune::kPlayerAtk + 2;
+            pl.st.str += 4;
             break;
         case Background::Saboteur:
             pl.charges = 3;
@@ -133,8 +162,9 @@ struct GameState {
     int flash_count = 0;
 
     campaign::State season;    // M4: the harvest season
-    int menu_open = 0;         // 0 none / 1 naib / 2 sayyadina / 3 smuggler
+    int menu_open = 0;  // 1 naib / 2 sayyadina / 3 smuggler / 5 char / 6 inv / 7 vault
     int menu_sel = 0;
+    int vault_page = 0;
     int last_decay_day = 0;
 
     // Naib task: 0 none, 1 kill hounds, 2 gather spice, 3 quiet denial
@@ -190,7 +220,81 @@ worm::Tuning worm_tuning() {
     return t;
 }
 
+// X2: Diablo-style enemy statlines.
+struct Foe { uint8_t level, tohit, dmin, dmax, ac_dodge; uint16_t xp; };
+const Foe* foe_stats(EType t) {
+    static constexpr Foe kHound{1, 60, 1, 3, 8, 12};
+    static constexpr Foe kAdder{2, 72, 1, 2, 4, 15};
+    static constexpr Foe kHermit{3, 55, 2, 5, 6, 28};
+    static constexpr Foe kTrooper{3, 62, 2, 5, 8, 35};
+    static constexpr Foe kShield{5, 68, 3, 7, 8, 70};
+    static constexpr Foe kSeeker{4, 88, 4, 4, 22, 40};
+    switch (t) {
+        case EType::Hound: return &kHound;
+        case EType::PanAdder: return &kAdder;
+        case EType::Hermit: return &kHermit;
+        case EType::Trooper: return &kTrooper;
+        case EType::ShieldTrooper: return &kShield;
+        case EType::HunterSeeker: return &kSeeker;
+        default: return nullptr;
+    }
+}
+
 Entity& player_ent() { return g.ents[0]; }
+
+int affix_total(uint8_t kind) {
+    int p = 0;
+    for (const items::Inst& it : g.pl.equip) p += it.affix_power(kind);
+    return p;
+}
+
+int player_max_hp() {
+    return 10 + g.pl.st.vit * 2 + (g.pl.st.level - 1) * 3 + affix_total(items::AK_HP);
+}
+int player_max_water() { return tune::kWaterMax + affix_total(items::AK_WATER); }
+int player_armor() {
+    const items::Inst& a = g.pl.equip[int(items::Slot::Armor)];
+    return (a.empty() ? 0 : a.d().a) + affix_total(items::AK_ARMOR);
+}
+int player_suit_mul4() {
+    const items::Inst& su = g.pl.equip[int(items::Slot::Suit)];
+    int m = su.empty() ? 4 : su.d().a;
+    return m;
+}
+int player_dodge() {
+    return g.pl.st.dex / 2 + affix_total(items::AK_DODGE) + 4 * g.pl.st.talents[8];
+}
+
+// Player melee swing vs a foe. Returns damage dealt (0 = miss); fills crit.
+int player_attack_roll(const Foe& f, bool* crit_out) {
+    const int tohit = 55 + g.pl.st.dex * 2 - f.ac_dodge + affix_total(items::AK_TOHIT);
+    const int chance = tohit < 15 ? 15 : tohit > 95 ? 95 : tohit;
+    if (int(g.rng.combat.below(100)) >= chance) return 0;
+    const items::Inst& w = g.pl.equip[int(items::Slot::Weapon)];
+    const int wmin = w.empty() ? 1 : w.d().a;
+    const int wmax = w.empty() ? 2 : w.d().b;
+    int dmg = g.rng.combat.range(wmin, wmax) + g.pl.st.str / 4 +
+              affix_total(items::AK_DMG) + 2 * g.pl.st.talents[0];
+    if (g.pl.sandwalk) dmg += 3 * g.pl.st.talents[1];
+    const int critc = g.pl.st.dex / 2 + 4 * g.pl.st.talents[2];
+    const bool crit = int(g.rng.combat.below(100)) < critc;
+    if (crit) dmg *= 2;
+    if (crit_out) *crit_out = crit;
+    return dmg;
+}
+
+// Enemy swing at the player. Returns damage taken (0 = miss/dodge).
+int foe_attack_roll(const Foe& f) {
+    const int chance0 = int(f.tohit) - player_dodge();
+    const int chance = chance0 < 15 ? 15 : chance0 > 95 ? 95 : chance0;
+    if (int(g.rng.combat.below(100)) >= chance) return 0;
+    int dmg = g.rng.combat.range(f.dmin, f.dmax) - player_armor() / 2;
+    return dmg < 1 ? 1 : dmg;
+}
+
+int xp_to_level(int level) { return 30 * level * level; }
+
+void grant_xp(int amount);
 map::Zone& zone() { return g.zones[g.cur_zone]; }
 
 int ambient_now() { return tune::kAmbientByHour[(g.pl.turn % tune::kTurnsPerDay) * 24 / tune::kTurnsPerDay]; }
@@ -552,7 +656,9 @@ void refresh_fov_and_paths() {
 // meta.dat: tiny cross-run memory — seasons played, endings witnessed.
 struct Meta {
     uint32_t runs = 0;
-    uint8_t endings_seen = 0;  // bit per campaign::Ending
+    uint8_t endings_seen = 0;      // bit per campaign::Ending
+    uint8_t stash_count = 0;       // X4: the tribe vault — gear that survived
+    items::Inst stash[24];
 };
 Meta g_meta;
 
@@ -560,9 +666,16 @@ void meta_load() {
     FILE* f = std::fopen("meta.dat", "rb");
     if (!f) return;
     uint32_t magic = 0;
-    if (std::fread(&magic, 4, 1, f) == 1 && magic == 0x54454D44u) {
-        (void)!std::fread(&g_meta.runs, 4, 1, f);
-        (void)!std::fread(&g_meta.endings_seen, 1, 1, f);
+    if (std::fread(&magic, 4, 1, f) == 1) {
+        if (magic == 0x32454D44u) {  // 'DME2'
+            (void)!std::fread(&g_meta.runs, 4, 1, f);
+            (void)!std::fread(&g_meta.endings_seen, 1, 1, f);
+            (void)!std::fread(&g_meta.stash_count, 1, 1, f);
+            (void)!std::fread(g_meta.stash, sizeof g_meta.stash, 1, f);
+        } else if (magic == 0x54454D44u) {  // v1: carry runs/endings forward
+            (void)!std::fread(&g_meta.runs, 4, 1, f);
+            (void)!std::fread(&g_meta.endings_seen, 1, 1, f);
+        }
     }
     std::fclose(f);
 }
@@ -570,11 +683,78 @@ void meta_load() {
 void meta_save() {
     FILE* f = std::fopen("meta.dat", "wb");
     if (!f) return;
-    const uint32_t magic = 0x54454D44u;  // 'DMET'
+    const uint32_t magic = 0x32454D44u;  // 'DME2'
     std::fwrite(&magic, 4, 1, f);
     std::fwrite(&g_meta.runs, 4, 1, f);
     std::fwrite(&g_meta.endings_seen, 1, 1, f);
+    std::fwrite(&g_meta.stash_count, 1, 1, f);
+    std::fwrite(g_meta.stash, sizeof g_meta.stash, 1, f);
     std::fclose(f);
+}
+
+void grant_xp(int amount) {
+    if (g.pl.st.level >= 30) return;
+    g.pl.st.xp += amount;
+    while (g.pl.st.xp >= xp_to_level(g.pl.st.level)) {
+        g.pl.st.xp -= xp_to_level(g.pl.st.level);
+        ++g.pl.st.level;
+        g.pl.st.statpts += 2;
+        ++g.pl.st.talentpts;
+        g.pl.hp = player_max_hp();
+        g.log.push("LEVEL %d. The desert tempers you. (+2 stats, +1 talent: P)",
+                   int(g.pl.st.level));
+        flash(240, 220, 120);
+        g.services.mixer->push({audio::Cmd::PlaySfx, 1, 220, 150});
+    }
+}
+
+// X1: loot rolls — humans drop gear scaled to their level and the alert.
+void maybe_drop_loot(EType t, int x, int y) {
+    const Foe* f = foe_stats(t);
+    if (!f) return;
+    const bool human = t == EType::Trooper || t == EType::ShieldTrooper ||
+                       t == EType::Spotter || t == EType::Hermit;
+    if (!human) return;
+    const int chance = 40 + 8 * g.pl.st.talents[5];  // Scavenger
+    if (int(g.rng.loot.below(100)) >= chance) return;
+
+    // pick a def near the foe's level
+    int candidates[items::kDefCount];
+    int n = 0;
+    for (int i = 0; i < items::kDefCount; ++i)
+        if (items::kDefs[i].level <= f->level + 1 &&
+            items::kDefs[i].level + 3 >= f->level)
+            candidates[n++] = i;
+    if (!n) return;
+    items::Inst it;
+    it.def = uint8_t(candidates[g.rng.loot.below(uint32_t(n))]);
+    const int r = int(g.rng.loot.below(100));
+    it.rarity = r < 10 ? 2 : r < 40 ? 1 : 0;
+    if (it.rarity >= 1) {
+        if (g.rng.loot.chance(1, 2) || it.rarity == 2)
+            it.prefix = uint8_t(g.rng.loot.below(items::kPrefixCount));
+        if (it.prefix == 0xFF || it.rarity == 2)
+            it.suffix = uint8_t(g.rng.loot.below(items::kSuffixCount));
+    }
+    for (Entity& e : g.ents)
+        if (e.type == EType::None) {
+            e = Entity{EType::Loot, Ai::Idle, g.cur_zone, int16_t(x), int16_t(y), 1, 0,
+                       int16_t(it.def | (it.prefix << 8)),
+                       int16_t(it.suffix | (it.rarity << 8))};
+            char nm[64];
+            it.full_name(nm, sizeof nm);
+            g.log.push("%s dropped: %s", it.rarity == 2 ? "RARE" : it.rarity ? "Fine" : "Gear", nm);
+            return;
+        }
+}
+
+items::Inst loot_of(const Entity& e) {
+    items::Inst it;
+    it.def = uint8_t(e.data & 0xFF);
+    it.prefix = uint8_t((e.data >> 8) & 0xFF);
+    it.suffix = uint8_t(e.data2 & 0xFF);
+    it.rarity = uint8_t((e.data2 >> 8) & 0xFF);
+    return it;
 }
 
 void die(const char* cause) {
@@ -627,7 +807,8 @@ void raise_standing(int amount) {
     if (!g.season.crysknife_granted &&
         g.season.standing >= campaign::kStandingCrysknifeAt) {
         g.season.crysknife_granted = 1;
-        g.pl.atk += 2;
+        for (items::Inst& slot : g.pl.inv)
+            if (slot.empty()) { slot.def = 4; break; }  // the Crysknife itself
         g.pl.maker_hooks = true;
         g.log.push("The Naib unwraps a pale blade. 'Honored one. It is yours.'");
         g.log.push("Crysknife and MAKER HOOKS taken. R mounts a surfaced worm.");
@@ -724,9 +905,11 @@ worm::Callbacks worm_callbacks() {
 // Noise made by the player stepping on a floor type.
 int step_noise(uint8_t floor) {
     int n = 0;
-    if (floor <= 2 || floor == 5) n = 8;   // sand, spice pan
+    if (floor <= 2 || floor == 5) n = 10;  // sand carries your rhythm
     else if (floor == 6) n = 30;           // drum / churned sand booms
-    if (g.pl.sandwalk) n /= 2;
+    n -= affix_total(items::AK_NOISE) + 2 * g.pl.st.talents[3];  // Featherstep
+    if (n < 0) n = 0;
+    if (g.pl.sandwalk) n /= 3;             // the broken stride barely whispers
     return n;
 }
 
@@ -756,7 +939,11 @@ void trooper_act(Entity& e) {
         if (pdist == 1) {
             e.anim.facing = facing_from_tile_delta(p.x - e.x, p.y - e.y);
             e.anim.set(anim::State::Attack);
-            const int dmg = g.rng.combat.range(2, 3);
+            const int dmg = foe_attack_roll(*foe_stats(e.type));
+            if (dmg == 0) {
+                g.log.push("You slip the trooper's blade. A miss.");
+                return;
+            }
             g.log.push("The trooper's blade finds you for %d.", dmg);
             damage_player(dmg, "Cut down by Harkonnen steel.");
             return;
@@ -923,7 +1110,8 @@ void critter_act(Entity& e) {
 
     if (e.type == EType::Hermit) {
         if (pdist == 1) {
-            const int dmg = g.rng.combat.range(2, 4);
+            const int dmg = foe_attack_roll(*foe_stats(EType::Hermit));
+            if (dmg == 0) { g.log.push("The hermit's claws rake past you."); return; }
             g.log.push("The spice-mad hermit claws at you, shrieking prophecy!");
             damage_player(dmg, "Beaten down by a prophet of the sand.");
             return;
@@ -986,7 +1174,11 @@ void hound_act(Entity& e) {
         if (pdist == 1) {  // adjacent: bite
             e.anim.facing = facing_from_tile_delta(p.x - e.x, p.y - e.y);
             e.anim.set(anim::State::Attack);
-            const int dmg = g.rng.combat.range(tune::kHoundAtkMin, tune::kHoundAtkMax);
+            const int dmg = foe_attack_roll(*foe_stats(EType::Hound));
+            if (dmg == 0) {
+                g.log.push("The hound snaps at empty air.");
+                return;
+            }
             g.log.push("The dust hound bites you for %d.", dmg);
             damage_player(dmg, "Torn apart by dust hounds.");
             return;
@@ -1029,7 +1221,8 @@ void upkeep() {
     if (tf & map::TF_INDOOR) base = tune::kThirstIndoor;
     else if (floor <= 2 || floor == 5 || floor == 6) base = tune::kThirstSand;
     const int amb = ambient_now();
-    int drain = base * tune::kThirstHeatMul4[amb] * tune::kSuitTier1Mul4 / 16;
+    int drain = base * tune::kThirstHeatMul4[amb] * player_suit_mul4() / 16;
+    drain = drain * (8 - g.pl.st.talents[7]) / 8;  // Water Discipline
     if (g.pl.tox > 60) drain = drain * 3 / 2;  // the spice burns water
     if (base > 0 && drain < 1) drain = 1;
     g.pl.water -= drain;
@@ -1197,6 +1390,9 @@ void advance_world() {
     // HUD meter + seismograph history
     const int nn = g.noise.near(player_ent().x, player_ent().y, 3);
     g.noise_meter = uint8_t(nn > 100 ? 100 : nn);
+    if (!g.pl.sandwalk && g.noise_meter > 35 && g.cur_zone != map::kZoneSietch &&
+        (g.pl.turn % 40) == 17)
+        g.log.push("Your rhythm carries through the sand. (C: sandwalk)");
     g.seismo[g.seismo_head] = g.noise_meter;
     g.seismo_head = (g.seismo_head + 1) & 63;
 
@@ -1433,7 +1629,10 @@ void try_move(int dx, int dy) {
 
     // the surfaced worm is a wall of flesh — bump = strike
     if (worm_occupies(nx, ny)) {
-        const int dealt = worm::hit(g.wrm, nx, ny, g.pl.atk, worm_callbacks());
+        const items::Inst& w0 = g.pl.equip[int(items::Slot::Weapon)];
+        const int wavg = w0.empty() ? 2 : (w0.d().a + w0.d().b) / 2;
+        const int dealt = worm::hit(g.wrm, nx, ny, wavg + g.pl.st.str / 4,
+                                    worm_callbacks());
         if (dealt > 0) g.log.push("Your blade bites the soft flesh of the maw!");
         g.noise.add(p.x, p.y, 12);
         advance_world();
@@ -1441,8 +1640,8 @@ void try_move(int dx, int dy) {
     }
 
     if (tf & map::TF_CISTERN) {
-        if (g.pl.water < tune::kWaterMax) {
-            g.pl.water = tune::kWaterMax;
+        if (g.pl.water < player_max_water()) {
+            g.pl.water = player_max_water();
             g.log.push("You drink deep from the cistern. The tribe provides.");
             g.services.mixer->push({audio::Cmd::PlaySfx, 1, 150, 100});
         } else {
@@ -1476,10 +1675,28 @@ void try_move(int dx, int dy) {
             advance_world();
             return;
         }
-        victim->hp -= g.pl.atk;
+        const Foe* foe = foe_stats(victim->type);
+        bool crit = false;
+        int dealt = foe ? player_attack_roll(*foe, &crit) : g.pl.atk;
+        if (dealt == 0 && victim->type == EType::ShieldTrooper && g.pl.sandwalk)
+            dealt = 1 + g.pl.st.str / 4;  // slow and true: it always lands
         g.noise.add(nx, ny, victim->type == EType::Spotter ? 4 : 12);  // blades are quiet
+        if (dealt == 0) {
+            g.log.push("Your blade whispers past. A miss.");
+            advance_world();
+            return;
+        }
+        victim->hp -= int16_t(dealt);
+        if (crit) g.log.push("CRIT - %d! The blade finds the seam.", dealt);
+        else g.log.push("You hit for %d.", dealt);
         if (victim->hp <= 0) {
             g.hitstop = 3;  // the world holds its breath
+            if (foe) {
+                int xp = foe->xp;
+                if (g.pl.st.level > foe->level + 2) xp /= 2;
+                grant_xp(xp);
+            }
+            maybe_drop_loot(victim->type, victim->x, victim->y);
             switch (victim->type) {
                 case EType::Hound:
                     g.log.push("The dust hound collapses. Its water is yours.");
@@ -1632,9 +1849,12 @@ void try_plant() {
     }
     player_ent().anim.set(anim::State::Use);
     ++g.op.plant_progress;
-    if (g.op.plant_progress < harvest::kPlantTurns) {
+    const int plant_turns_needed =
+        harvest::kPlantTurns - g.pl.st.talents[4] < 1 ? 1
+            : harvest::kPlantTurns - g.pl.st.talents[4];  // Demolitions
+    if (g.op.plant_progress < plant_turns_needed) {
         g.log.push("Working the charge into the hull seam... (%d/%d)",
-                   int(g.op.plant_progress), harvest::kPlantTurns);
+                   int(g.op.plant_progress), plant_turns_needed);
     } else {
         --g.pl.charges;
         g.op.state = harvest::OpState::Destroyed;
@@ -1678,6 +1898,22 @@ void try_harvest() {
         advance_world();
         return;
     }
+    if (Entity* drop = entity_at(p.x, p.y, g.cur_zone, EType::Loot)) {
+        const items::Inst it = loot_of(*drop);
+        for (items::Inst& slot : g.pl.inv)
+            if (slot.empty()) {
+                slot = it;
+                char nm[64];
+                it.full_name(nm, sizeof nm);
+                g.log.push("Taken: %s (I to equip).", nm);
+                drop->type = EType::None;
+                g.services.mixer->push({audio::Cmd::PlaySfx, 1, 150, 140});
+                advance_world();
+                return;
+            }
+        g.log.push("Your pack is full. Bank gear at the Naib's vault.");
+        return;
+    }
     if (Entity* cache = entity_at(p.x, p.y, g.cur_zone, EType::SpiceCache)) {
         p.anim.set(anim::State::Use);
         g.pl.spice += cache->data;
@@ -1691,7 +1927,7 @@ void try_harvest() {
     if (Entity* c = entity_at(p.x, p.y, g.cur_zone, EType::Corpse)) {
         p.anim.set(anim::State::Use);
         g.pl.water += c->data;
-        if (g.pl.water > tune::kWaterMax) g.pl.water = tune::kWaterMax;
+        if (g.pl.water > player_max_water()) g.pl.water = player_max_water();
         g.log.push("The deathstill takes its due. +%d water.", int(c->data));
         c->type = EType::None;
         g.services.mixer->push({audio::Cmd::PlaySfx, 1, 150, 140});
@@ -1723,6 +1959,9 @@ void game_init(uint64_t seed, const GameServices& services) {
                        int16_t(sx), int16_t(sy), int16_t(tune::kPlayerHpMax), 0, 0};
     g.spawned_mask = 1 << map::kZoneSietch;
 
+    g.pl.equip[int(items::Slot::Weapon)].def = 0;  // Dust Knife
+    g.pl.equip[int(items::Slot::Suit)].def = 9;    // Stillsuit Mk I
+    g.pl.hp = player_max_hp();
     g.choosing = services.interactive;
     if (!g.choosing) apply_background(g.pl, Background::Fedaykin);
 
@@ -1774,7 +2013,9 @@ bool glide_done(const Entity& e) {
     int wx, wy;
     world_px_of(e.x, e.y, wx, wy);
     const int dx = wx - e.vpx, dy = wy - e.vpy;
-    return dx * dx + dy * dy <= 16;
+    // pre-buffer: the next step may queue slightly before touchdown, so held
+    // walking flows without the per-tile stall
+    return dx * dx + dy * dy <= 64;
 }
 
 // Per render tick (60Hz): every visible entity glides toward its logical
@@ -1812,7 +2053,7 @@ void visual_tick() {
             e.vpy = int16_t(wy);
             dx = dy = 0;
         }
-        const int step = 5;
+        const int step = (e.type == EType::Player && g.pl.sandwalk) ? 2 : 3;
         const bool moving = dx || dy;
         if (moving) {
             e.vpx = int16_t(e.vpx + (dx > step ? step : dx < -step ? -step : dx));
@@ -1841,7 +2082,8 @@ void visual_tick() {
             const int sy = e.vpy - g.cam.y + fb::H / 2;
             if (sx >= 0 && sx < fb::W && sy >= 0 && sy < fb::H) {
                 const uint8_t fl = zone().floor[e.y * map::W + e.x];
-                const int count = fl == 6 ? 4 : (fl == 3 || fl == 4 || fl == 8) ? 0 : 1;
+                int count = fl == 6 ? 4 : (fl == 3 || fl == 4 || fl == 8) ? 0 : 1;
+                if (e.type == EType::Player && g.pl.sandwalk) count = 0;  // featherstep
                 if (count) g.particles.burst_dust(g.rng.fx, sx, sy + 10, count, 66);
                 if (e.type == EType::Player && count)
                     g.services.mixer->push({audio::Cmd::PlaySfx, 1, 26,
@@ -1894,6 +2136,13 @@ const char* describe_at(int tx, int ty) {
             case EType::Hermit: return "spice-mad hermit";
             case EType::HunterSeeker: return "HUNTER-SEEKER";
             case EType::SpiceCache: return "raw spice (G: gather)";
+            case EType::Loot: {
+                static char buf[72];
+                char nm[64];
+                loot_of(e).full_name(nm, sizeof nm);
+                std::snprintf(buf, sizeof buf, "%s (G: take)", nm);
+                return buf;
+            }
             default: break;
         }
     }
@@ -1954,8 +2203,98 @@ bool game_update(const InputState& in) {
 
     // vendor menus pause the world (browsing is free)
     if (g.menu_open) {
-        const int counts[5] = {0, 4, 3, 5, 4};  // options incl. Leave
+        // 5 = character sheet, 6 = inventory, 7 = the vault
+        int counts[8] = {0, 5, 3, 5, 4, 3 + kTalentCount + 1, 13, 13};
         const int n = counts[g.menu_open];
+        if (g.menu_open == 5) {
+            // 0..2 stats, 3..11 talents, 12 close
+            if (in.was_pressed(Key::Up)) g.menu_sel = (g.menu_sel + n - 1) % n;
+            if (in.was_pressed(Key::Down)) g.menu_sel = (g.menu_sel + 1) % n;
+            if (in.was_pressed(Key::Cancel)) g.menu_open = 0;
+            if (in.was_pressed(Key::Confirm)) {
+                if (g.menu_sel < 3 && g.pl.st.statpts > 0) {
+                    (g.menu_sel == 0 ? g.pl.st.str
+                     : g.menu_sel == 1 ? g.pl.st.dex : g.pl.st.vit) += 1;
+                    --g.pl.st.statpts;
+                    if (g.menu_sel == 2) g.pl.hp = g.pl.hp < player_max_hp()
+                                                       ? g.pl.hp + 2 : player_max_hp();
+                } else if (g.menu_sel >= 3 && g.menu_sel < 3 + kTalentCount &&
+                           g.pl.st.talentpts > 0 &&
+                           g.pl.st.talents[g.menu_sel - 3] < 3) {
+                    ++g.pl.st.talents[g.menu_sel - 3];
+                    --g.pl.st.talentpts;
+                    g.log.push("%s rank %d.", kTalentNames[g.menu_sel - 3],
+                               int(g.pl.st.talents[g.menu_sel - 3]));
+                } else if (g.menu_sel == n - 1) {
+                    g.menu_open = 0;
+                }
+            }
+            return true;
+        }
+        if (g.menu_open == 6) {
+            // 12 inventory slots + close: Confirm equips (swaps by slot)
+            if (in.was_pressed(Key::Up)) g.menu_sel = (g.menu_sel + n - 1) % n;
+            if (in.was_pressed(Key::Down)) g.menu_sel = (g.menu_sel + 1) % n;
+            if (in.was_pressed(Key::Cancel)) g.menu_open = 0;
+            if (in.was_pressed(Key::Confirm)) {
+                if (g.menu_sel == 12) {
+                    g.menu_open = 0;
+                } else if (!g.pl.inv[g.menu_sel].empty()) {
+                    items::Inst& it = g.pl.inv[g.menu_sel];
+                    items::Inst& eq = g.pl.equip[int(it.d().slot)];
+                    const items::Inst tmp = eq;
+                    eq = it;
+                    it = tmp;
+                    char nm[64];
+                    eq.full_name(nm, sizeof nm);
+                    g.log.push("Equipped: %s", nm);
+                    if (g.pl.hp > player_max_hp()) g.pl.hp = player_max_hp();
+                    if (g.pl.water > player_max_water()) g.pl.water = player_max_water();
+                }
+            }
+            return true;
+        }
+        if (g.menu_open == 7) {
+            // vault: Left/Right pages (0 deposit inv, 1 withdraw stash)
+            if (in.was_pressed(Key::Left) || in.was_pressed(Key::Right)) {
+                g.vault_page ^= 1;
+                g.menu_sel = 0;
+            }
+            if (in.was_pressed(Key::Up)) g.menu_sel = (g.menu_sel + n - 1) % n;
+            if (in.was_pressed(Key::Down)) g.menu_sel = (g.menu_sel + 1) % n;
+            if (in.was_pressed(Key::Cancel)) g.menu_open = 0;
+            if (in.was_pressed(Key::Confirm)) {
+                if (g.menu_sel == 12) {
+                    g.menu_open = 0;
+                } else if (g.vault_page == 0) {  // deposit
+                    items::Inst& it = g.pl.inv[g.menu_sel];
+                    if (!it.empty() && g_meta.stash_count < 24) {
+                        g_meta.stash[g_meta.stash_count++] = it;
+                        char nm[64];
+                        it.full_name(nm, sizeof nm);
+                        g.log.push("Banked: %s. It is the tribe's now - and yours.", nm);
+                        it = items::Inst{};
+                        meta_save();
+                    }
+                } else {  // withdraw
+                    if (g.menu_sel < g_meta.stash_count) {
+                        for (items::Inst& slot : g.pl.inv)
+                            if (slot.empty()) {
+                                slot = g_meta.stash[g.menu_sel];
+                                for (int i = g.menu_sel; i + 1 < g_meta.stash_count; ++i)
+                                    g_meta.stash[i] = g_meta.stash[i + 1];
+                                --g_meta.stash_count;
+                                char nm[64];
+                                slot.full_name(nm, sizeof nm);
+                                g.log.push("Withdrawn: %s", nm);
+                                meta_save();
+                                break;
+                            }
+                    }
+                }
+            }
+            return true;
+        }
         if (in.was_pressed(Key::Up)) g.menu_sel = (g.menu_sel + n - 1) % n;
         if (in.was_pressed(Key::Down)) g.menu_sel = (g.menu_sel + 1) % n;
         if (in.was_pressed(Key::Cancel)) g.menu_open = 0;
@@ -1998,7 +2337,12 @@ bool game_update(const InputState& in) {
                         }
                     }
                     break;
-                case 13: g.menu_open = 0; break;  // leave
+                case 13:  // the tribe vault
+                    g.menu_open = 7;
+                    g.menu_sel = 0;
+                    g.vault_page = 0;
+                    break;
+                case 14: g.menu_open = 0; break;  // leave
                 case 20:  // Sayyadina: spice tribute
                     if (g.pl.spice >= 5) {
                         g.pl.spice -= 5;
@@ -2009,9 +2353,9 @@ bool game_update(const InputState& in) {
                     }
                     break;
                 case 21:  // Sayyadina: healing trance
-                    if (g.pl.spice >= 6 && g.pl.hp < tune::kPlayerHpMax) {
+                    if (g.pl.spice >= 6 && g.pl.hp < player_max_hp()) {
                         g.pl.spice -= 6;
-                        g.pl.hp = tune::kPlayerHpMax;
+                        g.pl.hp = player_max_hp();
                         g.pl.exposure = 0;
                         g.log.push("She sings the water back into your flesh.");
                     } else {
@@ -2041,9 +2385,10 @@ bool game_update(const InputState& in) {
                     else g.log.push("'Three grains and it's yours.'");
                     break;
                 case 34: g.menu_open = 0; break;
-                case 40:  // Farsight: the spice unfolds the map
-                    if (g.pl.spice >= 2) {
-                        g.pl.spice -= 2;
+                case 40: {  // Farsight: the spice unfolds the map
+                    const int cost = g.pl.st.talents[6] >= 2 ? 1 : 2;
+                    if (g.pl.spice >= cost) {
+                        g.pl.spice -= cost;
                         g.pl.tox += 10;
                         g.pl.tox_lifetime += 10;
                         for (int i = 0; i < map::N; ++i)
@@ -2051,19 +2396,22 @@ bool game_update(const InputState& in) {
                         g.log.push("The spice unfolds. You see the whole quarter at once.");
                         flash(120, 80, 200);
                         g.menu_open = 0;
-                    } else g.log.push("Two grains for the long sight.");
+                    } else g.log.push("Not enough grains for the long sight.");
                     break;
-                case 41:  // Threadwalk: two free strides outside time
-                    if (g.pl.spice >= 3) {
-                        g.pl.spice -= 3;
+                }
+                case 41: {  // Threadwalk: two free strides outside time
+                    const int cost = g.pl.st.talents[6] >= 2 ? 2 : 3;
+                    if (g.pl.spice >= cost) {
+                        g.pl.spice -= cost;
                         g.pl.tox += 15;
                         g.pl.tox_lifetime += 15;
                         g.pl.free_moves = 2;
                         g.log.push("Time goes thick as syrup. You move BETWEEN moments.");
                         flash(150, 100, 220);
                         g.menu_open = 0;
-                    } else g.log.push("Three grains to walk the thread.");
+                    } else g.log.push("Not enough grains to walk the thread.");
                     break;
+                }
                 case 42: {  // the Litany against fear
                     const int day = g.pl.turn / tune::kTurnsPerDay;
                     if (g.pl.litany_day == day) {
@@ -2106,6 +2454,8 @@ bool game_update(const InputState& in) {
     else if (in.pressed_or_repeat(Key::Wait)) advance_world();
     else if (in.was_pressed(Key::Ride)) try_ride();
     else if (in.was_pressed(Key::Powers)) { g.menu_open = 4; g.menu_sel = 0; }
+    else if (in.was_pressed(Key::Inventory)) { g.menu_open = 6; g.menu_sel = 0; }
+    else if (in.was_pressed(Key::Character)) { g.menu_open = 5; g.menu_sel = 0; }
     else if (in.was_pressed(Key::Harvest)) try_harvest();
     else if (in.was_pressed(Key::Thumper)) place_thumper();
     else if (in.was_pressed(Key::Glowglobe)) place_glowglobe();
@@ -2355,6 +2705,13 @@ void pass_entities(RenderCtx& r) {
             case EType::SpiceCache:
                 g.draw_list.add(r.assets->get("spicecache"), 0, sx, sy + 12, light, 0);
                 break;
+            case EType::Loot: {
+                g.draw_list.add(r.assets->get("thumper"), 0, sx, sy + 10, light, 0);
+                if (g.anim_tick % 9 == 0)  // gleam so drops read at a glance
+                    g.particles.spawn(sx - 4 + int(g.rng.fx.below(9)), sy - 8, 0, -12,
+                                      12, uint8_t((e.data2 >> 8) == 2 ? 230 : 30));
+                break;
+            }
             default: break;
         }
     }
@@ -2506,8 +2863,8 @@ void pass_ui(RenderCtx& r) {
     if (g.disp_hp < 0) { g.disp_hp = g.pl.hp * 16; g.disp_water = g.pl.water * 16; }
     g.disp_hp += (g.pl.hp * 16 - g.disp_hp) / 8;
     g.disp_water += (g.pl.water * 16 - g.disp_water) / 8;
-    ui::HudState hud{(g.disp_hp + 8) / 16, tune::kPlayerHpMax,
-                     (g.disp_water + 8) / 16, tune::kWaterMax,
+    ui::HudState hud{(g.disp_hp + 8) / 16, player_max_hp(),
+                     (g.disp_water + 8) / 16, player_max_water(),
                      g.pl.exposure, hour_now(), ambient_now(),
                      g.pl.turn / tune::kTurnsPerDay + 1,
                      (z.at(player_ent().x, player_ent().y) & map::TF_INDOOR) != 0,
@@ -2550,9 +2907,12 @@ void pass_ui(RenderCtx& r) {
     // hover description + personal gauges, just above the panel
     {
         char buf[64];
-        std::snprintf(buf, sizeof buf, "spice %d  tox %d%s%s", g.pl.spice, g.pl.tox,
+        std::snprintf(buf, sizeof buf, "LVL %d  xp %d/%d  spice %d  tox %d%s%s%s",
+                      int(g.pl.st.level), int(g.pl.st.xp), xp_to_level(g.pl.st.level),
+                      g.pl.spice, g.pl.tox,
                       g.pl.eyes_ibad ? "  [EYES OF IBAD]" : "",
-                      g.pl.riding ? "  [RIDING]" : "");
+                      g.pl.riding ? "  [RIDING]" : "",
+                      g.pl.st.statpts + g.pl.st.talentpts > 0 ? "  [P: spend pts]" : "");
         draw_text_shadow(ctx, buf, 4, ui::kPanelY - 12, uint8_t(g.pl.tox > 60 ? 208 : 136), 1);
         if (g.hover_tx >= 0)
             if (const char* what = describe_at(g.hover_tx, g.hover_ty))
@@ -2598,12 +2958,89 @@ void pass_ui(RenderCtx& r) {
         }
     }
 
+    // Character sheet / inventory / vault overlays (dynamic content).
+    if (g.menu_open >= 5) {
+        const int x0 = fb::W / 2 - 190, y0 = 60;
+        fill_rect(ctx, x0, y0, 380, 300, 2);
+        fill_rect(ctx, x0, y0, 380, 1, 228);
+        fill_rect(ctx, x0, y0 + 299, 380, 1, 228);
+        char buf[80];
+        if (g.menu_open == 5) {
+            draw_text_shadow(ctx, "CHARACTER", x0 + 12, y0 + 8, 230, 1);
+            std::snprintf(buf, sizeof buf, "level %d   xp %d/%d   stat pts %d   talent pts %d",
+                          int(g.pl.st.level), int(g.pl.st.xp), xp_to_level(g.pl.st.level),
+                          int(g.pl.st.statpts), int(g.pl.st.talentpts));
+            draw_text(ctx, buf, x0 + 12, y0 + 20, 14);
+            const char* rows[3] = {"Strength", "Dexterity", "Vitality"};
+            const int vals[3] = {g.pl.st.str, g.pl.st.dex, g.pl.st.vit};
+            for (int i = 0; i < 3; ++i) {
+                const bool sel = g.menu_sel == i;
+                if (sel) fill_rect(ctx, x0 + 8, y0 + 34 + i * 12 - 1, 364, 11, 4);
+                std::snprintf(buf, sizeof buf, "%-10s %3d", rows[i], vals[i]);
+                draw_text(ctx, buf, x0 + 16, y0 + 34 + i * 12, uint8_t(sel ? 245 : 20));
+            }
+            for (int i = 0; i < kTalentCount; ++i) {
+                const bool sel = g.menu_sel == 3 + i;
+                const int y = y0 + 74 + i * 12;
+                if (sel) fill_rect(ctx, x0 + 8, y - 1, 364, 11, 4);
+                std::snprintf(buf, sizeof buf, "%-22s %d/3", kTalentNames[i],
+                              int(g.pl.st.talents[i]));
+                draw_text(ctx, buf, x0 + 16, y, uint8_t(sel ? 245 : 20));
+            }
+            std::snprintf(buf, sizeof buf, "dmg+%d  hit+%d  armor %d  dodge %d",
+                          g.pl.st.str / 4 + affix_total(items::AK_DMG),
+                          affix_total(items::AK_TOHIT), player_armor(), player_dodge());
+            draw_text(ctx, buf, x0 + 12, y0 + 190, 136);
+            draw_text(ctx, g.menu_sel == 12 ? "> Close" : "  Close", x0 + 16, y0 + 206,
+                      uint8_t(g.menu_sel == 12 ? 245 : 20));
+        } else if (g.menu_open == 6) {
+            draw_text_shadow(ctx, "PACK  (ENTER equips)", x0 + 12, y0 + 8, 230, 1);
+            const char* slots[4] = {"wpn", "arm", "sut", "trk"};
+            for (int i = 0; i < 4; ++i) {
+                char nm[64];
+                g.pl.equip[i].full_name(nm, sizeof nm);
+                std::snprintf(buf, sizeof buf, "[%s] %s", slots[i], nm);
+                draw_text(ctx, buf, x0 + 12, y0 + 22 + i * 10, 136);
+            }
+            for (int i = 0; i < 12; ++i) {
+                const bool sel = g.menu_sel == i;
+                const int y = y0 + 70 + i * 12;
+                if (sel) fill_rect(ctx, x0 + 8, y - 1, 364, 11, 4);
+                char nm[64];
+                g.pl.inv[i].full_name(nm, sizeof nm);
+                const uint8_t col = g.pl.inv[i].empty() ? 8
+                                    : g.pl.inv[i].rarity == 2 ? 245
+                                    : g.pl.inv[i].rarity == 1 ? 230 : 20;
+                draw_text(ctx, nm, x0 + 16, y, uint8_t(sel ? 245 : col));
+            }
+            draw_text(ctx, g.menu_sel == 12 ? "> Close" : "  Close", x0 + 16, y0 + 218,
+                      uint8_t(g.menu_sel == 12 ? 245 : 20));
+        } else {
+            std::snprintf(buf, sizeof buf, "THE TRIBE VAULT - %s (left/right)",
+                          g.vault_page == 0 ? "DEPOSIT" : "WITHDRAW");
+            draw_text_shadow(ctx, buf, x0 + 12, y0 + 8, 230, 1);
+            std::snprintf(buf, sizeof buf, "banked %d/24 - the vault survives your death",
+                          int(g_meta.stash_count));
+            draw_text(ctx, buf, x0 + 12, y0 + 20, 14);
+            for (int i = 0; i < 12; ++i) {
+                const bool sel = g.menu_sel == i;
+                const int y = y0 + 40 + i * 12;
+                if (sel) fill_rect(ctx, x0 + 8, y - 1, 364, 11, 4);
+                char nm[64] = "-";
+                if (g.vault_page == 0) g.pl.inv[i].full_name(nm, sizeof nm);
+                else if (i < g_meta.stash_count) g_meta.stash[i].full_name(nm, sizeof nm);
+                draw_text(ctx, nm, x0 + 16, y, uint8_t(sel ? 245 : 20));
+            }
+            draw_text(ctx, g.menu_sel == 12 ? "> Close" : "  Close", x0 + 16, y0 + 190,
+                      uint8_t(g.menu_sel == 12 ? 245 : 20));
+        }
+    } else
     // Vendor menu overlay.
     if (g.menu_open) {
         static const char* kMenus[5][5] = {
             {},
             {"Tribute 200 water  (+10 standing)", "Ask about the season",
-             "A task for the tribe", "Leave"},
+             "A task for the tribe", "Open the tribe vault", "Leave"},
             {"Offer 5 spice  (+12 standing)", "Healing trance  (6 spice)", "Leave", nullptr},
             {"Demolition charge  (5 spice)", "Two thumpers  (3 spice)",
              "Toxin vial  (2 spice)", "Glowglobe  (3 spice)", "Leave"},
@@ -2710,6 +3147,9 @@ void game_serialize(SaveWriter& w) {
     w.i32(g.pl.water);
     w.i32(g.pl.exposure);
     w.i32(g.pl.turn);
+    w.bytes(&g.pl.st, sizeof g.pl.st);
+    w.bytes(g.pl.inv, sizeof g.pl.inv);
+    w.bytes(g.pl.equip, sizeof g.pl.equip);
     w.i32(g.pl.thumpers);
     w.i32(g.pl.charges);
     w.i32(g.pl.poisons);
@@ -2764,6 +3204,9 @@ bool game_deserialize(SaveReader& r) {
     pl.water = r.i32();
     pl.exposure = r.i32();
     pl.turn = r.i32();
+    r.bytes(&pl.st, sizeof pl.st);
+    r.bytes(pl.inv, sizeof pl.inv);
+    r.bytes(pl.equip, sizeof pl.equip);
     pl.thumpers = r.i32();
     pl.charges = r.i32();
     pl.poisons = r.i32();
@@ -2918,6 +3361,49 @@ void game_debug_worm_pos(int* x, int* y) {
     if (y) *y = g.wrm.y;
 }
 
+void game_debug_rpg(int* level, int* inv_count, int* stash_count) {
+    if (level) *level = g.pl.st.level;
+    if (inv_count) {
+        int n = 0;
+        for (const items::Inst& it : g.pl.inv)
+            if (!it.empty()) ++n;
+        *inv_count = n;
+    }
+    if (stash_count) *stash_count = g_meta.stash_count;
+}
+
+void game_debug_grab_loot() {
+    for (Entity& e : g.ents) {
+        if (e.type != EType::Loot || e.zone != g.cur_zone) continue;
+        for (items::Inst& slot : g.pl.inv)
+            if (slot.empty()) {
+                slot = loot_of(e);
+                e.type = EType::None;
+                break;
+            }
+    }
+}
+
+void game_debug_vault_deposit_all() {
+    for (items::Inst& it : g.pl.inv)
+        if (!it.empty() && g_meta.stash_count < 24) {
+            g_meta.stash[g_meta.stash_count++] = it;
+            it = items::Inst{};
+        }
+    meta_save();
+}
+
+int game_debug_vault_withdraw_one() {
+    if (g_meta.stash_count == 0) return 0;
+    for (items::Inst& slot : g.pl.inv)
+        if (slot.empty()) {
+            slot = g_meta.stash[--g_meta.stash_count];
+            meta_save();
+            return 1;
+        }
+    return 0;
+}
+
 void game_debug_clear_hostiles() {
     for (Entity& e : g.ents)
         if (e.type == EType::Trooper || e.type == EType::ShieldTrooper ||
@@ -2949,8 +3435,8 @@ void game_debug_kill_spotters() {
 }
 
 void game_debug_refill() {
-    g.pl.water = tune::kWaterMax;
-    g.pl.hp = tune::kPlayerHpMax;
+    g.pl.water = player_max_water();
+    g.pl.hp = player_max_hp();
     g.pl.exposure = 0;
 }
 
@@ -2964,6 +3450,8 @@ uint64_t game_state_hash() {
     mix(uint64_t(uint32_t(g.pl.exposure)));
     mix(uint64_t(uint32_t(g.pl.turn)));
     mix(uint64_t(uint8_t(g.pl.background)) | (uint64_t(uint32_t(g.pl.atk)) << 8));
+    mix(uint64_t(uint16_t(g.pl.st.level)) | (uint64_t(uint32_t(g.pl.st.xp)) << 16) |
+        (uint64_t(uint16_t(g.pl.st.str)) << 48));
     mix(uint64_t(uint32_t(g.season.shipped)) | (uint64_t(uint32_t(g.season.denied)) << 16) |
         (uint64_t(uint32_t(g.season.alert)) << 32) |
         (uint64_t(uint32_t(g.season.standing)) << 48));
