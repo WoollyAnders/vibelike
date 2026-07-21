@@ -160,6 +160,11 @@ struct GameState {
     ui::Log log;
 
     int16_t impact_x = -1, impact_y = -1;  // where the player's blow will land
+    uint8_t impact_kind = 0;               // 0 flesh, 1 shield/metal
+    int16_t worm_vis[(worm::kSegments + 1) * 2] = {};  // G4: slithering visuals
+    int hitstop = 0;        // G5: frames frozen after a killing blow
+    int microshake = 0;     // G5: frames of 1px shake from your own hits
+    int disp_hp = -1, disp_water = -1;  // G5: orb slosh (displayed values)
     int current_song = -1;
     int16_t hover_tx = -1, hover_ty = -1;
     int anim_tick = 0;
@@ -512,7 +517,7 @@ void recompute_light() {
         else if (e.type == EType::Thumper) srcs[n++] = {e.x, e.y, 2, 14, 0};
     }
     if (g.op.live() && g.op.zone == g.cur_zone)
-        srcs[n++] = {g.op.x, g.op.y, 8, 26, 0};  // crawler floodlights
+        srcs[n++] = {g.op.x, g.op.y, 8, uint8_t(25 + g.rng.fx.below(3)), 0};  // floodlights flicker
 
     // the worm's violence glows with static discharge
     if (g.wrm.state == worm::State::Breaching || g.wrm.state == worm::State::Surfaced)
@@ -1463,6 +1468,7 @@ void try_move(int dx, int dy) {
         player_ent().anim.set(anim::State::Attack);
         g.impact_x = int16_t(nx);
         g.impact_y = int16_t(ny);
+        g.impact_kind = victim->type == EType::ShieldTrooper ? 1 : 0;
         if (victim->type == EType::ShieldTrooper && !g.pl.sandwalk) {
             g.log.push("Your quick blade GLANCES off the shield shimmer.");
             g.log.push("The slow blade penetrates. (C: sandwalk, then strike.)");
@@ -1473,6 +1479,7 @@ void try_move(int dx, int dy) {
         victim->hp -= g.pl.atk;
         g.noise.add(nx, ny, victim->type == EType::Spotter ? 4 : 12);  // blades are quiet
         if (victim->hp <= 0) {
+            g.hitstop = 3;  // the world holds its breath
             switch (victim->type) {
                 case EType::Hound:
                     g.log.push("The dust hound collapses. Its water is yours.");
@@ -1772,7 +1779,29 @@ bool glide_done(const Entity& e) {
 
 // Per render tick (60Hz): every visible entity glides toward its logical
 // tile, walks while gliding, breathes while still. Purely presentational.
+void worm_visual_tick() {
+    // index 0 = head, then segments; lag grows down the body so it flows
+    for (int i = 0; i <= worm::kSegments; ++i) {
+        const int tx = i == 0 ? g.wrm.x : g.wrm.seg_x[i - 1];
+        const int ty = i == 0 ? g.wrm.y : g.wrm.seg_y[i - 1];
+        int wx, wy;
+        world_px_of(tx, ty, wx, wy);
+        int16_t& vx = g.worm_vis[i * 2];
+        int16_t& vy = g.worm_vis[i * 2 + 1];
+        const int dx = wx - vx, dy = wy - vy;
+        if (dx * dx + dy * dy > 160 * 160) {  // teleport/reset: snap
+            vx = int16_t(wx);
+            vy = int16_t(wy);
+            continue;
+        }
+        const int step = i == 0 ? 8 : (6 - (i > 4 ? 2 : i / 2));
+        vx = int16_t(vx + (dx > step ? step : dx < -step ? -step : dx));
+        vy = int16_t(vy + (dy > step ? step : dy < -step ? -step : dy));
+    }
+}
+
 void visual_tick() {
+    worm_visual_tick();
     for (Entity& e : g.ents) {
         if (e.type == EType::None || e.zone != g.cur_zone) continue;
         int wx, wy;
@@ -1807,19 +1836,34 @@ void visual_tick() {
         if (e.hurt_flash > 0) --e.hurt_flash;
         const uint8_t ev = e.anim.tick(set);
         if (ev == anim::EV_FOOTSTEP) {
-            // dust at the feet (fx-only)
+            // dust sized by terrain; drum sand booms visually too
             const int sx = e.vpx - g.cam.x + fb::W / 2;
             const int sy = e.vpy - g.cam.y + fb::H / 2;
-            if (sx >= 0 && sx < fb::W && sy >= 0 && sy < fb::H)
-                g.particles.burst_dust(g.rng.fx, sx, sy + 10, 1, 66);
+            if (sx >= 0 && sx < fb::W && sy >= 0 && sy < fb::H) {
+                const uint8_t fl = zone().floor[e.y * map::W + e.x];
+                const int count = fl == 6 ? 4 : (fl == 3 || fl == 4 || fl == 8) ? 0 : 1;
+                if (count) g.particles.burst_dust(g.rng.fx, sx, sy + 10, count, 66);
+                if (e.type == EType::Player && count)
+                    g.services.mixer->push({audio::Cmd::PlaySfx, 1, 26,
+                                            uint8_t((g.anim_tick & 32) ? 118 : 130)});
+            }
         } else if (ev == anim::EV_IMPACT) {
             g.services.mixer->push({audio::Cmd::PlaySfx, 1, 200, 60});
             if (e.type == EType::Player && g.impact_x >= 0) {
+                const int isx = 0;
                 for (Entity& v : g.ents)
                     if (v.type != EType::None && v.zone == g.cur_zone &&
-                        v.x == g.impact_x && v.y == g.impact_y)
+                        v.x == g.impact_x && v.y == g.impact_y) {
                         v.hurt_flash = 8;
+                        // impact particles: sparks off shields, blood off flesh
+                        const int vx = v.vpx - g.cam.x + fb::W / 2;
+                        const int vy = v.vpy - g.cam.y + fb::H / 2;
+                        const uint8_t color = g.impact_kind == 1 ? 30 : 204;
+                        g.particles.burst_dust(g.rng.fx, vx, vy - 14, 4, color);
+                    }
                 g.impact_x = -1;
+                g.microshake = 4;
+                (void)isx;
             } else if (e.type != EType::Player) {
                 player_ent().hurt_flash = 8;  // their blow lands on you
             }
@@ -1874,7 +1918,12 @@ const char* describe_at(int tx, int ty) {
 }  // namespace
 
 bool game_update(const InputState& in) {
+    if (g.hitstop > 0) {  // killing-blow freeze: presentation only
+        --g.hitstop;
+        return true;
+    }
     ++g.anim_tick;
+    if (g.microshake > 0) --g.microshake;
     if (!g.choosing) visual_tick();
     g.hover_tx = -1;
     if (in.mouse_x >= 0 && !g.choosing && !g.menu_open) {
@@ -2312,27 +2361,34 @@ void pass_entities(RenderCtx& r) {
 
     if (g.wrm.state == worm::State::Surfaced) {
         const SpriteSheet* seg = r.assets->get("wormseg");
-        int sx, sy;
-        for (int i = worm::kSegments - 1; i >= 0; --i) {
-            iso::tile_to_screen(g.wrm.seg_x[i], g.wrm.seg_y[i], g.cam, sx, sy);
+        for (int i = worm::kSegments; i >= 1; --i) {
+            const int sx = g.worm_vis[i * 2] - g.cam.x + fb::W / 2;
+            const int sy = g.worm_vis[i * 2 + 1] - g.cam.y + fb::H / 2;
             g.draw_list.add(seg, 0, sx, sy + 20,
-                            light_at(g.wrm.seg_x[i], g.wrm.seg_y[i]), 1);
+                            light_at(g.wrm.seg_x[i - 1], g.wrm.seg_y[i - 1]), 1);
         }
-        iso::tile_to_screen(g.wrm.x, g.wrm.y, g.cam, sx, sy);
-        g.draw_list.add(r.assets->get("wormhead"), (g.anim_tick / 10) % 2, sx, sy + 24,
+        const int hx = g.worm_vis[0] - g.cam.x + fb::W / 2;
+        const int hy = g.worm_vis[1] - g.cam.y + fb::H / 2;
+        g.draw_list.add(r.assets->get("wormhead"), (g.anim_tick / 10) % 2, hx, hy + 24,
                         light_at(g.wrm.x, g.wrm.y), 2);
     }
 }
 
-// Effects: above-scene sprites — the looming carryall shadow.
+// Effects: above-scene sprites — the carryall flies in over the countdown.
 void pass_effects(RenderCtx& r) {
     if (g.op.state == harvest::OpState::Evac && g.op.zone == g.cur_zone) {
         const int idx = g.op.y * map::W + g.op.x;
         if (r.z->vis[idx] & map::V_VISIBLE) {
             int sx, sy;
             iso::tile_to_screen(g.op.x, g.op.y, g.cam, sx, sy);
+            // approach: from the north-east sky toward the crawler as eta ticks
+            const int total = harvest::kEvacTurns;
+            const int t256 = (total - g.op.eta) * 256 / total;  // 0..256
+            const int off = (256 - t256);  // distance remaining
+            const int ax = sx - 20 + off * 2;
+            const int ay = sy - 80 - off;
             const int bob = (g.anim_tick / 12) % 3 - 1;
-            draw_sprite(r.ctx, *r.assets->get("carryall"), 0, sx - 20, sy - 80 + bob,
+            draw_sprite(r.ctx, *r.assets->get("carryall"), 0, ax, ay + bob,
                         light_at(g.op.x, g.op.y));
         }
     }
@@ -2369,8 +2425,28 @@ void pass_particles(RenderCtx& r) {
 // Lighting: M7 — per-tile light-source composition remaps this framebuffer.
 void pass_lighting(RenderCtx&) {}
 
-// Weather: the Coriolis storm — driven sand streaks + dithered haze.
+// Weather: heat shimmer, lazy wind, and the Coriolis storm.
 void pass_weather(RenderCtx& r) {
+    const bool outdoors = !(r.z->at(player_ent().x, player_ent().y) & map::TF_INDOOR);
+    if (g.storm_turns <= 0 && outdoors) {
+        // scorching-hour heat shimmer: sparse vertical pixel swaps
+        if (ambient_now() >= tune::kExposureHotThreshold) {
+            for (int i = 0; i < 220; ++i) {
+                const int x = int(g.rng.fx.below(fb::W));
+                const int y = 20 + int(g.rng.fx.below(fb::H - ui::kPanelH - 40));
+                uint8_t* px = r.ctx.frame->px;
+                const uint8_t tmp = px[y * fb::W + x];
+                px[y * fb::W + x] = px[(y + 1) * fb::W + x];
+                px[(y + 1) * fb::W + x] = tmp;
+            }
+        }
+        // a lazy grain of wind now and then
+        if (g.anim_tick % 7 == 0)
+            g.particles.spawn(fb::W - 1, int(g.rng.fx.below(fb::H - ui::kPanelH)),
+                              -(200 + int(g.rng.fx.below(200))),
+                              int(g.rng.fx.below(40)) - 20,
+                              50, uint8_t(66 + g.rng.fx.below(8)));
+    }
     if (g.storm_turns <= 0) return;
     // horizontal sand streaks (fx particles, heavy)
     for (int i = 0; i < 6; ++i)
@@ -2427,7 +2503,11 @@ void pass_ui(RenderCtx& r) {
         return;
     }
 
-    ui::HudState hud{g.pl.hp, tune::kPlayerHpMax, g.pl.water, tune::kWaterMax,
+    if (g.disp_hp < 0) { g.disp_hp = g.pl.hp * 16; g.disp_water = g.pl.water * 16; }
+    g.disp_hp += (g.pl.hp * 16 - g.disp_hp) / 8;
+    g.disp_water += (g.pl.water * 16 - g.disp_water) / 8;
+    ui::HudState hud{(g.disp_hp + 8) / 16, tune::kPlayerHpMax,
+                     (g.disp_water + 8) / 16, tune::kWaterMax,
                      g.pl.exposure, hour_now(), ambient_now(),
                      g.pl.turn / tune::kTurnsPerDay + 1,
                      (z.at(player_ent().x, player_ent().y) & map::TF_INDOOR) != 0,
@@ -2597,6 +2677,7 @@ void game_render(Framebuffer& frame) {
         case worm::State::Surfaced: shake = 2; break;
         default: break;
     }
+    if (g.microshake > 0) shake = shake > 1 ? shake : 1;
     if (shake > 0) {
         g.cam.x += int(g.rng.fx.below(uint32_t(shake * 2 + 1))) - shake;
         g.cam.y += int(g.rng.fx.below(uint32_t(shake * 2 + 1))) - shake;
