@@ -16,7 +16,7 @@ uint8_t Animator::tick(const Set* set) {
     uint8_t fired = EV_NONE;
     if (++clock >= d->ticks_per_frame) {
         clock = 0;
-        const int frames = d->sheet->frames;
+        const int frames = d->frames_per_dir();
         if (frame + 1 >= frames) {
             if (d->loop) {
                 frame = 0;
@@ -37,7 +37,15 @@ const SpriteSheet* Animator::current(const Set* set, int* frame_out) const {
     const Def* d = set->get(State(state));
     if (!d) d = set->get(State::Idle);
     if (!d) return nullptr;
-    if (frame_out) *frame_out = frame < d->sheet->frames ? frame : 0;
+    // resolve direction view + animation frame into the flat strip index
+    int f = frame < d->frames_per_dir() ? frame : 0;
+    if (d->dirs == 5) {
+        int view;
+        bool flip;
+        facing_to_view5(facing, view, flip);
+        f = view * d->frames_per_dir() + f;
+    }
+    if (frame_out) *frame_out = f;
     return d->sheet;
 }
 
@@ -70,9 +78,9 @@ bool Registry::load(const char* data_dir, const Assets& assets) {
     while (std::fgets(line, sizeof line, f)) {
         if (line[0] == '#' || line[0] == '\n' || line[0] == '\r') continue;
         char key[24], state_s[12], entry[32], loop_s[8], events[64];
-        int tpf = 10;
-        if (std::sscanf(line, "%23s %11s %31s %d %7s %63s", key, state_s, entry, &tpf,
-                        loop_s, events) != 6)
+        int tpf = 10, dirs = 1;
+        if (std::sscanf(line, "%23s %11s %31s %d %7s %d %63s", key, state_s, entry, &tpf,
+                        loop_s, &dirs, events) != 7)
             continue;
         const State st = parse_state(state_s);
         if (st == State::Count) continue;
@@ -95,6 +103,7 @@ bool Registry::load(const char* data_dir, const Assets& assets) {
         d.sheet = sheet;
         d.ticks_per_frame = uint8_t(tpf);
         d.loop = std::strcmp(loop_s, "loop") == 0;
+        d.dirs = uint8_t(dirs == 5 ? 5 : 1);
         d.event_frame = 0xFF;
         d.event = EV_NONE;
         if (events[0] != '-') {  // first event only, for now

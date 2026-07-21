@@ -1,14 +1,15 @@
-# sprite_key      state  atlas_entry            ticks_per_frame  loop  events
-# events: frame:name pairs, comma-separated, or - for none.
-player_fedaykin   idle   player_fedaykin        14  loop  -
-player_fedaykin   walk   player_fedaykin_walk   5   loop  1:footstep,3:footstep
-player_saboteur   idle   player_saboteur        14  loop  -
-player_saboteur   walk   player_saboteur_walk   5   loop  1:footstep,3:footstep
-player_sayyadina  idle   player_sayyadina       14  loop  -
-player_sayyadina  walk   player_sayyadina_walk  5   loop  1:footstep,3:footstep
-trooper           idle   trooper                16  loop  -
-trooper           walk   trooper_walk           6   loop  1:footstep,3:footstep
-hound             idle   hound                  14  loop  -
-hound             walk   hound_walk             5   loop  1:footstep,3:footstep
-hermit            idle   hermit                 12  loop  -
-hermit            walk   hermit_walk            6   loop  1:footstep,3:footstep
+# sprite_key      state  atlas_entry               tpf  loop  dirs  events
+# dirs: 1 = single view, 5 = S/SE/E/NE/N direction strip (west mirrors east)
+# events: frame:name pairs or - for none
+player_fedaykin   idle   player_fedaykin_dir       14  loop  5  -
+player_fedaykin   walk   player_fedaykin_dirwalk   5   loop  5  1:footstep,3:footstep
+player_saboteur   idle   player_saboteur_dir       14  loop  5  -
+player_saboteur   walk   player_saboteur_dirwalk   5   loop  5  1:footstep,3:footstep
+player_sayyadina  idle   player_sayyadina_dir      14  loop  5  -
+player_sayyadina  walk   player_sayyadina_dirwalk  5   loop  5  1:footstep,3:footstep
+trooper           idle   trooper_dir               16  loop  5  -
+trooper           walk   trooper_dirwalk           6   loop  5  1:footstep,3:footstep
+hound             idle   hound                     14  loop  1  -
+hound             walk   hound_walk                5   loop  1  1:footstep,3:footstep
+hermit            idle   hermit                    12  loop  1  -
+hermit            walk   hermit_walk               6   loop  1  1:footstep,3:footstep

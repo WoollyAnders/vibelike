@@ -55,6 +55,25 @@ def main():
             lines.append(f"{walk_name} {walk_name}.png {fw} {fh} 4 {ax} {ay}")
             added += 1
 
+    # directional strips get per-view walk cycles: 5 views x 4 frames = 20
+    for name in WALKERS:
+        dir_name = f"{name}_dir"
+        if dir_name not in entries:
+            continue
+        dirwalk_name = f"{name}_dirwalk"
+        _, fname, fw, fh, _, ax, ay = entries[dir_name]
+        fw, fh = int(fw), int(fh)
+        sheet = Image.open(os.path.join(RAW, fname)).convert("RGBA")
+        out = Image.new("RGBA", (fw * 20, fh), (0, 0, 0, 0))
+        for v in range(5):
+            view = sheet.crop((v * fw, 0, (v + 1) * fw, fh))
+            walk = synth_walk(view, fw, fh)
+            out.paste(walk, (v * 4 * fw, 0), walk)
+        out.save(os.path.join(RAW, f"{dirwalk_name}.png"))
+        if dirwalk_name not in entries:
+            lines.append(f"{dirwalk_name} {dirwalk_name}.png {fw} {fh} 20 {ax} {ay}")
+            added += 1
+
     with open(meta_path, "w") as f:
         f.write("\n".join(lines) + "\n")
     print(f"animsynth: walk strips written ({added} new meta entries)")

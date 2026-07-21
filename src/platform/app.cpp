@@ -624,7 +624,8 @@ int main(int argc, char** argv) {
 
     bool seamtest = false, slicetest = false, wormtest = false, autodemo = false,
          optest = false, opdemo = false, uishot = false, shieldtest = false,
-         campaigntest = false, dettest = false, ridetest = false, animdebug = false;
+         campaigntest = false, dettest = false, ridetest = false, animdebug = false,
+         circledemo = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
         if (SDL_strcmp(argv[i], "--seamtest") == 0) seamtest = true;
@@ -632,6 +633,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--wormtest") == 0) wormtest = true;
         if (SDL_strcmp(argv[i], "--autodemo") == 0) autodemo = true;
         if (SDL_strcmp(argv[i], "--opdemo") == 0) { autodemo = true; opdemo = true; }
+        if (SDL_strcmp(argv[i], "--circledemo") == 0) { autodemo = true; circledemo = true; }
         if (SDL_strcmp(argv[i], "--optest") == 0) optest = true;
         if (SDL_strcmp(argv[i], "--uishot") == 0) uishot = true;
         if (SDL_strcmp(argv[i], "--shieldtest") == 0) shieldtest = true;
@@ -686,9 +688,18 @@ int main(int argc, char** argv) {
         {Key::Glowglobe, 1}, {Key::Left, 3}, {Key::Wait, 60},
     };
     static const DemoStep kOpScript[] = {{Key::Wait, 220}};
-    const DemoStep* demo_script = opdemo ? kOpScript : kWormScript;
+    static const DemoStep kCircleScript[] = {
+        {Key::Down, 13},
+        {Key::Right, 4}, {Key::UpRight, 3}, {Key::Up, 4}, {Key::UpLeft, 3},
+        {Key::Left, 4}, {Key::DownLeft, 3}, {Key::Down, 4}, {Key::DownRight, 3},
+        {Key::Right, 4}, {Key::Up, 4}, {Key::Left, 4}, {Key::Down, 4},
+        {Key::Wait, 30},
+    };
+    const DemoStep* demo_script = opdemo ? kOpScript
+                                  : circledemo ? kCircleScript : kWormScript;
     const int demo_script_len = opdemo ? int(SDL_arraysize(kOpScript))
-                                       : int(SDL_arraysize(kWormScript));
+                                : circledemo ? int(SDL_arraysize(kCircleScript))
+                                             : int(SDL_arraysize(kWormScript));
     if (opdemo) {
         game_debug_warp(2, 2, 32);
         int st = 0, ox = 0, oy = 0;
