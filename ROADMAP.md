@@ -7,6 +7,9 @@ colormap lighting, FM-synth music. Isometric presentation, roguelike guts. C++20
 Full design details live in the project plan; this file tracks build order and exit criteria.
 Each milestone is done only when its **Exit** criterion is demonstrated in the running game.
 
+Companion roadmaps: [ROADMAP_GAMEPLAY.md](ROADMAP_GAMEPLAY.md) — the animation &
+game-feel overhaul (directional facing, attack/use animations, smooth movement).
+
 ---
 
 ## Engine milestones
