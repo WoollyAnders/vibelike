@@ -31,6 +31,7 @@ add_executable(dustfall
   src/game/game.cpp
   src/game/map.cpp
   src/game/worm.cpp
+  src/game/light.cpp
   src/game/ui.cpp
 )
 

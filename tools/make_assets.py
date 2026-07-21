@@ -562,6 +562,7 @@ SHEETS = {
     "player_fedaykin": (lambda: make_player(), 16, 32, 4, 8, 30),
     "player_saboteur": (lambda: make_player(), 16, 32, 4, 8, 30),
     "player_sayyadina": (lambda: make_player(), 16, 32, 4, 8, 30),
+    "glowglobe": (lambda: make_thumper(), 12, 18, 1, 6, 14),
     "ui_panel": (lambda: make_ui_panel(), 320, 22, 1, 0, 0),
     "ui_socket": (lambda: make_ui_socket(), 22, 22, 1, 11, 11),
     "ui_plaque": (lambda: make_ui_plaque(), 120, 12, 1, 0, 0),

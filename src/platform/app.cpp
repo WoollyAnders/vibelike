@@ -143,6 +143,7 @@ constexpr Binding kBindings[] = {
     {SDL_SCANCODE_T, Key::Thumper},
     {SDL_SCANCODE_B, Key::Plant},
     {SDL_SCANCODE_V, Key::Poison},
+    {SDL_SCANCODE_L, Key::Glowglobe},
     {SDL_SCANCODE_F5, Key::Save},
     {SDL_SCANCODE_F9, Key::Load},
 };
@@ -451,8 +452,8 @@ int main(int argc, char** argv) {
     // and watches it play out. Purely for demos/screenshots.
     struct DemoStep { Key key; int count; };
     static const DemoStep kWormScript[] = {
-        {Key::Down, 13}, {Key::Right, 8}, {Key::Thumper, 1}, {Key::Left, 7},
-        {Key::Wait, 60},
+        {Key::Down, 13}, {Key::Right, 8}, {Key::Thumper, 1}, {Key::Left, 4},
+        {Key::Glowglobe, 1}, {Key::Left, 3}, {Key::Wait, 60},
     };
     static const DemoStep kOpScript[] = {{Key::Wait, 220}};
     const DemoStep* demo_script = opdemo ? kOpScript : kWormScript;
