@@ -11,7 +11,7 @@ enum class Key : uint8_t {
     Wait,
     Confirm, Cancel,
     Inventory, Look, Powers, Sandwalk, Map, Harvest, Thumper, Plant, Poison,
-    Glowglobe,
+    Glowglobe, Ride,
     Save, Load,
     Count
 };

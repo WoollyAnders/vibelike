@@ -91,6 +91,21 @@ SPRITES = {
                 "over desert gear, goggles pushed up, sly grin, one hand "
                 "resting on a strongbox, full body, isolated figure on a "
                 "fully transparent background, no scene",
+    "panadder": "a venomous desert viper snake coiled to strike, dusty "
+                "sand-colored scales with darker diamond pattern, isolated "
+                "creature on a fully transparent background, no scene",
+    "hermit":  "a wild-eyed emaciated desert hermit in shredded rags, skin "
+               "stained faint cinnamon-orange, clutching a crooked staff, "
+               "hunched and twitching, full body, isolated figure on a fully "
+               "transparent background, no scene",
+    "hunterseeker": "a sinister sliver-thin hovering assassin drone, dark "
+                    "needle-like metal body with a single glowing red sensor "
+                    "eye, floating vertically, isolated object on a fully "
+                    "transparent background, no scene",
+    "spicecache": "a small mound of glittering rust-red crystalline spice "
+                  "granules heaped on the ground, faintly luminous cinnamon "
+                  "crystals, isolated on a fully transparent background, "
+                  "no scene",
 }
 
 # UI elements: stretched to fill their exact frame (no aspect-fit).

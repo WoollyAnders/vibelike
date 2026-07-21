@@ -24,7 +24,8 @@ constexpr int kMaxEnts = 64;
 constexpr int kMaxDeltas = 192;
 
 enum class EType : uint8_t { None = 0, Player, Hound, Corpse, Thumper, Trooper, Spotter,
-                             Glowglobe, ShieldTrooper, Naib, Sayyadina, Smuggler };
+                             Glowglobe, ShieldTrooper, Naib, Sayyadina, Smuggler,
+                             PanAdder, Hermit, HunterSeeker, SpiceCache };
 enum class Ai : uint8_t { Idle = 0, Wander, Hunt, Guard };
 
 struct Entity {
@@ -65,6 +66,15 @@ struct Player {
     int spice = 0;     // grains
     int glowglobes = 2;
     int atk = tune::kPlayerAtk;
+    bool maker_hooks = false;  // Honored: the right to ride
+    bool riding = false;
+    int ride_turns = 0;
+    int tox = 0;               // spice tolerance burn, decays 1/turn
+    int tox_lifetime = 0;      // total ever — the Eyes come at 40
+    bool eyes_ibad = false;
+    int litany_turns = 0;      // active suppression
+    int litany_day = -1;       // last day the Litany was spoken
+    int free_moves = 0;        // Threadwalk strides (no world advance)
     Background background = Background::Fedaykin;
     bool sandwalk = false;
     bool dead = false;
@@ -121,6 +131,16 @@ struct GameState {
     int menu_open = 0;         // 0 none / 1 naib / 2 sayyadina / 3 smuggler
     int menu_sel = 0;
     int last_decay_day = 0;
+
+    // Naib task: 0 none, 1 kill hounds, 2 gather spice, 3 quiet denial
+    int quest_kind = 0;
+    int quest_need = 0;
+    int quest_progress = 0;
+
+    int storm_turns = 0;       // M5: Coriolis storm remaining
+    int poison_turns = 0;      // pan adder venom: +thirst while active
+    int16_t thopter_x = -1, thopter_y = 0;  // ornithopter sweep during alarms
+    int8_t thopter_dx = 1;
     uint8_t noise_meter = 0;          // HUD value (near player)
     uint8_t seismo[64] = {};          // history ring for the trace
     uint8_t seismo_head = 0;
@@ -134,6 +154,8 @@ struct GameState {
     particles::Pool particles;
     ui::Log log;
 
+    int current_song = -1;
+    int16_t hover_tx = -1, hover_ty = -1;
     int anim_tick = 0;
     int fade = 0;
     uint8_t fade_r = 255, fade_g = 255, fade_b = 255;
@@ -164,7 +186,8 @@ int hour_now() { return (g.pl.turn % tune::kTurnsPerDay) * 24 / tune::kTurnsPerD
 bool is_night() { return ambient_now() <= 2; }
 
 int fov_radius() {
-    if (g.pl.water <= 0) return tune::kFovDehydrated;
+    if (g.storm_turns > 0) return 3;  // the storm swallows the world
+    if (g.pl.water <= 0 && g.pl.litany_turns == 0) return tune::kFovDehydrated;
     return is_night() ? tune::kFovNight : tune::kFovDay;
 }
 
@@ -226,6 +249,27 @@ void spawn_zone_wildlife(uint8_t zone_id) {
                     int16_t(x), int16_t(y), tune::kHoundHp, 0, 0};
         ++placed;
     }
+    // ambush adders (wormier zones have more) and the odd spice-mad hermit
+    const int adders = zone_id == map::kZoneDeepPan ? 3 : 1;
+    for (int i = 0, tries = 0; i < adders && tries < 400; ++tries) {
+        const int x = g.rng.world.range(6, map::W - 2);
+        const int y = g.rng.world.range(2, map::H - 2);
+        if (!z.walkable(x, y) || entity_at(x, y, zone_id)) continue;
+        if (Entity* e = alloc_entity()) {
+            *e = Entity{EType::PanAdder, Ai::Idle, zone_id, int16_t(x), int16_t(y), 3, 0, 0};
+            ++i;
+        }
+    }
+    if (g.rng.world.chance(1, 2))
+        for (int tries = 0; tries < 200; ++tries) {
+            const int x = g.rng.world.range(10, map::W - 4);
+            const int y = g.rng.world.range(4, map::H - 4);
+            if (!z.walkable(x, y) || entity_at(x, y, zone_id)) continue;
+            if (Entity* e = alloc_entity())
+                *e = Entity{EType::Hermit, Ai::Wander, zone_id, int16_t(x), int16_t(y),
+                            8, 0, int16_t(g.rng.world.range(5, 8))};
+            break;
+        }
 }
 
 // Place a harvest op in a zone: crawler on open sand, spotters on the nearest
@@ -477,6 +521,10 @@ void recompute_light() {
         }
     }
 
+    // ornithopter searchlight
+    if (g.thopter_x >= 0 && n < 39)
+        srcs[n++] = {g.thopter_x, g.thopter_y, 4, 30, 0};
+
     // transient flashes
     for (int i = 0; i < g.flash_count && n < 40; ++i) srcs[n++] = g.flashes[i];
 
@@ -568,8 +616,9 @@ void raise_standing(int amount) {
         g.season.standing >= campaign::kStandingCrysknifeAt) {
         g.season.crysknife_granted = 1;
         g.pl.atk += 2;
+        g.pl.maker_hooks = true;
         g.log.push("The Naib unwraps a pale blade. 'Honored one. It is yours.'");
-        g.log.push("Crysknife taken: your strikes bite deeper.");
+        g.log.push("Crysknife and MAKER HOOKS taken. R mounts a surfaced worm.");
     }
 }
 
@@ -582,6 +631,15 @@ void op_denied(const char* how) {
 
     ++g.season.denied;
     raise_standing(campaign::kStandingPerDenial);
+    // quest: the quiet denial
+    if (g.quest_kind == 3) {
+        const bool quiet = g.op.spotters_knifed || g.op.poisoned;
+        if (quiet) {
+            g.quest_kind = 0;
+            raise_standing(15);
+            g.log.push("The Naib nods once. Quiet work. +15 standing.");
+        }
+    }
     int alert_gain = campaign::kAlertWormBait;
     if (g.op.poisoned && g.op.state == harvest::OpState::Shipped) alert_gain = 0;
     else if (g.op.state == harvest::OpState::Destroyed && g.op.plant_progress >= 3)
@@ -590,6 +648,7 @@ void op_denied(const char* how) {
         alert_gain = campaign::kAlertQuietWorm;
     raise_alert(alert_gain);
 
+    if (g.pl.eyes_ibad) alert_gain += alert_gain > 0 ? 1 : 0;  // a marked face
     if (g.op.mutators & campaign::MUT_CLIMAX) {
         end_season(campaign::kVictory);
         return;
@@ -763,6 +822,7 @@ void op_turn() {
             break;
         case harvest::OpState::Evac:
             g.noise.add(op.x, op.y, 8);  // idling engines
+            if (g.storm_turns > 0) break;  // carryalls don't fly in a Coriolis
             if (--op.eta <= 0) {
                 op.state = harvest::OpState::Shipped;
                 if (op.poisoned) {
@@ -806,6 +866,94 @@ void alarm_turn() {
             g.log.push("An ornithopter thunders over - troopers rope down!");
             g.services.mixer->push({audio::Cmd::PlaySfx, 0, 160, 150});
         }
+    }
+}
+
+// The pan adder strikes what steps close; the hermit shambles; the seeker homes.
+void critter_act(Entity& e) {
+    const map::Zone& z = zone();
+    const Entity& p = player_ent();
+    const int pdist = g.dmap[e.y * map::W + e.x];
+
+    if (e.type == EType::HunterSeeker) {
+        if (pdist == 1) {
+            g.log.push("The sliver strikes like a wasp - and spends itself.");
+            damage_player(4, "A hunter-seeker found its mark.");
+            e.type = EType::None;
+            return;
+        }
+        int best_x = e.x, best_y = e.y;
+        int16_t best = pdist >= 0 ? pdist : INT16_MAX;
+        for (int dy = -1; dy <= 1; ++dy)
+            for (int dx = -1; dx <= 1; ++dx) {
+                if (!dx && !dy) continue;
+                const int nx = e.x + dx, ny = e.y + dy;
+                if (!z.walkable(nx, ny) || entity_at(nx, ny, e.zone)) continue;
+                if (nx == p.x && ny == p.y) continue;
+                const int16_t d = g.dmap[ny * map::W + nx];
+                if (d >= 0 && d < best) { best = d; best_x = nx; best_y = ny; }
+            }
+        e.x = int16_t(best_x);
+        e.y = int16_t(best_y);
+        return;
+    }
+
+    if (e.type == EType::PanAdder) {
+        if (pdist == 1 && g.rng.combat.chance(2, 3)) {
+            g.log.push("The pan adder STRIKES - venom burns in your blood.");
+            damage_player(1, "Venom in the blood, sand in the mouth.");
+            g.poison_turns = 20;
+        }
+        return;  // ambusher: it does not chase
+    }
+
+    if (e.type == EType::Hermit) {
+        if (pdist == 1) {
+            const int dmg = g.rng.combat.range(2, 4);
+            g.log.push("The spice-mad hermit claws at you, shrieking prophecy!");
+            damage_player(dmg, "Beaten down by a prophet of the sand.");
+            return;
+        }
+        if (g.rng.combat.chance(1, 2)) {
+            const int dx = g.rng.combat.range(-1, 1), dy = g.rng.combat.range(-1, 1);
+            const int nx = e.x + dx, ny = e.y + dy;
+            if (z.walkable(nx, ny) && !entity_at(nx, ny, e.zone) &&
+                !(nx == p.x && ny == p.y)) {
+                e.x = int16_t(nx);
+                e.y = int16_t(ny);
+            }
+        }
+        return;
+    }
+}
+
+// Ornithopter sweep: while the alarm is up (and no storm), a searchlight
+// quarters the zone. Caught in the beam = reinforcements on your head.
+void thopter_turn() {
+    if (g.alarm_turns <= 0 || g.storm_turns > 0 || g.cur_zone == map::kZoneSietch) {
+        g.thopter_x = -1;
+        return;
+    }
+    if (g.thopter_x < 0) {
+        g.thopter_x = 0;
+        g.thopter_y = int16_t(g.rng.combat.range(8, map::H - 8));
+        g.thopter_dx = 1;
+        g.log.push("Engine drone overhead - a thopter begins its sweep.");
+    }
+    g.thopter_x = int16_t(g.thopter_x + g.thopter_dx * 3);
+    if (g.thopter_x >= map::W) {
+        g.thopter_x = 0;
+        g.thopter_y = int16_t(g.rng.combat.range(8, map::H - 8));
+    }
+    const Entity& p = player_ent();
+    const int dx = p.x - g.thopter_x, dy = p.y - g.thopter_y;
+    const bool indoors = (zone().at(p.x, p.y) & map::TF_INDOOR) != 0;
+    if (dx * dx + dy * dy <= 9 && !indoors) {
+        g.log.push("The searchlight pins you! Voices scream coordinates.");
+        g.alarm_turns += 15;
+        if (g.alarm_turns > 90) g.alarm_turns = 90;
+        raise_alert(1);
+        g.alarm_spawn_cd = 1;  // reinforcements immediately
     }
 }
 
@@ -866,6 +1014,7 @@ void upkeep() {
     else if (floor <= 2 || floor == 5 || floor == 6) base = tune::kThirstSand;
     const int amb = ambient_now();
     int drain = base * tune::kThirstHeatMul4[amb] * tune::kSuitTier1Mul4 / 16;
+    if (g.pl.tox > 60) drain = drain * 3 / 2;  // the spice burns water
     if (base > 0 && drain < 1) drain = 1;
     g.pl.water -= drain;
     if (g.pl.water < 0) g.pl.water = 0;
@@ -876,10 +1025,54 @@ void upkeep() {
         g.log.push("Your water is nearly gone.");
     }
 
+    // quest: gather spice (progress = spice gained since taking the task)
+    if (g.quest_kind == 2 && g.quest_progress + g.pl.spice >= g.quest_need) {
+        g.quest_kind = 0;
+        raise_standing(12);
+        g.log.push("Grains enough for the Sayyadina's rites. +12 standing.");
+    }
+
+    // spice tolerance burns down; the Litany holds the body together
+    if (g.pl.tox > 0) --g.pl.tox;
+    if (g.pl.litany_turns > 0) --g.pl.litany_turns;
+    if (!g.pl.eyes_ibad && g.pl.tox_lifetime >= 40) {
+        g.pl.eyes_ibad = true;
+        g.log.push("Your reflection in a blade: eyes gone BLUE WITHIN BLUE.");
+        g.log.push("The tribe will know you. So will the Harkonnens.");
+    }
+    if (g.pl.tox > 60 && (g.pl.turn % 7) == 0 && g.pl.litany_turns == 0) {
+        static const char* kVisions[4] = {
+            "The dunes breathe. You are sure of it.",
+            "A voice you buried speaks your water-name.",
+            "Futures branch before you like cracked glass.",
+            "The sun blinks. Slowly. Like an eye.",
+        };
+        g.log.push("%s", kVisions[g.rng.fx.below(4)]);
+    }
+
+    // pan adder venom burns water
+    if (g.poison_turns > 0) {
+        --g.poison_turns;
+        g.pl.water -= 1;
+        if (g.pl.water < 0) g.pl.water = 0;
+    }
+
+    // storm scour: sand-blast exposure regardless of hour
+    if (g.storm_turns > 0) {
+        --g.storm_turns;
+        if (g.storm_turns == 0) g.log.push("The storm passes. The desert exhales.");
+        if (!(tf & (map::TF_INDOOR | map::TF_SHADE))) {
+            g.pl.exposure += 2;
+            if (g.pl.exposure > 100) g.pl.exposure = 100;
+        }
+        g.noise.decay();  // the roar swallows every other sound
+    }
+
     // heat exposure
     const bool sheltered = (tf & (map::TF_INDOOR | map::TF_SHADE)) != 0;
     if (amb >= tune::kExposureHotThreshold && !sheltered) {
-        g.pl.exposure += tune::kExposureGain;
+        g.pl.exposure += g.pl.litany_turns > 0 ? tune::kExposureGain / 2
+                                               : tune::kExposureGain;
         if (g.pl.exposure == tune::kExposureGain)
             g.log.push("The sun hammers down. Find shade.");
     } else {
@@ -928,6 +1121,15 @@ void advance_world() {
             }
             continue;
         }
+        if (e.type == EType::PanAdder || e.type == EType::Hermit ||
+            e.type == EType::HunterSeeker) {
+            e.energy += int16_t(e.type == EType::HunterSeeker ? 150 : 100);
+            while (e.energy >= 100 && !g.pl.dead) {
+                e.energy -= 100;
+                critter_act(e);
+            }
+            continue;
+        }
         if (e.type != EType::Hound) continue;
         e.energy += 100;
         while (e.energy >= 100 && !g.pl.dead) {
@@ -938,11 +1140,13 @@ void advance_world() {
 
     op_turn();
     alarm_turn();
+    thopter_turn();
     season_turn();
 
-    // the worm's turn (also decays the noise field)
+    // the worm's turn (also decays the noise field); a ridden worm obeys
     const worm::State before = g.wrm.state;
-    worm::turn(g.wrm, g.noise, zone(), g.rng.combat, worm_tuning(), worm_callbacks());
+    if (g.pl.riding) g.noise.decay();
+    else worm::turn(g.wrm, g.noise, zone(), g.rng.combat, worm_tuning(), worm_callbacks());
     if (g.wrm.state != before) {
         int intensity = 0;
         switch (g.wrm.state) {
@@ -962,6 +1166,18 @@ void advance_world() {
     // hour changed? re-cast the shadows
     if (hour_now() != g.shade_hour) recompute_shade(g.cur_zone, hour_now());
 
+    // context music: the sietch is home, wormsign is dread, the erg is vast
+    {
+        int want = 0;  // ambient
+        if (g.cur_zone == map::kZoneSietch) want = 1;
+        else if (int(g.wrm.state) >= int(worm::State::Hunting) || g.alarm_turns > 0 ||
+                 g.storm_turns > 0) want = 2;
+        if (want != g.current_song) {
+            g.current_song = want;
+            g.services.mixer->push({audio::Cmd::PlaySong, uint8_t(want), 0, 0});
+        }
+    }
+
     // HUD meter + seismograph history
     const int nn = g.noise.near(player_ent().x, player_ent().y, 3);
     g.noise_meter = uint8_t(nn > 100 ? 100 : nn);
@@ -969,6 +1185,112 @@ void advance_world() {
     g.seismo_head = (g.seismo_head + 1) & 63;
 
     refresh_fov_and_paths();
+}
+
+// ---- worm-riding ---------------------------------------------------------------
+
+constexpr int kMaxRideTurns = 40;
+
+bool worm_rideable_at(int x, int y) {
+    if (g.wrm.state != worm::State::Surfaced) return false;
+    const int dx0 = x - g.wrm.x, dy0 = y - g.wrm.y;
+    if (dx0 * dx0 <= 1 && dy0 * dy0 <= 1) return true;
+    for (int i = 0; i < worm::kSegments; ++i) {
+        const int dx = x - g.wrm.seg_x[i], dy = y - g.wrm.seg_y[i];
+        if (dx * dx <= 1 && dy * dy <= 1) return true;
+    }
+    return false;
+}
+
+void dismount(const char* why) {
+    g.pl.riding = false;
+    g.pl.ride_turns = 0;
+    // land beside the head on the first walkable tile
+    Entity& p = player_ent();
+    for (int r = 1; r <= 4; ++r)
+        for (int dy = -r; dy <= r; ++dy)
+            for (int dx = -r; dx <= r; ++dx) {
+                const int nx = g.wrm.x + dx, ny = g.wrm.y + dy;
+                if (!zone().walkable(nx, ny) || entity_at(nx, ny, g.cur_zone)) continue;
+                p.x = int16_t(nx);
+                p.y = int16_t(ny);
+                g.log.push("%s", why);
+                return;
+            }
+    g.log.push("%s", why);
+}
+
+void try_ride() {
+    Entity& p = player_ent();
+    if (g.pl.riding) {
+        dismount("You plant the hooks and slide down the flank.");
+        advance_world();
+        return;
+    }
+    if (!g.pl.maker_hooks) {
+        g.log.push("You have no maker hooks. The tribe grants them to the Honored.");
+        return;
+    }
+    if (!worm_rideable_at(p.x, p.y)) {
+        g.log.push("No surfaced worm in reach of your hooks.");
+        return;
+    }
+    g.pl.riding = true;
+    g.pl.ride_turns = 0;
+    g.log.push("Hooks bite between the rings. The desert tilts - YOU RIDE.");
+    g.services.mixer->push({audio::Cmd::PlaySfx, 0, 255, 90});
+    flash(240, 220, 120);
+    advance_world();
+}
+
+// Steer the ridden worm: the head takes two strides, the body follows, and
+// everything on sand beneath it dies. The rider makes no noise of their own.
+void ride_move(int dx, int dy) {
+    const worm::Callbacks cb = worm_callbacks();
+    for (int step = 0; step < 2; ++step) {
+        const int nx = g.wrm.x + dx, ny = g.wrm.y + dy;
+        if (nx < 1 || nx >= map::W - 1 || ny < 1 || ny >= map::H - 1) break;
+        const uint8_t floor = zone().floor[ny * map::W + nx];
+        const bool sand = floor <= 2 || floor == 5 || floor == 6;
+        if (!sand && !g.op.tile_on(nx, ny)) {
+            if (step == 0) g.log.push("The worm shies from the rock.");
+            break;
+        }
+        for (int i = worm::kSegments - 1; i > 0; --i) {
+            g.wrm.seg_x[i] = g.wrm.seg_x[i - 1];
+            g.wrm.seg_y[i] = g.wrm.seg_y[i - 1];
+        }
+        g.wrm.seg_x[0] = g.wrm.x;
+        g.wrm.seg_y[0] = g.wrm.y;
+        g.wrm.x = int16_t(nx);
+        g.wrm.y = int16_t(ny);
+        // crush everything but the rider
+        for (Entity& e : g.ents) {
+            if (e.type == EType::None || e.type == EType::Player) continue;
+            if (e.zone != g.cur_zone || e.x != nx || e.y != ny) continue;
+            if (e.type == EType::Trooper || e.type == EType::ShieldTrooper)
+                g.log.push("A trooper vanishes beneath you. A good sound.");
+            e.type = EType::None;
+        }
+        if (g.op.live() && g.op.zone == g.cur_zone && g.op.tile_on(nx, ny)) {
+            g.op.state = harvest::OpState::Destroyed;
+            op_denied("You drive the Maker THROUGH the crawler.");
+        }
+        worm_cb_churn(nullptr, nx, ny);
+    }
+    // the rider goes where the worm goes
+    player_ent().x = g.wrm.x;
+    player_ent().y = g.wrm.y;
+    g.wrm.timer = 12;  // stays surfaced while ridden
+
+    if (++g.pl.ride_turns >= kMaxRideTurns) {
+        dismount("The Maker tires and bucks you into the sand. It dives.");
+        g.wrm.state = worm::State::Dormant;
+        g.noise.clear();
+        g.services.mixer->push({audio::Cmd::Rumble, 0, 0, 0});
+    }
+    advance_world();
+    (void)cb;
 }
 
 bool worm_occupies(int x, int y) {
@@ -1011,6 +1333,63 @@ void enter_zone(uint8_t id, bool use_spawn, int at_x = 0, int at_y = 0) {
     }
     p.zone = id;
     recompute_shade(id, hour_now());
+
+    // one weighted desert-event roll per entry (outdoors only)
+    g.storm_turns = 0;
+    if (id != map::kZoneSietch) {
+        const int roll = int(g.rng.world.below(100));
+        if (roll < 12) {
+            g.storm_turns = g.rng.world.range(60, 120);
+            g.log.push("The horizon goes brown-black. CORIOLIS STORM.");
+            g.log.push("Sight dies, flesh scours - but so does every eye and ear.");
+        } else if (roll < 22) {
+            // spice blow eruption: riches and a ringing dinner bell
+            int bx = 0, by = 0;
+            for (int tries = 0; tries < 60; ++tries) {
+                const int x = p.x + g.rng.world.range(-16, 16);
+                const int y = p.y + g.rng.world.range(-16, 16);
+                if (x < 2 || x >= map::W - 2 || y < 2 || y >= map::H - 2) continue;
+                const uint8_t fl = zone().floor[y * map::W + x];
+                if (!zone().walkable(x, y) || (fl != 0 && fl != 1 && fl != 2)) continue;
+                bx = x; by = y;
+                break;
+            }
+            if (bx) {
+                g.log.push("The ground BURSTS - a spice blow erupts to the %s!",
+                           bx > p.x ? "east" : "west");
+                g.noise.add(bx, by, 250);
+                add_flash(bx, by, 8, 26, 3);
+                const int piles = g.rng.world.range(3, 5);
+                for (int i = 0; i < piles; ++i) {
+                    const int cx = bx + g.rng.world.range(-2, 2);
+                    const int cy = by + g.rng.world.range(-2, 2);
+                    if (!zone().walkable(cx, cy) || entity_at(cx, cy, id)) continue;
+                    worm_cb_churn(nullptr, cx, cy);
+                    if (Entity* e = alloc_entity())
+                        *e = Entity{EType::SpiceCache, Ai::Idle, id,
+                                    int16_t(cx), int16_t(cy), 1, 0, 2};
+                }
+            }
+        } else if (roll < 28 && g.season.alert >= 60) {
+            for (int tries = 0; tries < 40; ++tries) {
+                const int x = p.x + g.rng.world.range(-12, 12);
+                const int y = p.y + g.rng.world.range(-12, 12);
+                if (!zone().walkable(x, y) || entity_at(x, y, id)) continue;
+                if (Entity* e = alloc_entity()) {
+                    *e = Entity{EType::HunterSeeker, Ai::Hunt, id,
+                                int16_t(x), int16_t(y), 1, 0, 0};
+                    g.log.push("A metallic whine - HUNTER-SEEKER on the wind!");
+                }
+                break;
+            }
+        } else if (roll < 36) {
+            g.pl.water += 150;
+            if (g.pl.water > tune::kWaterMax) g.pl.water = tune::kWaterMax;
+            raise_standing(2);
+            g.log.push("A Fremen scout melts from the rocks, shares water, is gone.");
+        }
+    }
+
     refresh_fov_and_paths();
     flash(10, 10, 10);
 }
@@ -1065,6 +1444,9 @@ void try_move(int dx, int dy) {
     if (!victim) victim = entity_at(nx, ny, g.cur_zone, EType::Trooper);
     if (!victim) victim = entity_at(nx, ny, g.cur_zone, EType::Spotter);
     if (!victim) victim = entity_at(nx, ny, g.cur_zone, EType::ShieldTrooper);
+    if (!victim) victim = entity_at(nx, ny, g.cur_zone, EType::PanAdder);
+    if (!victim) victim = entity_at(nx, ny, g.cur_zone, EType::Hermit);
+    if (!victim) victim = entity_at(nx, ny, g.cur_zone, EType::HunterSeeker);
     if (victim) {
         if (victim->type == EType::ShieldTrooper && !g.pl.sandwalk) {
             g.log.push("Your quick blade GLANCES off the shield shimmer.");
@@ -1080,6 +1462,11 @@ void try_move(int dx, int dy) {
             switch (victim->type) {
                 case EType::Hound:
                     g.log.push("The dust hound collapses. Its water is yours.");
+                    if (g.quest_kind == 1 && ++g.quest_progress >= g.quest_need) {
+                        g.quest_kind = 0;
+                        raise_standing(12);
+                        g.log.push("The catch-basins are safe. The Naib hears. +12 standing.");
+                    }
                     break;
                 case EType::Trooper:
                     g.log.push("The trooper falls. His water belongs to the tribe now.");
@@ -1090,13 +1477,35 @@ void try_move(int dx, int dy) {
                 case EType::Spotter:
                     g.log.push("The spotter crumples. No eyes on the sand now.");
                     break;
+                case EType::PanAdder:
+                    g.log.push("You pin the adder behind the head. Still.");
+                    break;
+                case EType::Hermit:
+                    g.log.push("The hermit falls, laughing. His rags spill SPICE.");
+                    break;
+                case EType::HunterSeeker:
+                    g.log.push("You swat the sliver from the air. Fine work.");
+                    raise_standing(2);
+                    break;
                 default: break;
             }
+            if (g.season.crysknife_granted &&
+                (victim->type == EType::Trooper || victim->type == EType::ShieldTrooper))
+                raise_standing(1);  // the crysknife drinks; the tribe sees
             const bool was_spotter = victim->type == EType::Spotter;
-            const int16_t yield_ = victim->type == EType::Hound
-                                       ? int16_t(tune::kCorpseWaterHound) : int16_t(140);
-            *victim = Entity{EType::Corpse, Ai::Idle, uint8_t(g.cur_zone),
-                             victim->x, victim->y, 0, 0, yield_};
+            if (victim->type == EType::HunterSeeker) {
+                victim->type = EType::None;  // machines leave no water
+            } else if (victim->type == EType::Hermit) {
+                *victim = Entity{EType::SpiceCache, Ai::Idle, uint8_t(g.cur_zone),
+                                 victim->x, victim->y, 1, 0,
+                                 int16_t(victim->data > 0 ? victim->data : 6)};
+            } else {
+                const int16_t yield_ =
+                    victim->type == EType::Hound ? int16_t(tune::kCorpseWaterHound)
+                    : victim->type == EType::PanAdder ? int16_t(20) : int16_t(140);
+                *victim = Entity{EType::Corpse, Ai::Idle, uint8_t(g.cur_zone),
+                                 victim->x, victim->y, 0, 0, yield_};
+            }
             if (was_spotter && !spotters_alive() && g.op.live())
                 g.op.spotters_knifed = true;  // the quiet route
         } else {
@@ -1133,6 +1542,11 @@ void try_move(int dx, int dy) {
     if (entity_at(nx, ny, g.cur_zone, EType::Corpse))
         g.log.push("A corpse lies here. G harvests its water.");
 
+    if (g.pl.free_moves > 0) {  // Threadwalk: the world holds its breath
+        --g.pl.free_moves;
+        refresh_fov_and_paths();
+        return;
+    }
     advance_world();
     if (g.pl.sandwalk && !g.pl.dead) advance_world();  // slow, broken rhythm
 }
@@ -1240,6 +1654,15 @@ void try_harvest() {
         advance_world();
         return;
     }
+    if (Entity* cache = entity_at(p.x, p.y, g.cur_zone, EType::SpiceCache)) {
+        g.pl.spice += cache->data;
+        g.log.push("You scoop %d grains of raw spice from the sand.", int(cache->data));
+        cache->type = EType::None;
+        g.noise.add(p.x, p.y, 6);
+        g.services.mixer->push({audio::Cmd::PlaySfx, 1, 150, 140});
+        advance_world();
+        return;
+    }
     if (Entity* c = entity_at(p.x, p.y, g.cur_zone, EType::Corpse)) {
         g.pl.water += c->data;
         if (g.pl.water > tune::kWaterMax) g.pl.water = tune::kWaterMax;
@@ -1286,8 +1709,59 @@ void game_init(uint64_t seed, const GameServices& services) {
     g.cam.y = py - fb::H / 2;
 }
 
+const char* describe_at(int tx, int ty) {
+    if (tx < 0 || tx >= map::W || ty < 0 || ty >= map::H) return nullptr;
+    if (!(zone().vis[ty * map::W + tx] & (map::V_VISIBLE | map::V_REMEMBERED)))
+        return nullptr;
+    for (const Entity& e : g.ents) {
+        if (e.type == EType::None || e.zone != g.cur_zone) continue;
+        if (e.x != tx || e.y != ty) continue;
+        switch (e.type) {
+            case EType::Player: return "you";
+            case EType::Hound: return "dust hound";
+            case EType::Corpse: return "corpse (G: deathstill)";
+            case EType::Thumper: return "thumper, pounding";
+            case EType::Trooper: return "Harkonnen trooper";
+            case EType::ShieldTrooper: return "SHIELDED trooper (slow blade!)";
+            case EType::Spotter: return "Harkonnen spotter";
+            case EType::Glowglobe: return "glowglobe (L: retrieve)";
+            case EType::Naib: return "the Naib";
+            case EType::Sayyadina: return "the Sayyadina";
+            case EType::Smuggler: return "Greybeard the smuggler";
+            case EType::PanAdder: return "pan adder - give it room";
+            case EType::Hermit: return "spice-mad hermit";
+            case EType::HunterSeeker: return "HUNTER-SEEKER";
+            case EType::SpiceCache: return "raw spice (G: gather)";
+            default: break;
+        }
+    }
+    if (g.op.live() && g.op.zone == g.cur_zone && g.op.tile_on(tx, ty))
+        return "harvester crawler";
+    if (worm_occupies(tx, ty)) return "SHAI-HULUD";
+    const uint8_t fl = zone().floor[ty * map::W + tx];
+    const uint8_t tf = zone().at(tx, ty);
+    if (tf & map::TF_DOOR) return "passage";
+    if (tf & map::TF_CISTERN) return "the cistern";
+    if (tf & map::TF_ROCKPROP) return "rock outcrop (worm-safe)";
+    if (tf & map::TF_WALL) return "carved stone";
+    switch (fl) {
+        case 3: case 4: return "rock ground (worm-safe)";
+        case 5: return "spice-veined sand";
+        case 6: return "drum sand - LOUD underfoot";
+        case 8: return "sietch floor";
+        default: return "open sand";
+    }
+}
+
 bool game_update(const InputState& in) {
     ++g.anim_tick;
+    g.hover_tx = -1;
+    if (in.mouse_x >= 0 && !g.choosing && !g.menu_open) {
+        int tx, ty;
+        iso::screen_to_tile(in.mouse_x, in.mouse_y, g.cam, tx, ty);
+        g.hover_tx = int16_t(tx);
+        g.hover_ty = int16_t(ty);
+    }
     if (g.fade > 0) g.fade -= 6;
 
     if (g.choosing) {
@@ -1310,7 +1784,7 @@ bool game_update(const InputState& in) {
 
     // vendor menus pause the world (browsing is free)
     if (g.menu_open) {
-        const int counts[4] = {0, 3, 3, 5};  // options incl. Leave
+        const int counts[5] = {0, 4, 3, 5, 4};  // options incl. Leave
         const int n = counts[g.menu_open];
         if (in.was_pressed(Key::Up)) g.menu_sel = (g.menu_sel + n - 1) % n;
         if (in.was_pressed(Key::Down)) g.menu_sel = (g.menu_sel + 1) % n;
@@ -1334,11 +1808,31 @@ bool game_update(const InputState& in) {
                                    ? "'Their great harvest comes. Be ready.'"
                                    : "'Bleed them slowly. Water discipline.'");
                     break;
-                case 12: g.menu_open = 0; break;  // leave
+                case 12:  // Naib: a task for the tribe
+                    if (g.quest_kind != 0) {
+                        g.log.push("'Finish what you carry first.'");
+                    } else {
+                        const int pick = int(g.rng.world.below(3));
+                        g.quest_kind = pick + 1;
+                        g.quest_progress = 0;
+                        if (g.quest_kind == 1) {
+                            g.quest_need = 3;
+                            g.log.push("'Dust hounds raid our catch-basins. Kill three.'");
+                        } else if (g.quest_kind == 2) {
+                            g.quest_need = 8;
+                            g.quest_progress = -g.pl.spice;  // count what you gather anew
+                            g.log.push("'Bring the Sayyadina eight grains of spice.'");
+                        } else {
+                            g.quest_need = 1;
+                            g.log.push("'Deny the next harvest QUIETLY. No spectacle.'");
+                        }
+                    }
+                    break;
+                case 13: g.menu_open = 0; break;  // leave
                 case 20:  // Sayyadina: spice tribute
                     if (g.pl.spice >= 5) {
                         g.pl.spice -= 5;
-                        raise_standing(12);
+                        raise_standing(g.pl.eyes_ibad ? 15 : 12);
                         g.log.push("Blue eyes hold yours. 'The tribe sees you.' +12 standing.");
                     } else {
                         g.log.push("'Bring spice when you have it to give.'");
@@ -1377,6 +1871,43 @@ bool game_update(const InputState& in) {
                     else g.log.push("'Three grains and it's yours.'");
                     break;
                 case 34: g.menu_open = 0; break;
+                case 40:  // Farsight: the spice unfolds the map
+                    if (g.pl.spice >= 2) {
+                        g.pl.spice -= 2;
+                        g.pl.tox += 10;
+                        g.pl.tox_lifetime += 10;
+                        for (int i = 0; i < map::N; ++i)
+                            zone().vis[i] |= map::V_REMEMBERED;
+                        g.log.push("The spice unfolds. You see the whole quarter at once.");
+                        flash(120, 80, 200);
+                        g.menu_open = 0;
+                    } else g.log.push("Two grains for the long sight.");
+                    break;
+                case 41:  // Threadwalk: two free strides outside time
+                    if (g.pl.spice >= 3) {
+                        g.pl.spice -= 3;
+                        g.pl.tox += 15;
+                        g.pl.tox_lifetime += 15;
+                        g.pl.free_moves = 2;
+                        g.log.push("Time goes thick as syrup. You move BETWEEN moments.");
+                        flash(150, 100, 220);
+                        g.menu_open = 0;
+                    } else g.log.push("Three grains to walk the thread.");
+                    break;
+                case 42: {  // the Litany against fear
+                    const int day = g.pl.turn / tune::kTurnsPerDay;
+                    if (g.pl.litany_day == day) {
+                        g.log.push("The words are spent until another sun.");
+                    } else {
+                        g.pl.litany_day = day;
+                        g.pl.litany_turns = 20;
+                        g.log.push("I must not fear. Fear is the mind-killer...");
+                        g.log.push("Stillness settles over your body's complaints.");
+                        g.menu_open = 0;
+                    }
+                    break;
+                }
+                case 43: g.menu_open = 0; break;
             }
         }
         return true;
@@ -1392,8 +1923,13 @@ bool game_update(const InputState& in) {
     else if (in.pressed_or_repeat(Key::DownLeft)) { dx = -1; dy = 1; }
     else if (in.pressed_or_repeat(Key::DownRight)) { dx = 1; dy = 1; }
 
-    if (dx || dy) try_move(dx, dy);
+    if (dx || dy) {
+        if (g.pl.riding) ride_move(dx, dy);
+        else try_move(dx, dy);
+    }
     else if (in.pressed_or_repeat(Key::Wait)) advance_world();
+    else if (in.was_pressed(Key::Ride)) try_ride();
+    else if (in.was_pressed(Key::Powers)) { g.menu_open = 4; g.menu_sel = 0; }
     else if (in.was_pressed(Key::Harvest)) try_harvest();
     else if (in.was_pressed(Key::Thumper)) place_thumper();
     else if (in.was_pressed(Key::Glowglobe)) place_glowglobe();
@@ -1560,7 +2096,9 @@ void pass_entities(RenderCtx& r) {
         const int light = g.lightmap[idx];
         switch (e.type) {
             case EType::Player:
-                g.draw_list.add(player_spr, (g.anim_tick / 9) % 4, sx, sy + 12, light, 1);
+                g.draw_list.add(player_spr, (g.anim_tick / 9) % 4, sx,
+                                sy + (g.pl.riding ? -20 : 12), light,
+                                g.pl.riding ? 3 : 1);
                 break;
             case EType::Hound:
                 g.draw_list.add(hound_spr, (g.anim_tick / 7) % 2, sx, sy + 12, light, 1);
@@ -1599,6 +2137,23 @@ void pass_entities(RenderCtx& r) {
             case EType::Smuggler:
                 g.draw_list.add(r.assets->get("smuggler"), 0, sx, sy + 12, light, 1);
                 break;
+            case EType::PanAdder:
+                g.draw_list.add(r.assets->get("panadder"), (g.anim_tick / 12) % 2, sx,
+                                sy + 12, light, 1);
+                break;
+            case EType::Hermit:
+                g.draw_list.add(r.assets->get("hermit"), (g.anim_tick / 10) % 2, sx,
+                                sy + 12, light, 1);
+                break;
+            case EType::HunterSeeker: {
+                const int bob = (g.anim_tick / 6) % 3 - 1;
+                g.draw_list.add(r.assets->get("hunterseeker"), (g.anim_tick / 4) % 2, sx,
+                                sy + 2 + bob, 31, 2);
+                break;
+            }
+            case EType::SpiceCache:
+                g.draw_list.add(r.assets->get("spicecache"), 0, sx, sy + 12, light, 0);
+                break;
             default: break;
         }
     }
@@ -1633,6 +2188,12 @@ void pass_effects(RenderCtx& r) {
 
 // Particles: dust from the worm's violence, crawler intake haze.
 void pass_particles(RenderCtx& r) {
+    if (g.thopter_x >= 0) {
+        int sx, sy;
+        iso::tile_to_screen(g.thopter_x, g.thopter_y, g.cam, sx, sy);
+        if (sx > -60 && sx < fb::W + 60 && sy > -60 && sy < fb::H + 60)
+            draw_sprite(r.ctx, *r.assets->get("carryall"), 0, sx, sy - 60, 31);
+    }
     int sx, sy;
     if (g.wrm.state == worm::State::Breaching) {
         iso::tile_to_screen(g.wrm.x, g.wrm.y, g.cam, sx, sy);
@@ -1656,8 +2217,23 @@ void pass_particles(RenderCtx& r) {
 // Lighting: M7 — per-tile light-source composition remaps this framebuffer.
 void pass_lighting(RenderCtx&) {}
 
-// Weather: M5/M7 — sandstorm haze, palette weather.
-void pass_weather(RenderCtx&) {}
+// Weather: the Coriolis storm — driven sand streaks + dithered haze.
+void pass_weather(RenderCtx& r) {
+    if (g.storm_turns <= 0) return;
+    // horizontal sand streaks (fx particles, heavy)
+    for (int i = 0; i < 6; ++i)
+        g.particles.spawn(fb::W - 1, int(g.rng.fx.below(fb::H)),
+                          -(600 + int(g.rng.fx.below(500))),
+                          int(g.rng.fx.below(80)) - 40,
+                          40 + int(g.rng.fx.below(30)), uint8_t(64 + g.rng.fx.below(16)));
+    // dithered haze veil
+    const int phase = g.anim_tick / 2;
+    for (int y = 0; y < fb::H; ++y) {
+        uint8_t* row = r.ctx.frame->px + y * fb::W;
+        for (int x = (y + phase) & 3; x < fb::W; x += 4)
+            row[x] = uint8_t(60 + ((x + y) % 5));
+    }
+}
 
 // UI: HUD panel, banners, death screen.
 void pass_ui(RenderCtx& r) {
@@ -1739,6 +2315,29 @@ void pass_ui(RenderCtx& r) {
         }
     }
 
+    // hover description + personal gauges, just above the panel
+    {
+        char buf[64];
+        std::snprintf(buf, sizeof buf, "spice %d  tox %d%s%s", g.pl.spice, g.pl.tox,
+                      g.pl.eyes_ibad ? "  [EYES OF IBAD]" : "",
+                      g.pl.riding ? "  [RIDING]" : "");
+        draw_text_shadow(ctx, buf, 4, ui::kPanelY - 12, uint8_t(g.pl.tox > 60 ? 208 : 136), 1);
+        if (g.hover_tx >= 0)
+            if (const char* what = describe_at(g.hover_tx, g.hover_ty))
+                draw_text_shadow(ctx, what, fb::W / 2 - int(std::strlen(what)) * 4,
+                                 ui::kPanelY - 12, 24, 1);
+        if (g.quest_kind != 0) {
+            std::snprintf(buf, sizeof buf, "TASK: %s (%d/%d)",
+                          g.quest_kind == 1 ? "cull the hounds"
+                          : g.quest_kind == 2 ? "gather spice" : "quiet denial",
+                          g.quest_kind == 2 ? g.quest_progress + g.pl.spice
+                                            : g.quest_progress,
+                          g.quest_need);
+            draw_text_shadow(ctx, buf, fb::W - 8 - int(std::strlen(buf)) * 8,
+                             ui::kPanelY - 12, 240, 1);
+        }
+    }
+
     // CHOAM ledger + season gauges, top-right.
     {
         char buf[48];
@@ -1758,14 +2357,18 @@ void pass_ui(RenderCtx& r) {
 
     // Vendor menu overlay.
     if (g.menu_open) {
-        static const char* kMenus[4][5] = {
+        static const char* kMenus[5][5] = {
             {},
-            {"Tribute 200 water  (+10 standing)", "Ask about the season", "Leave", nullptr},
+            {"Tribute 200 water  (+10 standing)", "Ask about the season",
+             "A task for the tribe", "Leave"},
             {"Offer 5 spice  (+12 standing)", "Healing trance  (6 spice)", "Leave", nullptr},
             {"Demolition charge  (5 spice)", "Two thumpers  (3 spice)",
              "Toxin vial  (2 spice)", "Glowglobe  (3 spice)", "Leave"},
+            {"FARSIGHT - unfold the map  (2 spice)", "THREADWALK - two free strides  (3 spice)",
+             "The Litany against fear  (free, once a day)", "Close"},
         };
-        static const char* kTitles[4] = {"", "THE NAIB", "THE SAYYADINA", "GREYBEARD THE SMUGGLER"};
+        static const char* kTitles[5] = {"", "THE NAIB", "THE SAYYADINA",
+                                         "GREYBEARD THE SMUGGLER", "PRESCIENCE"};
         const int x0 = fb::W / 2 - 150, y0 = 140;
         fill_rect(ctx, x0, y0, 300, 110, 2);
         fill_rect(ctx, x0, y0, 300, 1, 228);
@@ -1869,6 +2472,18 @@ void game_serialize(SaveWriter& w) {
     w.i32(g.pl.spice);
     w.i32(g.pl.glowglobes);
     w.i32(g.pl.atk);
+    w.u8(g.pl.maker_hooks ? 1 : 0);
+    w.u8(g.pl.riding ? 1 : 0);
+    w.i32(g.pl.ride_turns);
+    w.i32(g.pl.tox);
+    w.i32(g.pl.tox_lifetime);
+    w.u8(g.pl.eyes_ibad ? 1 : 0);
+    w.i32(g.pl.litany_turns);
+    w.i32(g.pl.litany_day);
+    w.i32(g.pl.free_moves);
+    w.i32(g.quest_kind);
+    w.i32(g.quest_need);
+    w.i32(g.quest_progress);
     w.u8(uint8_t(g.pl.background));
     w.u8(g.pl.sandwalk ? 1 : 0);
     w.u8(g.pl.dead ? 1 : 0);
@@ -1880,6 +2495,11 @@ void game_serialize(SaveWriter& w) {
     w.bytes(g.flashes, sizeof g.flashes);
     w.bytes(&g.season, sizeof g.season);
     w.i32(g.last_decay_day);
+    w.i32(g.storm_turns);
+    w.i32(g.poison_turns);
+    w.i32(g.thopter_x);
+    w.i32(g.thopter_y);
+    w.i32(g.thopter_dx);
     w.bytes(g.ents, sizeof g.ents);
     w.bytes(&g.rng.world, sizeof g.rng.world);
     w.bytes(&g.rng.combat, sizeof g.rng.combat);
@@ -1906,6 +2526,18 @@ bool game_deserialize(SaveReader& r) {
     pl.spice = r.i32();
     pl.glowglobes = r.i32();
     pl.atk = r.i32();
+    pl.maker_hooks = r.u8() != 0;
+    pl.riding = r.u8() != 0;
+    pl.ride_turns = r.i32();
+    pl.tox = r.i32();
+    pl.tox_lifetime = r.i32();
+    pl.eyes_ibad = r.u8() != 0;
+    pl.litany_turns = r.i32();
+    pl.litany_day = r.i32();
+    pl.free_moves = r.i32();
+    const int quest_kind = r.i32();
+    const int quest_need = r.i32();
+    const int quest_progress = r.i32();
     pl.background = Background(r.u8());
     pl.sandwalk = r.u8() != 0;
     pl.dead = r.u8() != 0;
@@ -1920,6 +2552,11 @@ bool game_deserialize(SaveReader& r) {
     campaign::State season;
     r.bytes(&season, sizeof season);
     const int last_decay_day = r.i32();
+    const int storm_turns = r.i32();
+    const int poison_turns = r.i32();
+    const int thopter_x = r.i32();
+    const int thopter_y = r.i32();
+    const int thopter_dx = r.i32();
     Entity ents[kMaxEnts];
     r.bytes(ents, sizeof ents);
     Pcg32 world, combat, loot;
@@ -1948,6 +2585,14 @@ bool game_deserialize(SaveReader& r) {
     std::memcpy(g.flashes, flashes, sizeof g.flashes);
     g.season = season;
     g.last_decay_day = last_decay_day;
+    g.quest_kind = quest_kind;
+    g.quest_need = quest_need;
+    g.quest_progress = quest_progress;
+    g.storm_turns = storm_turns;
+    g.poison_turns = poison_turns;
+    g.thopter_x = int16_t(thopter_x);
+    g.thopter_y = int16_t(thopter_y);
+    g.thopter_dx = int8_t(thopter_dx);
     std::memcpy(g.ents, ents, sizeof g.ents);
     g.rng.world = world;
     g.rng.combat = combat;
@@ -2005,6 +2650,28 @@ void game_debug_spawn_shield_adjacent(int* hp_out) {
             }
     }
     if (hp_out) *hp_out = -1;
+}
+
+void game_debug_grant_hooks() { g.pl.maker_hooks = true; }
+
+bool game_debug_riding() { return g.pl.riding; }
+
+void game_debug_warp_to_worm() {
+    for (int r = 1; r <= 3; ++r)
+        for (int dy = -r; dy <= r; ++dy)
+            for (int dx = -r; dx <= r; ++dx) {
+                const int nx = g.wrm.x + dx, ny = g.wrm.y + dy;
+                if (!zone().walkable(nx, ny) || entity_at(nx, ny, g.cur_zone)) continue;
+                g.ents[0].x = int16_t(nx);
+                g.ents[0].y = int16_t(ny);
+                refresh_fov_and_paths();
+                return;
+            }
+}
+
+void game_debug_worm_pos(int* x, int* y) {
+    if (x) *x = g.wrm.x;
+    if (y) *y = g.wrm.y;
 }
 
 void game_debug_clear_hostiles() {

@@ -88,16 +88,25 @@ and physical water-ring tokens moved to M5.)*
 **Exit:** a full season is winnable, both loss endings trigger correctly, and the slow
 blade penetrates the shield — all three proven by --campaigntest and --shieldtest.
 
-### M5 — Worm-riding + polish ⬜ *(riding cuttable)*
-Maker hooks + mount/steer, starting backgrounds (Fedaykin / Saboteur /
-Sayyadina-touched), random desert events (Coriolis storms, spice blow eruptions,
-hunter-seekers), remaining enemies, ornithopter sweeps, Eyes of Ibad, Litany + crysknife
-etiquette, hallucination/chatter text, look-mode polish, FM music pass (~6–8 tracks),
-tuning pass against `tunables.h`, seed-race determinism test.
-**Exit:** same seed + same input script twice → identical final state hash; a full
-season plays with all systems live.
+### M5 — Worm-riding + polish ✅
+Maker hooks granted at Honored (with the crysknife): R mounts a surfaced worm,
+arrows steer the Maker two strides a turn, crushing troopers and crawlers
+alike until it tires and dives. Random desert events per zone entry: Coriolis
+storms (sight dies, flesh scours, carryalls ground, weather-pass sand streaks
++ haze), spice blow eruptions (noise 250 + harvestable caches), hunter-seekers
+at high alert, Fremen scout encounters. Ornithopter searchlight sweeps during
+alarms (caught in the beam = reinforcements). New enemies: pan adder (venom
+burns water) and the spice-mad hermit (drops his hoard). Prescience menu (Z):
+Farsight, Threadwalk, the Litany against fear (once a day); spice tolerance
+with hallucinations and the permanent Eyes of Ibad. Naib tasks (cull hounds /
+gather spice / quiet denial). Crysknife-kill standing. Context FM music
+(sietch / danger / ambient). Mouse-hover look descriptions. *(Water-ring
+tokens folded permanently into the tribute economy.)*
+**Exit met:** --dettest (same seed + script twice = identical hash) and the
+full 8-test suite PASS, campaigntest playing a complete season with all
+systems live.
 
-### M6 — Art & UI overhaul (Diablo 1 vibes) ⬜
+### M6 — Art & UI overhaul (Diablo 1 vibes) ✅
 Target the look and feel of Diablo 1 at its native **640x480** (done: the
 framebuffer is now 4:3, pillarboxed by integer scaling on modern displays).
 **AI-generated art pipeline**: `tools/genart.py` calls the OpenAI image API
