@@ -82,3 +82,41 @@ through pure-presentation changes (combat changes legitimately change sim
 hashes — dettest re-baselines once, then holds).
 **Exit:** all tests green; a played season features loot decisions,
 level-ups, and at least one agonizing "extract now or push deeper?" moment.
+
+---
+
+# Part II — Run Structure (the roguelike / extraction / ARPG blend)
+
+DUSTFALL's genre, stated: **roguelike** (procedural, per-run progression),
+**extraction** (bank it or lose it), **ARPG** (gear, levels, bosses).
+
+## Y1 — Dune-flavored sheet & honest death ✅
+Stats renamed: Strength → **Ferocity**, Dexterity → **Weirding** (the
+weirding way — speed, precision, evasion), Vitality → **Endurance**.
+Death and raid screens enumerate every piece of gear that just returned to
+the sand — the extraction sting made visible.
+
+## Y2 — Difficulty & the extraction gate ✅
+A run **difficulty** scalar (harvesters denied + alert tier) scales drop
+tables: higher item-level defs and better rarity odds the deeper the run.
+The vault refuses deposits until you have denied at least one harvest —
+extraction must be earned ("The Naib banks nothing for the unblooded").
+
+## Y3 — Champions & the Baron ✅
+Every denied harvester summons a **randomly generated champion** — named
+from a seed ("Warmaster Dreth the Unbowed"), 2 random traits (Shielded /
+Swift / Brute / Stalwart / Toxic), stats scaled by how many harvesters have
+fallen — Hades-style escalation. Champions drop guaranteed rares. Denying
+the climax harvest summons **BARON HARKONNEN** himself (shielded, brutal,
+unique): victory now means killing him, not just his machine.
+
+## Y4 — Side objectives ✅
+Timed opportunities bloom in the desert: a **smuggler caravan** (reach it
+before it moves on: contraband gear), a **Spacing Guild envoy** (pay the
+spice bribe to reset the discovery countdown and cool the alert — the Guild
+keeps the Baron's surveys blind). HUD tracks the active objective and its
+clock; more objective kinds slot into the same frame later.
+
+## Y5 — Proof ✅
+campaigntest updated: victory leg now kills the Baron blade-to-shield;
+boss/objective debug hooks; the full suite passes.
