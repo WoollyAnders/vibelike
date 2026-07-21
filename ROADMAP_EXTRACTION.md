@@ -14,7 +14,7 @@ the game, and the sim stays deterministic (dettest must hold).
 
 ---
 
-## X0 — Canonical sprite scale ⬜
+## X0 — Canonical sprite scale ✅
 Every generated model was fit-to-frame, so relative sizes are wrong (a hound
 fills its box as boldly as a man). Add a **figure-height table** to the
 pipeline: each asset declares its canonical on-screen height (humans 52px,
@@ -25,7 +25,7 @@ bottom-anchored to a shared baseline. Regenerate every sheet from gen_cache
 **Exit:** a lineup screenshot — player, trooper, hound, naib, thumper,
 cistern side by side — reads with believable relative scale.
 
-## X1 — Items & loot ⬜
+## X1 — Items & loot ✅
 - `game/items.h`: constexpr **ItemDef** table (~20 defs) — weapons (dust
   knife → crysknife tiers), armor (rag wrap → carapace plate), stillsuits
   I–III (absorbing the suit multiplier), trinkets — each with level, damage
@@ -42,7 +42,7 @@ cistern side by side — reads with believable relative scale.
 **Exit:** kill a trooper, pick up a "Keen Dust Knife of the Hawk", equip it,
 see the stats change.
 
-## X2 — Diablo-style combat ⬜
+## X2 — Diablo-style combat ✅
 - **Character stats**: Strength (damage), Dexterity (to-hit, crit, dodge),
   Vitality (HP). Enemies get level / to-hit / damage range / AC / XP tables.
 - **Resolution**: to-hit roll vs dodge/AC (clamped 15–95%), weapon damage
@@ -55,14 +55,14 @@ see the stats change.
 trooper's blade misses you." / "CRIT — 14!") and gear/stats visibly move
 the numbers.
 
-## X3 — Leveling ⬜
+## X3 — Leveling ✅ *(+ talent tree)*
 XP per kill by enemy level (scaled down when out-leveled), quadratic-ish XP
 curve, level-up grants +2 stat points and a full heal; character screen
 (`P`) shows stats/level/XP and spends points. HUD gains level + XP bar.
 **Exit:** grind two levels in the Rimwall, allocate points, watch to-hit and
 HP move.
 
-## X4 — The extraction loop ⬜
+## X4 — The extraction loop ✅
 - **The vault**: a new menu at the Naib — deposit carried gear into the
   tribe vault, withdraw banked gear while in the sietch. The vault (24
   slots) persists in the meta file **across runs and deaths**.
@@ -73,7 +73,7 @@ HP move.
 **Exit:** kill, loot, bank an item, die on purpose, start a new season,
 withdraw the same item — it survived; a twin item left un-banked did not.
 
-## X5 — Integration & proof ⬜
+## X5 — Integration & proof ✅
 Enemy stat/drop tiers scale with alert and region; death/ending screens
 enumerate lost gear; `--rpgtest` proves the loop headlessly (kill → XP →
 level → loot → equip → deposit → fresh init → withdraw); the full

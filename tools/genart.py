@@ -265,6 +265,17 @@ def read_meta():
             meta[name] = (fname, int(fw), int(fh), int(frames), int(ax), int(ay))
     return meta
 
+# Canonical on-screen figure heights (px). fit_sprite scales to these instead
+# of filling the frame, so a hound no longer looms as large as a man.
+HEIGHTS = {
+    "player": 52, "player_fedaykin": 52, "player_saboteur": 52,
+    "player_sayyadina": 52, "trooper": 54, "spotter": 52, "naib": 52,
+    "smuggler": 52, "hermit": 48, "hound": 22, "panadder": 12,
+    "hunterseeker": 26, "corpse": 14, "spicecache": 12, "thumper": 26,
+    "glowglobe": 20, "rock": 52, "wall": 76, "cistern": 40,
+    "wormhead": 104, "wormseg": 60, "crawler": 88,
+}
+
 def strip_background(img):
     """If the model painted a backdrop despite background=transparent, remove
     it: flood from every edge pixel, clearing anything close to the corner
@@ -300,15 +311,24 @@ def strip_background(img):
             if y < h - 1: q.append((x, y + 1))
     return img
 
-def fit_sprite(img, fw, fh):
-    """Alpha-crop, scale to fit the frame, anchor at bottom-center."""
+def fit_sprite(img, fw, fh, target_h=None):
+    """Alpha-crop, scale to the canonical figure height (or fit), anchor at
+    bottom-center on the shared baseline."""
     img = strip_background(img)
     bbox = img.getbbox()
     if bbox:
         img = img.crop(bbox)
-    scale = min((fw - 2) / img.width, (fh - 2) / img.height)
+    if target_h:
+        scale = target_h / img.height  # stature wins; wide poses get cropped
+    else:
+        scale = min((fw - 2) / img.width, (fh - 2) / img.height)
     img = img.resize((max(1, int(img.width * scale)), max(1, int(img.height * scale))),
                      Image.LANCZOS)
+    if img.width > fw:  # center-crop weapon tips rather than shrink the figure
+        x0 = (img.width - fw) // 2
+        img = img.crop((x0, 0, x0 + fw, img.height))
+    if img.height > fh:
+        img = img.crop((0, img.height - fh, img.width, img.height))
     frame = Image.new("RGBA", (fw, fh), (0, 0, 0, 0))
     frame.paste(img, ((fw - img.width) // 2, fh - img.height - 1), img)
     return frame
@@ -337,9 +357,14 @@ def diamond_mask(w, h):
               fill=255)
     return big.resize((w, h), Image.BILINEAR).point(lambda v: 255 if v > 32 else 0)
 
-def cut_diamond(tex, w, h, rng, brightness=1.0):
-    x = rng.randint(0, tex.width - w - 1)
-    y = rng.randint(0, tex.height - h - 1)
+def cut_diamond(tex, w, h, rng, brightness=1.0, anchor=None):
+    if anchor:
+        # sample near a shared anchor so sibling tiles blend at their seams
+        x = max(0, min(tex.width - w - 1, anchor[0] + rng.randint(-24, 24)))
+        y = max(0, min(tex.height - h - 1, anchor[1] + rng.randint(-12, 12)))
+    else:
+        x = rng.randint(0, tex.width - w - 1)
+        y = rng.randint(0, tex.height - h - 1)
     crop = tex.crop((x, y, x + w, y + h)).convert("RGBA")
     if brightness != 1.0:
         crop = Image.eval(crop, lambda v: min(255, int(v * brightness)))
@@ -351,17 +376,19 @@ def build_tiles(textures, fw, fh, frames):
     """Compose the 10-frame floor sheet from generated textures."""
     rng = random.Random(7)
     sand, rock, spice = textures["tex_sand"], textures["tex_rock"], textures["tex_spice"]
+    sand_a = (sand.width // 2, sand.height // 2)
+    rock_a = (rock.width // 2, rock.height // 2)
     tiles = [
-        cut_diamond(sand, fw, fh, rng),            # 0 sand a
-        cut_diamond(sand, fw, fh, rng, 0.92),      # 1 sand b
-        cut_diamond(sand, fw, fh, rng, 1.08),      # 2 sand c
-        cut_diamond(rock, fw, fh, rng),            # 3 rock a
-        cut_diamond(rock, fw, fh, rng, 0.9),       # 4 rock b
-        cut_diamond(spice, fw, fh, rng),           # 5 spice-flecked
-        cut_diamond(sand, fw, fh, rng, 0.8),       # 6 drum sand (ringed below)
-        None,                                       # 7 highlight (procedural)
-        cut_diamond(rock, fw, fh, rng, 0.55),      # 8 sietch floor
-        cut_diamond(rock, fw, fh, rng, 0.7),       # 9 door pad (gold rim below)
+        cut_diamond(sand, fw, fh, rng, 1.0, sand_a),    # 0 sand a
+        cut_diamond(sand, fw, fh, rng, 0.985, sand_a),  # 1 sand b (near-identical)
+        cut_diamond(sand, fw, fh, rng, 1.015, sand_a),  # 2 sand c
+        cut_diamond(rock, fw, fh, rng, 1.0, rock_a),    # 3 rock a
+        cut_diamond(rock, fw, fh, rng, 0.96, rock_a),   # 4 rock b
+        cut_diamond(spice, fw, fh, rng),                # 5 spice-flecked
+        cut_diamond(sand, fw, fh, rng, 0.9, sand_a),    # 6 drum sand (ringed below)
+        None,                                            # 7 highlight (procedural)
+        cut_diamond(rock, fw, fh, rng, 0.55, rock_a),   # 8 sietch floor
+        cut_diamond(rock, fw, fh, rng, 0.7, rock_a),    # 9 door pad (gold rim below)
     ]
     # drum sand rings
     d = ImageDraw.Draw(tiles[6])
@@ -423,7 +450,7 @@ def main():
             continue
         img = generate(key, name, prompt, transparent=True)
         _, fw, fh, frames, _, _ = meta[name]
-        sheet = make_sheet(fit_sprite(img, fw, fh), fw, fh, frames)
+        sheet = make_sheet(fit_sprite(img, fw, fh, HEIGHTS.get(name)), fw, fh, frames)
         sheet.save(os.path.join(RAW, f"{name}.png"))
         print(f"  {name}: {fw}x{fh} x{frames}")
 
@@ -435,7 +462,7 @@ def main():
             continue
         img = generate(key, f"{name}_turn", f"{prompt}, {TURN_STYLE}", transparent=True)
         _, fw, fh, _, ax, ay = meta[name]
-        strip = slice_turnaround(img, fw, fh, 5)
+        strip = slice_turnaround(img, fw, fh, 5, HEIGHTS.get(name))
         dir_name = f"{name}_dir"
         strip.save(os.path.join(RAW, f"{dir_name}.png"))
         if dir_name not in meta:

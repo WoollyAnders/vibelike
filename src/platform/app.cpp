@@ -178,6 +178,7 @@ constexpr Binding kBindings[] = {
     {SDL_SCANCODE_V, Key::Poison},
     {SDL_SCANCODE_L, Key::Glowglobe},
     {SDL_SCANCODE_R, Key::Ride},
+    {SDL_SCANCODE_P, Key::Character},
     {SDL_SCANCODE_F5, Key::Save},
     {SDL_SCANCODE_F9, Key::Load},
 };
@@ -616,6 +617,62 @@ int run_ridetest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cma
     return pass ? 0 : 1;
 }
 
+// The extraction loop, end to end: kill -> XP/levels -> loot -> bank at the
+// vault -> die/restart -> the banked gear survives; carried gear does not.
+int run_rpgtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    std::remove("meta.dat");  // clean slate for the persistence proof
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(777, services);
+
+    InputState in;
+    auto tick_with = [&](Key k) {
+        in.pressed[int(k)] = true;
+        game_update(in);
+        in.end_tick();
+    };
+
+    game_debug_warp(1, 30, 30);
+    tick_with(Key::Sandwalk);  // the slow blade never whiffs on shields
+
+    int level = 0, inv = 0, stash = 0;
+    for (int kills = 0; kills < 8; ++kills) {
+        int hp = 0;
+        game_debug_spawn_shield_adjacent(&hp);
+        if (hp <= 0) break;
+        int guard = 0;
+        while (game_debug_shield_hp() > 0 && guard++ < 40) {
+            game_debug_refill();
+            tick_with(Key::Right);
+        }
+        game_debug_clear_hostiles();  // clear any reinforcements drawn by noise
+    }
+    game_debug_grab_loot();
+    game_debug_rpg(&level, &inv, &stash);
+    std::printf("  after hunt: level %d, carrying %d, banked %d\n", level, inv, stash);
+    const bool leveled = level >= 2;
+    const bool looted = inv >= 1;
+
+    game_debug_vault_deposit_all();
+    game_debug_rpg(&level, &inv, &stash);
+    const int banked = stash;
+    std::printf("  banked %d items; dying now\n", banked);
+
+    game_init(778, services);  // a new season: carried gear is gone
+    game_debug_rpg(&level, &inv, &stash);
+    std::printf("  fresh run: level %d, carrying %d, vault holds %d\n", level, inv, stash);
+    const bool persisted = stash == banked && banked >= 1 && inv == 0 && level == 1;
+
+    const int got = game_debug_vault_withdraw_one();
+    game_debug_rpg(&level, &inv, &stash);
+    std::printf("  withdrew %d -> carrying %d, vault %d\n", got, inv, stash);
+    const bool withdrew = got == 1 && inv == 1 && stash == banked - 1;
+
+    const bool pass = leveled && looted && persisted && withdrew;
+    std::printf("rpgtest %s (leveled %d looted %d persisted %d withdrew %d)\n",
+                pass ? "PASS" : "FAIL", leveled, looted, persisted, withdrew);
+    return pass ? 0 : 1;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -625,7 +682,7 @@ int main(int argc, char** argv) {
     bool seamtest = false, slicetest = false, wormtest = false, autodemo = false,
          optest = false, opdemo = false, uishot = false, shieldtest = false,
          campaigntest = false, dettest = false, ridetest = false, animdebug = false,
-         circledemo = false, fightdemo = false;
+         circledemo = false, fightdemo = false, rpgtest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
         if (SDL_strcmp(argv[i], "--seamtest") == 0) seamtest = true;
@@ -642,6 +699,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--dettest") == 0) dettest = true;
         if (SDL_strcmp(argv[i], "--ridetest") == 0) ridetest = true;
         if (SDL_strcmp(argv[i], "--animdebug") == 0) animdebug = true;
+        if (SDL_strcmp(argv[i], "--rpgtest") == 0) rpgtest = true;
     }
 
     Palette master;
@@ -667,6 +725,7 @@ int main(int argc, char** argv) {
     if (campaigntest) return run_campaigntest(mixer, assets, cmaps);
     if (dettest) return run_dettest(mixer, assets, cmaps);
     if (ridetest) return run_ridetest(mixer, assets, cmaps);
+    if (rpgtest) return run_rpgtest(mixer, assets, cmaps);
 
     Platform platform;
     if (!platform_init(platform, &mixer)) {

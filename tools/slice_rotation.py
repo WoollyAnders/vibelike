@@ -63,7 +63,7 @@ def _widest_blob(view):
             cur_start = None
     return best_span
 
-def slice_turnaround(img, fw, fh, views=5):
+def slice_turnaround(img, fw, fh, views=5, target_h=None):
     """Returns a (fw*views, fh) RGBA strip, each view fit + bottom-anchored."""
     img = img.convert("RGBA")
     spans = find_view_spans(img, views)
@@ -82,8 +82,18 @@ def slice_turnaround(img, fw, fh, views=5):
     # normalize to the tallest view so heads line up across directions
     tallest = max(c.height for c in crops)
     for i, c in enumerate(crops):
-        scale = min((fw - 2) / c.width, (fh - 2) / tallest)
+        if target_h:
+            scale = target_h / tallest
+        else:
+            scale = min((fw - 2) / c.width, (fh - 2) / tallest)
         nw, nh = max(1, int(c.width * scale)), max(1, int(c.height * scale))
         c = c.resize((nw, nh), Image.LANCZOS)
+        if nw > fw:
+            x0 = (nw - fw) // 2
+            c = c.crop((x0, 0, x0 + fw, nh))
+            nw = fw
+        if nh > fh:
+            c = c.crop((0, nh - fh, nw, fh))
+            nh = fh
         strip.paste(c, (i * fw + (fw - nw) // 2, fh - nh - 1), c)
     return strip
