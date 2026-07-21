@@ -8,6 +8,7 @@
 #include <cstring>
 #include <vector>
 
+#include "engine/animator.h"
 #include "engine/assets.h"
 #include "engine/audio.h"
 #include "engine/framebuffer.h"
@@ -623,7 +624,7 @@ int main(int argc, char** argv) {
 
     bool seamtest = false, slicetest = false, wormtest = false, autodemo = false,
          optest = false, opdemo = false, uishot = false, shieldtest = false,
-         campaigntest = false, dettest = false, ridetest = false;
+         campaigntest = false, dettest = false, ridetest = false, animdebug = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
         if (SDL_strcmp(argv[i], "--seamtest") == 0) seamtest = true;
@@ -637,6 +638,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--campaigntest") == 0) campaigntest = true;
         if (SDL_strcmp(argv[i], "--dettest") == 0) dettest = true;
         if (SDL_strcmp(argv[i], "--ridetest") == 0) ridetest = true;
+        if (SDL_strcmp(argv[i], "--animdebug") == 0) animdebug = true;
     }
 
     Palette master;
@@ -649,6 +651,10 @@ int main(int argc, char** argv) {
 
     Assets assets;
     if (!assets.load_all("data")) return 1;
+
+    static anim::Registry anims;
+    const bool anims_ok = anims.load("data", assets);
+    if (!anims_ok) std::fprintf(stderr, "anims.txt missing or empty; static sprites\n");
 
     if (seamtest) return run_seamtest(mixer, assets, cmaps);
     if (slicetest) return run_slicetest(mixer, assets, cmaps);
@@ -665,7 +671,8 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    GameServices services{&mixer, &assets, &cmaps, /*interactive=*/!autodemo || uishot};
+    GameServices services{&mixer, &assets, &cmaps, anims_ok ? &anims : nullptr,
+                          /*interactive=*/!autodemo || uishot, animdebug};
     game_init(autodemo ? (opdemo ? 9001 : 4242) : uint64_t(SDL_GetPerformanceCounter()),
               services);
     mixer.push({audio::Cmd::PlaySong, uint8_t(g_song_ambient), 0, 0});

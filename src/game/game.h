@@ -4,6 +4,7 @@
 // Plain free functions, one game instance per process.
 #include <cstdint>
 
+#include "engine/animator.h"
 #include "engine/assets.h"
 #include "engine/audio.h"
 #include "engine/framebuffer.h"
@@ -16,7 +17,9 @@ struct GameServices {
     audio::Mixer* mixer;
     const Assets* assets;
     const Colormaps* cmaps;
+    const anim::Registry* anims = nullptr;
     bool interactive = false;  // true: show the background chooser on new runs
+    bool debug_anim = false;   // overlay: state/frame/facing
 };
 
 void game_init(uint64_t seed, const GameServices& services);

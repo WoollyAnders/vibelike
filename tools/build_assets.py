@@ -28,6 +28,9 @@ def main(out_dir):
     if not os.path.isfile(os.path.join(RAW, "meta.txt")):
         run("make_assets.py")
 
+    # 1b. derive walk-cycle strips from the base sprites
+    run("animsynth.py")
+
     # 2. quantize to the master palette
     run("quantize.py", RAW, INDEXED, os.path.join(ASSETS, "palette.pal"))
 
@@ -38,6 +41,7 @@ def main(out_dir):
 
     # 4. non-image data ships as-is
     shutil.copy(os.path.join(ASSETS, "palette.pal"), out_dir)
+    shutil.copy(os.path.join(ASSETS, "anims.txt"), out_dir)
     sfx_out = os.path.join(out_dir, "sfx")
     shutil.rmtree(sfx_out, ignore_errors=True)
     shutil.copytree(os.path.join(ASSETS, "sfx"), sfx_out)
