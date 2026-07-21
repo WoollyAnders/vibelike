@@ -48,3 +48,7 @@ void game_debug_op_zone(int* zone_out);
 void game_debug_spawn_shield_adjacent(int* hp_out);
 int game_debug_shield_hp();
 void game_debug_clear_hostiles();
+void game_debug_grant_hooks();
+bool game_debug_riding();
+void game_debug_warp_to_worm();
+void game_debug_worm_pos(int* x, int* y);

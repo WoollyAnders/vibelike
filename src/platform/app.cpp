@@ -44,13 +44,45 @@ const audio::SongEvent kAmbient[] = {
     {0xFFFF, 0, 0, 0, 0},
 };
 
+// The sietch: warm, patient, home. Low drone, soft pad swells, kind plucks.
+const audio::SongEvent kSietch[] = {
+    {0, 0, 43, 2, 90},
+    {0, 1, 60, 0, 60},
+    {12, 2, 64, 1, 70},
+    {16, 1, 0, 0, 0},
+    {18, 1, 62, 0, 60},
+    {24, 2, 67, 1, 65},
+    {32, 1, 0, 0, 0},
+    {34, 1, 60, 0, 60},
+    {40, 2, 72, 1, 60},
+    {52, 2, 67, 1, 55},
+    {0xFFFF, 0, 0, 0, 0},
+};
+
+// Danger: wormsign, alarms, storms. Low pressure drone + minor-second ostinato.
+const audio::SongEvent kDanger[] = {
+    {0, 0, 36, 2, 110},
+    {0, 1, 48, 0, 70},
+    {4, 2, 62, 1, 85},
+    {8, 2, 63, 1, 80},
+    {12, 2, 62, 1, 75},
+    {16, 1, 0, 0, 0},
+    {17, 1, 47, 0, 70},
+    {20, 2, 66, 1, 85},
+    {24, 2, 63, 1, 80},
+    {28, 2, 62, 1, 75},
+    {0xFFFF, 0, 0, 0, 0},
+};
+
 int g_song_ambient = -1;
 int g_sfx_roar = -1;
 int g_sfx_blip = -1;
 
 bool audio_load(audio::Mixer& mixer) {
     for (const audio::FmInstrument& in : kInstruments) mixer.add_instrument(in);
-    g_song_ambient = mixer.add_song(audio::Song{kAmbient, 4.0f, 64, 0});
+    g_song_ambient = mixer.add_song(audio::Song{kAmbient, 4.0f, 64, 0});   // id 0
+    mixer.add_song(audio::Song{kSietch, 4.0f, 64, 0});                     // id 1
+    mixer.add_song(audio::Song{kDanger, 8.0f, 32, 0});                     // id 2
 
     Sample roar, blip;
     if (!wav_load("data/sfx/worm_roar.wav", roar) || !wav_load("data/sfx/blip.wav", blip)) {
@@ -144,6 +176,7 @@ constexpr Binding kBindings[] = {
     {SDL_SCANCODE_B, Key::Plant},
     {SDL_SCANCODE_V, Key::Poison},
     {SDL_SCANCODE_L, Key::Glowglobe},
+    {SDL_SCANCODE_R, Key::Ride},
     {SDL_SCANCODE_F5, Key::Save},
     {SDL_SCANCODE_F9, Key::Load},
 };
@@ -513,6 +546,75 @@ int run_campaigntest(audio::Mixer& mixer, const Assets& assets, const Colormaps&
     return pass ? 0 : 1;
 }
 
+// Determinism: the same seed and input script twice must reach the same hash.
+int run_dettest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    GameServices services{&mixer, &assets, &cmaps};
+    uint64_t hashes[2];
+    for (int run = 0; run < 2; ++run) {
+        game_init(20260721, services);
+        InputState in;
+        auto tick_with = [&](Key k, int n) {
+            for (int i = 0; i < n; ++i) {
+                in.pressed[int(k)] = true;
+                game_update(in);
+                in.end_tick();
+            }
+        };
+        tick_with(Key::Down, 13);
+        tick_with(Key::Right, 8);
+        tick_with(Key::Thumper, 1);
+        tick_with(Key::Left, 7);
+        tick_with(Key::Wait, 120);
+        tick_with(Key::Right, 10);
+        tick_with(Key::Wait, 60);
+        hashes[run] = game_state_hash();
+    }
+    const bool pass = hashes[0] == hashes[1];
+    std::printf("dettest %s (%016llx vs %016llx)\n", pass ? "PASS" : "FAIL",
+                (unsigned long long)hashes[0], (unsigned long long)hashes[1]);
+    return pass ? 0 : 1;
+}
+
+// Worm-riding: bait, mount, steer east, and confirm the Maker obeys.
+int run_ridetest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(4242, services);
+    InputState in;
+    auto tick_with = [&](Key k) {
+        in.pressed[int(k)] = true;
+        game_update(in);
+        in.end_tick();
+    };
+
+    for (int i = 0; i < 12; ++i) tick_with(Key::Down);
+    for (int i = 0; i < 8; ++i) tick_with(Key::Right);
+    tick_with(Key::Thumper);
+    for (int i = 0; i < 7; ++i) tick_with(Key::Left);
+    int turns = 0;
+    while (turns++ < 120 && game_worm_state() != 4 && !game_is_dead()) {
+        if (turns % 12 == 0) game_debug_refill();
+        tick_with(Key::Wait);
+    }
+    if (game_worm_state() != 4) { std::printf("ridetest FAIL (no surface)\n"); return 1; }
+
+    game_debug_grant_hooks();
+    game_debug_warp_to_worm();
+    tick_with(Key::Ride);
+    if (!game_debug_riding()) { std::printf("ridetest FAIL (mount)\n"); return 1; }
+
+    int wx0 = 0, wy0 = 0, wx1 = 0, wy1 = 0;
+    game_debug_worm_pos(&wx0, &wy0);
+    for (int i = 0; i < 5; ++i) tick_with(Key::Right);
+    game_debug_worm_pos(&wx1, &wy1);
+    tick_with(Key::Ride);  // dismount
+
+    std::printf("worm rode from %d,%d to %d,%d (riding now %d, dead %d)\n",
+                wx0, wy0, wx1, wy1, game_debug_riding() ? 1 : 0, game_is_dead() ? 1 : 0);
+    const bool pass = wx1 > wx0 && !game_debug_riding() && !game_is_dead();
+    std::printf("ridetest %s\n", pass ? "PASS" : "FAIL");
+    return pass ? 0 : 1;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -521,7 +623,7 @@ int main(int argc, char** argv) {
 
     bool seamtest = false, slicetest = false, wormtest = false, autodemo = false,
          optest = false, opdemo = false, uishot = false, shieldtest = false,
-         campaigntest = false;
+         campaigntest = false, dettest = false, ridetest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
         if (SDL_strcmp(argv[i], "--seamtest") == 0) seamtest = true;
@@ -533,6 +635,8 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--uishot") == 0) uishot = true;
         if (SDL_strcmp(argv[i], "--shieldtest") == 0) shieldtest = true;
         if (SDL_strcmp(argv[i], "--campaigntest") == 0) campaigntest = true;
+        if (SDL_strcmp(argv[i], "--dettest") == 0) dettest = true;
+        if (SDL_strcmp(argv[i], "--ridetest") == 0) ridetest = true;
     }
 
     Palette master;
@@ -552,6 +656,8 @@ int main(int argc, char** argv) {
     if (optest) return run_optest(mixer, assets, cmaps);
     if (shieldtest) return run_shieldtest(mixer, assets, cmaps);
     if (campaigntest) return run_campaigntest(mixer, assets, cmaps);
+    if (dettest) return run_dettest(mixer, assets, cmaps);
+    if (ridetest) return run_ridetest(mixer, assets, cmaps);
 
     Platform platform;
     if (!platform_init(platform, &mixer)) {
