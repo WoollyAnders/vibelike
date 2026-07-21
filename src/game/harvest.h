@@ -23,6 +23,9 @@ struct Op {
     int16_t hold = 0;           // 0..100 spice load
     int16_t eta = 0;            // carryall countdown when Evac
     uint8_t zone = 0;
+    uint8_t mutators = 0;       // campaign::MUT_* bits
+    int32_t deadline = 0;       // absolute turn: unattended op ships
+    bool spotters_knifed = false;  // player silenced the watch (quiet denial)
     bool poisoned = false;      // hold contaminated (silent sabotage)
     bool stolen = false;        // grains taken
     uint8_t plant_progress = 0; // demolition planting turns (needs 3)

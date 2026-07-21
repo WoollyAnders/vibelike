@@ -9,6 +9,7 @@
 #include "engine/passes.h"
 #include "engine/render.h"
 #include "engine/rng.h"
+#include "game/campaign.h"
 #include "game/map.h"
 #include "game/harvest.h"
 #include "game/light.h"
@@ -23,7 +24,7 @@ constexpr int kMaxEnts = 64;
 constexpr int kMaxDeltas = 192;
 
 enum class EType : uint8_t { None = 0, Player, Hound, Corpse, Thumper, Trooper, Spotter,
-                             Glowglobe };
+                             Glowglobe, ShieldTrooper, Naib, Sayyadina, Smuggler };
 enum class Ai : uint8_t { Idle = 0, Wander, Hunt, Guard };
 
 struct Entity {
@@ -115,6 +116,11 @@ struct GameState {
     uint8_t lightmap[map::N];  // M7: per-tile light levels, rebuilt per turn
     light::Source flashes[8];  // transient sources (explosions, breaches)
     int flash_count = 0;
+
+    campaign::State season;    // M4: the harvest season
+    int menu_open = 0;         // 0 none / 1 naib / 2 sayyadina / 3 smuggler
+    int menu_sel = 0;
+    int last_decay_day = 0;
     uint8_t noise_meter = 0;          // HUD value (near player)
     uint8_t seismo[64] = {};          // history ring for the trace
     uint8_t seismo_head = 0;
@@ -136,6 +142,12 @@ struct GameState {
     int choose_idx = 0;
 };
 GameState g;
+
+void op_denied(const char* how);
+void op_shipped_quota();
+void apply_deltas(uint8_t zone_id);
+void end_season(uint8_t ending);
+void spawn_zone_wildlife(uint8_t zone_id);
 
 worm::Tuning worm_tuning() {
     worm::Tuning t;
@@ -176,10 +188,31 @@ Entity* alloc_entity() {
     return nullptr;
 }
 
+void place_npc_near(EType type, uint8_t zone_id, int px, int py) {
+    map::Zone& z = g.zones[zone_id];
+    for (int r = 0; r < 8; ++r)
+        for (int dy = -r; dy <= r; ++dy)
+            for (int dx = -r; dx <= r; ++dx) {
+                const int x = px + dx, y = py + dy;
+                if (x < 1 || x >= map::W - 1 || y < 1 || y >= map::H - 1) continue;
+                if (!z.walkable(x, y) || entity_at(x, y, zone_id)) continue;
+                if (Entity* e = alloc_entity()) {
+                    *e = Entity{type, Ai::Idle, zone_id, int16_t(x), int16_t(y), 10, 0, 0};
+                    return;
+                }
+            }
+}
+
 void spawn_zone_wildlife(uint8_t zone_id) {
     if (g.spawned_mask & (1 << zone_id)) return;
     g.spawned_mask |= uint8_t(1 << zone_id);
-    if (zone_id == map::kZoneSietch) return;
+    if (zone_id == map::kZoneSietch) {
+        place_npc_near(EType::Naib, zone_id, 30, 27);
+        place_npc_near(EType::Sayyadina, zone_id, 36, 25);
+        return;
+    }
+    if (zone_id == map::kZoneDesert)
+        place_npc_near(EType::Smuggler, zone_id, 12, 30);  // camp off the door road
     map::Zone& z = g.zones[zone_id];
     const int want = zone_id == map::kZoneDeepPan ? 4 : tune::kHoundCount;
     int placed = 0, guard = 0;
@@ -195,10 +228,9 @@ void spawn_zone_wildlife(uint8_t zone_id) {
     }
 }
 
-// Place the Deep Pan's harvest op: crawler on open sand, spotters on the
-// nearest rock, an escort ring of troopers. (M4 schedules these; M3 has one.)
-void spawn_op(uint8_t zone_id) {
-    if (zone_id != map::kZoneDeepPan || g.op.state != harvest::OpState::None) return;
+// Place a harvest op in a zone: crawler on open sand, spotters on the nearest
+// rock, an escort ring of troopers scaled by mutators and alert.
+void spawn_op_in(uint8_t zone_id, uint8_t mutators) {
     map::Zone& z = g.zones[zone_id];
 
     // find an open-sand anchor away from the west entry
@@ -221,17 +253,23 @@ void spawn_op(uint8_t zone_id) {
     g.op.x = int16_t(ax);
     g.op.y = int16_t(ay);
     g.op.zone = zone_id;
+    g.op.mutators = mutators;
+    g.op.deadline = g.pl.turn + campaign::kOpDeadline;
+    if (mutators & campaign::MUT_CLIMAX) g.op.hull = 60;
+    else if (mutators & campaign::MUT_ELITE) g.op.hull = 45;
 
     // crawler footprint blocks movement (but the worm eats through it)
     for (int dy = -1; dy <= 0; ++dy)
         for (int dx = -1; dx <= 0; ++dx)
             z.flags[(ay + dy) * map::W + ax + dx] |= map::TF_BLOCK;
 
-    // spotters: two, on the nearest rock ground within 12 tiles (else sand)
+    // spotters on the nearest rock ground within 12 tiles (else sand)
+    const int want_spotters =
+        (mutators & (campaign::MUT_TWIN_SPOTTERS | campaign::MUT_CLIMAX)) ? 4 : 2;
     int placed = 0;
-    for (int r = 2; r <= 14 && placed < 2; ++r) {
-        for (int dy = -r; dy <= r && placed < 2; ++dy)
-            for (int dx = -r; dx <= r && placed < 2; ++dx) {
+    for (int r = 2; r <= 14 && placed < want_spotters; ++r) {
+        for (int dy = -r; dy <= r && placed < want_spotters; ++dy)
+            for (int dx = -r; dx <= r && placed < want_spotters; ++dx) {
                 if (dx * dx + dy * dy > r * r || dx * dx + dy * dy < (r - 1) * (r - 1)) continue;
                 const int x = ax + dx, y = ay + dy;
                 if (x < 1 || x >= map::W - 1 || y < 1 || y >= map::H - 1) continue;
@@ -247,16 +285,113 @@ void spawn_op(uint8_t zone_id) {
             }
     }
 
-    // escort: three troopers around the crawler
-    for (int i = 0, tries = 0; i < 3 && tries < 200; ++tries) {
+    // escort scaled by mutators/alert; elites bring Holtzman shields
+    const bool elite = (mutators & (campaign::MUT_ELITE | campaign::MUT_CLIMAX)) ||
+                       g.season.alert >= campaign::kAlertEliteAt;
+    const int troopers = (mutators & campaign::MUT_CLIMAX) ? 5 : elite ? 4 : 3;
+    const int shields = (mutators & campaign::MUT_CLIMAX) ? 2 : elite ? 1 : 0;
+    for (int i = 0, tries = 0; i < troopers + shields && tries < 300; ++tries) {
         const int x = ax + g.rng.world.range(-4, 3);
         const int y = ay + g.rng.world.range(-4, 3);
         if (!z.walkable(x, y) || entity_at(x, y, zone_id) || g.op.tile_on(x, y)) continue;
         if (Entity* e = alloc_entity()) {
-            *e = Entity{EType::Trooper, Ai::Guard, zone_id, int16_t(x), int16_t(y), 8, 0, 0};
+            const bool shielded = i >= troopers;
+            *e = Entity{shielded ? EType::ShieldTrooper : EType::Trooper, Ai::Guard,
+                        zone_id, int16_t(x), int16_t(y), int16_t(shielded ? 10 : 8), 0, 0};
             ++i;
         }
     }
+}
+
+// Season scheduler: spawns the next op when its clock comes due.
+void schedule_ops() {
+    if (g.season.ending != campaign::kNone) return;
+    if (g.op.live()) {
+        // unattended ops ship on their deadline (whether or not you watched)
+        if (g.pl.turn >= g.op.deadline) {
+            g.op.state = harvest::OpState::Shipped;
+            if (g.op.poisoned) {
+                op_denied("Word comes: the shipped load was rotten. Quiet work.");
+            } else {
+                g.log.push("A carryall lifted a full hold from the %s.",
+                           g.op.zone == map::kZoneDeepPan ? "Deep Pan" : "Rimwall fringe");
+                op_shipped_quota();
+            }
+        }
+        return;
+    }
+    if (g.pl.turn < g.season.next_op_turn) return;
+
+    uint8_t mut = 0;
+    uint8_t target_zone;
+    if (g.season.climax_pending) {
+        mut = campaign::MUT_CLIMAX;
+        target_zone = map::kZoneDeepPan;
+        g.season.climax_pending = 2;  // spawned
+    } else {
+        target_zone = uint8_t(g.rng.world.chance(2, 5) ? map::kZoneDesert
+                                                       : map::kZoneDeepPan);
+        const uint8_t pool[4] = {campaign::MUT_ELITE, campaign::MUT_SLOPPY,
+                                 campaign::MUT_TWIN_SPOTTERS, campaign::MUT_WORMSIGN};
+        const int rolls = int(g.rng.world.below(3));  // 0..2 mutators
+        for (int i = 0; i < rolls; ++i) mut |= pool[g.rng.world.below(4)];
+    }
+
+    // ensure the target zone's terrain exists for placement
+    if (!(g.spawned_mask & (1 << target_zone))) {
+        int sx_, sy_;
+        map::generate(g.zones[target_zone], g.seed, map::ZoneId(target_zone), sx_, sy_);
+        apply_deltas(target_zone);
+        spawn_zone_wildlife(target_zone);
+    }
+    spawn_op_in(target_zone, mut);
+    if (!g.op.live()) return;  // no anchor found; retry next turn
+
+    if (g.cur_zone == target_zone) {
+        // freshly spawned around the player: re-block footprint on live zone
+    } else if (mut & campaign::MUT_CLIMAX) {
+        g.log.push("Scouts running: the GREAT HARVEST deploys in the Deep Pan!");
+        g.log.push("Twin escorts. Shielded blades. End it, Fedaykin.");
+    } else {
+        const bool precise = g.season.standing >= 25;
+        if (precise)
+            g.log.push("Scouts: a crawler at %d,%d in the %s.%s", int(g.op.x), int(g.op.y),
+                       target_zone == map::kZoneDeepPan ? "Deep Pan" : "Rimwall fringe",
+                       (mut & campaign::MUT_ELITE) ? " Heavy escort." : "");
+        else
+            g.log.push("Scouts: harvest smoke over the %s.",
+                       target_zone == map::kZoneDeepPan ? "Deep Pan" : "Rimwall fringe");
+    }
+    if (mut & campaign::MUT_WORMSIGN)
+        g.log.push("They chose poor ground - wormsign already in that quarter.");
+}
+
+// Per-turn season upkeep: alert decay, sietch discovery countdown.
+void season_turn() {
+    if (g.season.ending != campaign::kNone) return;
+
+    const int day = g.pl.turn / tune::kTurnsPerDay;
+    if (day != g.last_decay_day) {
+        g.last_decay_day = day;
+        if (g.season.alert > 0) {
+            g.season.alert -= campaign::kAlertDecayPerDay;
+            if (g.season.alert < 0) g.season.alert = 0;
+        }
+    }
+
+    if (g.season.alert >= campaign::kAlertDiscoveryAt) {
+        ++g.season.discovery;
+        if (g.season.discovery == campaign::kDiscoveryRaidAt / 2)
+            g.log.push("Thopters quarter the sky in search lanes. They are close.");
+        if (g.season.discovery >= campaign::kDiscoveryRaidAt) {
+            end_season(campaign::kRaidLoss);
+            return;
+        }
+    } else if (g.season.discovery > 0) {
+        --g.season.discovery;
+    }
+
+    schedule_ops();
 }
 
 void apply_deltas(uint8_t zone_id) {
@@ -354,21 +489,131 @@ void refresh_fov_and_paths() {
     recompute_light();
 }
 
+// meta.dat: tiny cross-run memory — seasons played, endings witnessed.
+struct Meta {
+    uint32_t runs = 0;
+    uint8_t endings_seen = 0;  // bit per campaign::Ending
+};
+Meta g_meta;
+
+void meta_load() {
+    FILE* f = std::fopen("meta.dat", "rb");
+    if (!f) return;
+    uint32_t magic = 0;
+    if (std::fread(&magic, 4, 1, f) == 1 && magic == 0x54454D44u) {
+        (void)!std::fread(&g_meta.runs, 4, 1, f);
+        (void)!std::fread(&g_meta.endings_seen, 1, 1, f);
+    }
+    std::fclose(f);
+}
+
+void meta_save() {
+    FILE* f = std::fopen("meta.dat", "wb");
+    if (!f) return;
+    const uint32_t magic = 0x54454D44u;  // 'DMET'
+    std::fwrite(&magic, 4, 1, f);
+    std::fwrite(&g_meta.runs, 4, 1, f);
+    std::fwrite(&g_meta.endings_seen, 1, 1, f);
+    std::fclose(f);
+}
+
 void die(const char* cause) {
     g.pl.dead = true;
     g.log.push("%s", cause);
     g.services.mixer->push({audio::Cmd::PlaySfx, 0 /* roar */, 200, 96});
+    ++g_meta.runs;
+    meta_save();
+}
+
+void end_season(uint8_t ending) {
+    if (g.season.ending != campaign::kNone) return;
+    g.season.ending = ending;
+    switch (ending) {
+        case campaign::kVictory:
+            g.log.push("The great harvest burns. The season is BROKEN.");
+            flash(240, 200, 80);
+            break;
+        case campaign::kQuotaLoss:
+            g.log.push("The eighth load reaches orbit. The Baron has his quota.");
+            flash(120, 120, 140);
+            break;
+        case campaign::kRaidLoss:
+            g.log.push("Thopters at dawn. Fire in the cave mouths. They found us.");
+            flash(255, 60, 20);
+            break;
+    }
+    ++g_meta.runs;
+    g_meta.endings_seen |= uint8_t(1 << ending);
+    meta_save();
 }
 
 // ---- worm callbacks ----------------------------------------------------------
+
+void end_season(uint8_t ending);
+
+void raise_alert(int amount) {
+    if (amount <= 0) return;
+    g.season.alert += amount;
+    if (g.season.alert > 100) g.season.alert = 100;
+    if (g.season.alert >= campaign::kAlertDiscoveryAt)
+        g.log.push("ALERT %d: survey thopters triangulate the deep desert.",
+                   int(g.season.alert));
+}
+
+void raise_standing(int amount) {
+    g.season.standing += amount;
+    if (g.season.standing > 100) g.season.standing = 100;
+    if (g.season.standing < 0) g.season.standing = 0;
+    if (!g.season.crysknife_granted &&
+        g.season.standing >= campaign::kStandingCrysknifeAt) {
+        g.season.crysknife_granted = 1;
+        g.pl.atk += 2;
+        g.log.push("The Naib unwraps a pale blade. 'Honored one. It is yours.'");
+        g.log.push("Crysknife taken: your strikes bite deeper.");
+    }
+}
 
 void op_denied(const char* how) {
     if (g.op.denied_reported) return;
     g.op.denied_reported = true;
     g.log.push("%s", how);
-    g.log.push("The harvest is DENIED. The Baron will rage.");
     g.alarm_turns = 50;
     g.alarm_spawn_cd = 6;
+
+    ++g.season.denied;
+    raise_standing(campaign::kStandingPerDenial);
+    int alert_gain = campaign::kAlertWormBait;
+    if (g.op.poisoned && g.op.state == harvest::OpState::Shipped) alert_gain = 0;
+    else if (g.op.state == harvest::OpState::Destroyed && g.op.plant_progress >= 3)
+        alert_gain = campaign::kAlertDemolition;
+    else if (g.op.spotters_knifed)
+        alert_gain = campaign::kAlertQuietWorm;
+    raise_alert(alert_gain);
+
+    if (g.op.mutators & campaign::MUT_CLIMAX) {
+        end_season(campaign::kVictory);
+        return;
+    }
+    g.log.push("The harvest is DENIED. (%d of %d) The Baron will rage.",
+               int(g.season.denied), campaign::kDenialsForClimax + 1);
+    if (g.season.denied >= campaign::kDenialsForClimax && !g.season.climax_pending) {
+        g.season.climax_pending = 1;
+        g.log.push("Smuggler word: the Baron stakes the season on ONE great harvest.");
+    }
+    g.season.next_op_turn =
+        g.pl.turn + g.rng.world.range(campaign::kOpGapMin, campaign::kOpGapMax);
+}
+
+void op_shipped_quota() {
+    ++g.season.shipped;
+    g.log.push("CHOAM ledger: %d loads shipped, %d denied.",
+               int(g.season.shipped), int(g.season.denied));
+    if (g.season.shipped >= campaign::kQuotaLossAt) {
+        end_season(campaign::kQuotaLoss);
+        return;
+    }
+    g.season.next_op_turn =
+        g.pl.turn + g.rng.world.range(campaign::kOpGapMin, campaign::kOpGapMax);
 }
 
 void worm_cb_crush(void*, int x, int y) {
@@ -490,7 +735,8 @@ void op_turn() {
 
     switch (op.state) {
         case harvest::OpState::Working:
-            op.hold = int16_t(op.hold + harvest::kHoldPerTurn);
+            if (!(op.mutators & campaign::MUT_SLOPPY) || (g.pl.turn & 1))
+                op.hold = int16_t(op.hold + harvest::kHoldPerTurn);
             g.noise.add(op.x, op.y, harvest::kCrawlerNoise);
             if (stirring && spotters_alive()) {
                 // hard shutdown: spotters kill the engines and the accumulated
@@ -524,6 +770,7 @@ void op_turn() {
                               "not find until the refinery.");
                 } else {
                     g.log.push("The carryall lifts the load into the sky. Lost.");
+                    op_shipped_quota();
                 }
             }
             break;
@@ -671,7 +918,9 @@ void advance_world() {
             }
             continue;
         }
-        if (e.type == EType::Trooper) {
+        if (e.type == EType::Trooper || e.type == EType::ShieldTrooper) {
+            if (e.type == EType::ShieldTrooper)
+                g.noise.add(e.x, e.y, 8);  // Holtzman fields madden the worm
             e.energy += 100;
             while (e.energy >= 100 && !g.pl.dead) {
                 e.energy -= 100;
@@ -689,6 +938,7 @@ void advance_world() {
 
     op_turn();
     alarm_turn();
+    season_turn();
 
     // the worm's turn (also decays the noise field)
     const worm::State before = g.wrm.state;
@@ -738,7 +988,6 @@ void enter_zone(uint8_t id, bool use_spawn, int at_x = 0, int at_y = 0) {
     map::generate(zone(), g.seed, map::ZoneId(id), sx, sy);
     apply_deltas(id);
     spawn_zone_wildlife(id);
-    spawn_op(id);
     // crawler footprint re-blocks after regen
     if (g.op.live() && g.op.zone == id)
         for (int dy = -1; dy <= 0; ++dy)
@@ -749,6 +998,8 @@ void enter_zone(uint8_t id, bool use_spawn, int at_x = 0, int at_y = 0) {
     g.wrm = worm::Worm{};
     g.noise.clear();
     g.services.mixer->push({audio::Cmd::Rumble, 0, 0, 0});
+    if (g.op.live() && g.op.zone == id && (g.op.mutators & campaign::MUT_WORMSIGN))
+        g.wrm.state = worm::State::Stirring;
 
     Entity& p = player_ent();
     if (use_spawn) { p.x = int16_t(sx); p.y = int16_t(sy); }
@@ -806,10 +1057,22 @@ void try_move(int dx, int dy) {
         return;
     }
 
+    if (entity_at(nx, ny, g.cur_zone, EType::Naib)) { g.menu_open = 1; g.menu_sel = 0; return; }
+    if (entity_at(nx, ny, g.cur_zone, EType::Sayyadina)) { g.menu_open = 2; g.menu_sel = 0; return; }
+    if (entity_at(nx, ny, g.cur_zone, EType::Smuggler)) { g.menu_open = 3; g.menu_sel = 0; return; }
+
     Entity* victim = entity_at(nx, ny, g.cur_zone, EType::Hound);
     if (!victim) victim = entity_at(nx, ny, g.cur_zone, EType::Trooper);
     if (!victim) victim = entity_at(nx, ny, g.cur_zone, EType::Spotter);
+    if (!victim) victim = entity_at(nx, ny, g.cur_zone, EType::ShieldTrooper);
     if (victim) {
+        if (victim->type == EType::ShieldTrooper && !g.pl.sandwalk) {
+            g.log.push("Your quick blade GLANCES off the shield shimmer.");
+            g.log.push("The slow blade penetrates. (C: sandwalk, then strike.)");
+            g.noise.add(nx, ny, 10);
+            advance_world();
+            return;
+        }
         victim->hp -= g.pl.atk;
         g.services.mixer->push({audio::Cmd::PlaySfx, 1, 200, 60});
         g.noise.add(nx, ny, victim->type == EType::Spotter ? 4 : 12);  // blades are quiet
@@ -821,15 +1084,21 @@ void try_move(int dx, int dy) {
                 case EType::Trooper:
                     g.log.push("The trooper falls. His water belongs to the tribe now.");
                     break;
+                case EType::ShieldTrooper:
+                    g.log.push("Slow and true - the blade slips the field. He falls.");
+                    break;
                 case EType::Spotter:
                     g.log.push("The spotter crumples. No eyes on the sand now.");
                     break;
                 default: break;
             }
+            const bool was_spotter = victim->type == EType::Spotter;
             const int16_t yield_ = victim->type == EType::Hound
                                        ? int16_t(tune::kCorpseWaterHound) : int16_t(140);
             *victim = Entity{EType::Corpse, Ai::Idle, uint8_t(g.cur_zone),
                              victim->x, victim->y, 0, 0, yield_};
+            if (was_spotter && !spotters_alive() && g.op.live())
+                g.op.spotters_knifed = true;  // the quiet route
         } else {
             g.log.push("You strike %s.",
                        victim->type == EType::Hound ? "the dust hound" :
@@ -964,7 +1233,7 @@ void try_harvest() {
     // stealing from the crawler hold takes priority when adjacent to it
     if (player_adjacent_op() && g.op.hold >= 15) {
         g.op.hold = int16_t(g.op.hold - 15);
-        g.pl.spice += 5;
+        g.pl.spice += (g.op.mutators & campaign::MUT_SLOPPY) ? 8 : 5;
         g.op.stolen = true;
         g.noise.add(p.x, p.y, 8);
         g.log.push("You scoop raw spice from the hold. +5 grains.");
@@ -996,6 +1265,7 @@ void game_init(uint64_t seed, const GameServices& services) {
     g.services = services;
     g.seed = seed;
     g.rng.init(seed);
+    meta_load();
 
     int sx, sy;
     map::generate(g.zones[map::kZoneSietch], seed, map::kZoneSietch, sx, sy);
@@ -1033,9 +1303,83 @@ bool game_update(const InputState& in) {
         return !in.was_pressed(Key::Cancel);
     }
 
-    if (g.pl.dead) {
+    if (g.pl.dead || g.season.ending != campaign::kNone) {
         if (in.was_pressed(Key::Confirm)) restart();
         return !in.was_pressed(Key::Cancel);
+    }
+
+    // vendor menus pause the world (browsing is free)
+    if (g.menu_open) {
+        const int counts[4] = {0, 3, 3, 5};  // options incl. Leave
+        const int n = counts[g.menu_open];
+        if (in.was_pressed(Key::Up)) g.menu_sel = (g.menu_sel + n - 1) % n;
+        if (in.was_pressed(Key::Down)) g.menu_sel = (g.menu_sel + 1) % n;
+        if (in.was_pressed(Key::Cancel)) g.menu_open = 0;
+        if (in.was_pressed(Key::Confirm)) {
+            switch (g.menu_open * 10 + g.menu_sel) {
+                case 10:  // Naib: tribute water
+                    if (g.pl.water >= 300) {
+                        g.pl.water -= 200;
+                        raise_standing(10);
+                        g.log.push("'The tribe drinks. The tribe remembers.' +10 standing.");
+                    } else {
+                        g.log.push("'You need it more than we do, child.'");
+                    }
+                    break;
+                case 11:  // Naib: the season
+                    g.log.push("'%d loads shipped. %d denied. Alert %d.'",
+                               int(g.season.shipped), int(g.season.denied),
+                               int(g.season.alert));
+                    g.log.push(g.season.climax_pending
+                                   ? "'Their great harvest comes. Be ready.'"
+                                   : "'Bleed them slowly. Water discipline.'");
+                    break;
+                case 12: g.menu_open = 0; break;  // leave
+                case 20:  // Sayyadina: spice tribute
+                    if (g.pl.spice >= 5) {
+                        g.pl.spice -= 5;
+                        raise_standing(12);
+                        g.log.push("Blue eyes hold yours. 'The tribe sees you.' +12 standing.");
+                    } else {
+                        g.log.push("'Bring spice when you have it to give.'");
+                    }
+                    break;
+                case 21:  // Sayyadina: healing trance
+                    if (g.pl.spice >= 6 && g.pl.hp < tune::kPlayerHpMax) {
+                        g.pl.spice -= 6;
+                        g.pl.hp = tune::kPlayerHpMax;
+                        g.pl.exposure = 0;
+                        g.log.push("She sings the water back into your flesh.");
+                    } else {
+                        g.log.push(g.pl.spice < 6 ? "'Six grains for the trance.'"
+                                                  : "'You are whole already.'");
+                    }
+                    break;
+                case 22: g.menu_open = 0; break;
+                case 30:  // Smuggler stock
+                    if (g.pl.spice >= 5) { g.pl.spice -= 5; ++g.pl.charges;
+                        g.log.push("A demolition charge, no questions. -5 spice."); }
+                    else g.log.push("'Five grains. Boom is not cheap.'");
+                    break;
+                case 31:
+                    if (g.pl.spice >= 3) { g.pl.spice -= 3; g.pl.thumpers += 2;
+                        g.log.push("Two thumpers off the truck. -3 spice."); }
+                    else g.log.push("'Three grains for the pair.'");
+                    break;
+                case 32:
+                    if (g.pl.spice >= 2) { g.pl.spice -= 2; ++g.pl.poisons;
+                        g.log.push("A vial of refinery rot. -2 spice."); }
+                    else g.log.push("'Two grains. Nasty stuff.'");
+                    break;
+                case 33:
+                    if (g.pl.spice >= 3) { g.pl.spice -= 3; ++g.pl.glowglobes;
+                        g.log.push("A glowglobe, barely used. -3 spice."); }
+                    else g.log.push("'Three grains and it's yours.'");
+                    break;
+                case 34: g.menu_open = 0; break;
+            }
+        }
+        return true;
     }
 
     int dx = 0, dy = 0;
@@ -1238,6 +1582,23 @@ void pass_entities(RenderCtx& r) {
                 g.draw_list.add(r.assets->get("glowglobe"), 0, sx, sy + 4 - bob, 31, 1);
                 break;
             }
+            case EType::ShieldTrooper:
+                g.draw_list.add(trooper_spr, (g.anim_tick / 8) % 2, sx, sy + 12, light, 1);
+                if (g.anim_tick % 5 == 0)  // Holtzman shimmer
+                    g.particles.spawn(sx - 10 + int(g.rng.fx.below(21)),
+                                      sy - 20 + int(g.rng.fx.below(25)),
+                                      0, -20, 10, 182);
+                break;
+            case EType::Naib:
+                g.draw_list.add(r.assets->get("naib"), 0, sx, sy + 12, light, 1);
+                break;
+            case EType::Sayyadina:
+                g.draw_list.add(r.assets->get("player_sayyadina"),
+                                (g.anim_tick / 20) % 4, sx, sy + 12, light, 1);
+                break;
+            case EType::Smuggler:
+                g.draw_list.add(r.assets->get("smuggler"), 0, sx, sy + 12, light, 1);
+                break;
             default: break;
         }
     }
@@ -1326,6 +1687,15 @@ void pass_ui(RenderCtx& r) {
         draw_text_shadow(ctx, b.blurb1, fb::W / 2 - int(std::strlen(b.blurb1)) * 4, 290, 28, 1);
         draw_text_shadow(ctx, b.blurb2, fb::W / 2 - int(std::strlen(b.blurb2)) * 4, 304, 230, 1);
         draw_text_shadow(ctx, "left/right choose   ENTER begin", fb::W / 2 - 124, 360, 14, 1);
+        if (g_meta.runs > 0) {
+            char mbuf[64];
+            std::snprintf(mbuf, sizeof mbuf, "seasons ended %u   endings seen:%s%s%s",
+                          unsigned(g_meta.runs),
+                          (g_meta.endings_seen & (1 << campaign::kVictory)) ? " VICTORY" : "",
+                          (g_meta.endings_seen & (1 << campaign::kQuotaLoss)) ? " QUOTA" : "",
+                          (g_meta.endings_seen & (1 << campaign::kRaidLoss)) ? " RAID" : "");
+            draw_text(ctx, mbuf, fb::W / 2 - int(std::strlen(mbuf)) * 4, 420, 12);
+        }
         return;
     }
 
@@ -1369,7 +1739,71 @@ void pass_ui(RenderCtx& r) {
         }
     }
 
-    if (g.pl.dead) {
+    // CHOAM ledger + season gauges, top-right.
+    {
+        char buf[48];
+        std::snprintf(buf, sizeof buf, "SHIPPED %d/%d  DENIED %d", int(g.season.shipped),
+                      campaign::kQuotaLossAt, int(g.season.denied));
+        draw_text_shadow(ctx, buf, fb::W - 8 - int(std::strlen(buf)) * 8, 4, 224, 1);
+        std::snprintf(buf, sizeof buf, "ALERT %d  STANDING %d", int(g.season.alert),
+                      int(g.season.standing));
+        draw_text_shadow(ctx, buf, fb::W - 8 - int(std::strlen(buf)) * 8, 14,
+                         uint8_t(g.season.alert >= campaign::kAlertDiscoveryAt ? 208 : 14), 1);
+        if (g.season.alert >= campaign::kAlertDiscoveryAt) {
+            std::snprintf(buf, sizeof buf, "DISCOVERY %d%%",
+                          g.season.discovery * 100 / campaign::kDiscoveryRaidAt);
+            draw_text_shadow(ctx, buf, fb::W - 8 - int(std::strlen(buf)) * 8, 24, 208, 1);
+        }
+    }
+
+    // Vendor menu overlay.
+    if (g.menu_open) {
+        static const char* kMenus[4][5] = {
+            {},
+            {"Tribute 200 water  (+10 standing)", "Ask about the season", "Leave", nullptr},
+            {"Offer 5 spice  (+12 standing)", "Healing trance  (6 spice)", "Leave", nullptr},
+            {"Demolition charge  (5 spice)", "Two thumpers  (3 spice)",
+             "Toxin vial  (2 spice)", "Glowglobe  (3 spice)", "Leave"},
+        };
+        static const char* kTitles[4] = {"", "THE NAIB", "THE SAYYADINA", "GREYBEARD THE SMUGGLER"};
+        const int x0 = fb::W / 2 - 150, y0 = 140;
+        fill_rect(ctx, x0, y0, 300, 110, 2);
+        fill_rect(ctx, x0, y0, 300, 1, 228);
+        fill_rect(ctx, x0, y0 + 109, 300, 1, 228);
+        draw_text_shadow(ctx, kTitles[g.menu_open], x0 + 12, y0 + 8, 230, 1);
+        char res[48];
+        std::snprintf(res, sizeof res, "water %d  spice %d", g.pl.water, g.pl.spice);
+        draw_text(ctx, res, x0 + 12, y0 + 20, 14);
+        for (int i = 0; i < 5 && kMenus[g.menu_open][i]; ++i) {
+            const bool sel = i == g.menu_sel;
+            if (sel) fill_rect(ctx, x0 + 8, y0 + 34 + i * 14 - 2, 284, 12, 4);
+            draw_text(ctx, kMenus[g.menu_open][i], x0 + 16, y0 + 34 + i * 14,
+                      uint8_t(sel ? 245 : 20));
+        }
+    }
+
+    // Season endings + death.
+    if (g.season.ending != campaign::kNone) {
+        static const char* kTitle[4] = {"", "THE SEASON IS BROKEN", "THE QUOTA SHIPS",
+                                        "THEY FOUND THE SIETCH"};
+        static const char* kLine1[4] = {
+            "",
+            "The Baron ships nothing. The Guild asks what he cannot pay.",
+            "Eight loads to orbit. The Baron toasts his ledger.",
+            "Thopters at dawn. Fire in the cave mouths.",
+        };
+        static const char* kLine2[4] = {
+            "", "The desert remembers its own.",
+            "The desert waits for another.", "No one is left to carry water.",
+        };
+        const int e = g.season.ending;
+        fill_rect(ctx, fb::W / 2 - 240, 150, 480, 90, 2);
+        draw_text_shadow(ctx, kTitle[e], fb::W / 2 - int(std::strlen(kTitle[e])) * 4, 162,
+                         uint8_t(e == campaign::kVictory ? 245 : 210), 1);
+        draw_text_shadow(ctx, kLine1[e], fb::W / 2 - int(std::strlen(kLine1[e])) * 4, 182, 24, 1);
+        draw_text_shadow(ctx, kLine2[e], fb::W / 2 - int(std::strlen(kLine2[e])) * 4, 196, 14, 1);
+        draw_text_shadow(ctx, "ENTER: another season", fb::W / 2 - 84, 216, 230, 1);
+    } else if (g.pl.dead) {
         fill_rect(ctx, fb::W / 2 - 150, 120, 300, 74, 2);
         draw_text_shadow(ctx, "You are one with the sand now.", fb::W / 2 - 120, 132, 210, 1);
         draw_text_shadow(ctx, "Fear is the mind-killer.", fb::W / 2 - 96, 148, 24, 1);
@@ -1444,6 +1878,8 @@ void game_serialize(SaveWriter& w) {
     w.i32(g.alarm_spawn_cd);
     w.i32(g.flash_count);
     w.bytes(g.flashes, sizeof g.flashes);
+    w.bytes(&g.season, sizeof g.season);
+    w.i32(g.last_decay_day);
     w.bytes(g.ents, sizeof g.ents);
     w.bytes(&g.rng.world, sizeof g.rng.world);
     w.bytes(&g.rng.combat, sizeof g.rng.combat);
@@ -1481,6 +1917,9 @@ bool game_deserialize(SaveReader& r) {
     const int flash_count = r.i32();
     light::Source flashes[8];
     r.bytes(flashes, sizeof flashes);
+    campaign::State season;
+    r.bytes(&season, sizeof season);
+    const int last_decay_day = r.i32();
     Entity ents[kMaxEnts];
     r.bytes(ents, sizeof ents);
     Pcg32 world, combat, loot;
@@ -1507,6 +1946,8 @@ bool game_deserialize(SaveReader& r) {
     g.alarm_spawn_cd = alarm_cd;
     g.flash_count = flash_count >= 0 && flash_count <= 8 ? flash_count : 0;
     std::memcpy(g.flashes, flashes, sizeof g.flashes);
+    g.season = season;
+    g.last_decay_day = last_decay_day;
     std::memcpy(g.ents, ents, sizeof g.ents);
     g.rng.world = world;
     g.rng.combat = combat;
@@ -1532,6 +1973,52 @@ bool game_deserialize(SaveReader& r) {
 }
 
 bool game_is_dead() { return g.pl.dead; }
+
+void game_debug_campaign(int* shipped, int* denied, int* alert, int* standing,
+                         int* ending) {
+    if (shipped) *shipped = g.season.shipped;
+    if (denied) *denied = g.season.denied;
+    if (alert) *alert = g.season.alert;
+    if (standing) *standing = g.season.standing;
+    if (ending) *ending = g.season.ending;
+}
+
+void game_debug_set_alert(int v) { g.season.alert = v; }
+
+void game_debug_op_zone(int* zone_out) { if (zone_out) *zone_out = g.op.zone; }
+
+void game_debug_spawn_shield_adjacent(int* hp_out) {
+    Entity& p = g.ents[0];
+    // prefer due east so the test can attack with a Right input
+    static const int kOrder[8][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1},
+                                     {1, 1}, {1, -1}, {-1, 1}, {-1, -1}};
+    for (const auto& d : kOrder) {
+        const int dx = d[0], dy = d[1];
+        if (!zone().walkable(p.x + dx, p.y + dy)) continue;
+        if (entity_at(p.x + dx, p.y + dy, g.cur_zone)) continue;
+        for (Entity& e : g.ents)
+            if (e.type == EType::None) {
+                e = Entity{EType::ShieldTrooper, Ai::Idle, g.cur_zone,
+                           int16_t(p.x + dx), int16_t(p.y + dy), 10, 0, 0};
+                if (hp_out) *hp_out = e.hp;
+                return;
+            }
+    }
+    if (hp_out) *hp_out = -1;
+}
+
+void game_debug_clear_hostiles() {
+    for (Entity& e : g.ents)
+        if (e.type == EType::Trooper || e.type == EType::ShieldTrooper ||
+            e.type == EType::Hound)
+            e.type = EType::None;
+}
+
+int game_debug_shield_hp() {
+    for (const Entity& e : g.ents)
+        if (e.type == EType::ShieldTrooper && e.zone == g.cur_zone) return e.hp;
+    return -1;
+}
 
 int game_worm_state() { return int(g.wrm.state); }
 
@@ -1566,6 +2053,10 @@ uint64_t game_state_hash() {
     mix(uint64_t(uint32_t(g.pl.exposure)));
     mix(uint64_t(uint32_t(g.pl.turn)));
     mix(uint64_t(uint8_t(g.pl.background)) | (uint64_t(uint32_t(g.pl.atk)) << 8));
+    mix(uint64_t(uint32_t(g.season.shipped)) | (uint64_t(uint32_t(g.season.denied)) << 16) |
+        (uint64_t(uint32_t(g.season.alert)) << 32) |
+        (uint64_t(uint32_t(g.season.standing)) << 48));
+    mix(uint64_t(g.season.ending));
     for (const Entity& e : g.ents) {
         mix(uint64_t(uint8_t(e.type)) | (uint64_t(e.zone) << 8) |
             (uint64_t(uint16_t(e.x)) << 16) | (uint64_t(uint16_t(e.y)) << 32) |

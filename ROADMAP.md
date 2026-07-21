@@ -77,13 +77,16 @@ spotter crew, escort AI, all five sabotage methods (thumper bait / demolition / 
 spotters / contaminate / steal), local alarm + escape phase.
 **Exit:** one full op completable by at least the thumper-bait and spotter-kill routes.
 
-### M4 — Campaign + win ⬜
-Season clock, overlapping op spawning, op mutators, intel sources (scouts / smuggler tips
-/ vantage scouting), quota (CHOAM ledger) / Harkonnen alert / sietch standing, water
-rings, Naib + Sayyadina + smuggler vendors and dialogue (seeded stock), Holtzman shield
-rules + shield-troopers, side-quest templates, climax op, all endings, meta save.
+### M4 — Campaign + win ✅
+Season clock, scheduled op spawning with deadlines (unattended loads ship), op mutators
+(elite/sloppy/twin-spotters/wormsign), scout intel by standing, quota (CHOAM ledger) /
+Harkonnen alert with sietch-discovery countdown / sietch standing (Honored grants the
+crysknife), Naib + Sayyadina + smuggler vendor menus, Holtzman shield-troopers (quick
+blade glances, sandwalk slow blade penetrates, shields madden the worm), climax op, all
+three endings, meta.dat cross-run memory shown on the chooser. *(Side-quest templates
+and physical water-ring tokens moved to M5.)*
 **Exit:** a full season is winnable, both loss endings trigger correctly, and the slow
-blade penetrates the shield.
+blade penetrates the shield — all three proven by --campaigntest and --shieldtest.
 
 ### M5 — Worm-riding + polish ⬜ *(riding cuttable)*
 Maker hooks + mount/steer, starting backgrounds (Fedaykin / Saboteur /
