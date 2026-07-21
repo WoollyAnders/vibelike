@@ -102,6 +102,18 @@ SPRITES = {
                     "needle-like metal body with a single glowing red sensor "
                     "eye, floating vertically, isolated object on a fully "
                     "transparent background, no scene",
+    "champion": "a hulking Harkonnen champion duelist in ornate black-and-red "
+                "segmented battle armor with a horned helm and twin curved "
+                "blades, menacing stance, full body, isolated figure on a "
+                "fully transparent background, no scene",
+    "baron":    "a corpulent towering baron in gilded black armor and a flowing "
+                "orange-lined cape, cruel grin, suspensor harness glints at his "
+                "belt, one ringed hand raised, full body, isolated figure on a "
+                "fully transparent background, no scene",
+    "guildsman": "a gaunt hooded Spacing Guild agent in long grey-orange robes "
+                 "with a metallic breathing apparatus at the mouth, holding an "
+                 "abacus-like ledger device, full body, isolated figure on a "
+                 "fully transparent background, no scene",
     "spicecache": "a small mound of glittering rust-red crystalline spice "
                   "granules heaped on the ground, faintly luminous cinnamon "
                   "crystals, isolated on a fully transparent background, "
@@ -274,6 +286,7 @@ HEIGHTS = {
     "hunterseeker": 26, "corpse": 14, "spicecache": 12, "thumper": 26,
     "glowglobe": 20, "rock": 52, "wall": 76, "cistern": 40,
     "wormhead": 104, "wormseg": 60, "crawler": 88,
+    "champion": 58, "baron": 60, "guildsman": 54,
 }
 
 def strip_background(img):

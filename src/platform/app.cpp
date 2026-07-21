@@ -484,6 +484,7 @@ int run_campaigntest(audio::Mixer& mixer, const Assets& assets, const Colormaps&
 
     // Leg 1: deny everything -> climax -> victory
     game_init(31337, services);
+    game_debug_buff();
     int ending = 0, guard = 0;
     while (guard++ < 9000 && !game_is_dead()) {
         if (guard % 12 == 0) game_debug_refill();
@@ -491,6 +492,7 @@ int run_campaigntest(audio::Mixer& mixer, const Assets& assets, const Colormaps&
         game_debug_op_info(&opstate, &ox, &oy);
         game_debug_op_zone(&opzone);
         if (opstate >= 1 && opstate <= 3) {
+            const char* phase = "op-wait";
             game_debug_warp(opzone, ox - 12 >= 1 ? ox - 12 : 1, oy);
             game_debug_clear_hostiles();  // flow test, not a combat test
             game_debug_kill_spotters();
@@ -501,6 +503,35 @@ int run_campaigntest(audio::Mixer& mixer, const Assets& assets, const Colormaps&
                 game_debug_op_info(&opstate, nullptr, nullptr);
                 if (opstate >= 4) break;
             }
+            if (game_is_dead()) std::printf("  [died in %s]\n", phase);
+            // let the worm finish gorging and dive before crossing the sand
+            game_debug_warp(opzone, 2, 2);
+            for (int w2 = 0; w2 < 16 && !game_is_dead(); ++w2) {
+                game_debug_refill();
+                tick_with(Key::Wait);
+            }
+            if (game_is_dead()) std::printf("  [died in corner-wait]\n");
+            // Y3: champions roam but need not be fought; the BARON must die
+            int guard2 = 0;
+            tick_with(Key::Sandwalk);  // slow blade beats any shield trait
+            while (game_debug_boss_alive() && game_debug_boss_is_baron() &&
+                   guard2++ < 200 && !game_is_dead()) {
+                game_debug_refill();  // flow test: the champion cannot outpace this
+                int adx = 0, ady = 0;
+                game_debug_warp_to_boss(&adx, &ady);
+                Key k = Key::Right;
+                if (adx > 0 && ady == 0) k = Key::Right;
+                else if (adx < 0 && ady == 0) k = Key::Left;
+                else if (adx == 0 && ady > 0) k = Key::Down;
+                else if (adx == 0 && ady < 0) k = Key::Up;
+                else if (adx > 0 && ady > 0) k = Key::DownRight;
+                else if (adx > 0 && ady < 0) k = Key::UpRight;
+                else if (adx < 0 && ady > 0) k = Key::DownLeft;
+                else if (adx < 0 && ady < 0) k = Key::UpLeft;
+                tick_with(k);
+            }
+            tick_with(Key::Sandwalk);
+            if (game_is_dead()) std::printf("  [died in boss-fight, guard2 %d]\n", guard2);
             game_debug_warp(0, 33, 30);  // melt back to the sietch, Fremen-style
         } else {
             tick_with(Key::Wait);
@@ -514,7 +545,8 @@ int run_campaigntest(audio::Mixer& mixer, const Assets& assets, const Colormaps&
         }
     }
     if (!ending)
-        std::printf("  leg1: no ending (dead %d, guard %d)\n", game_is_dead() ? 1 : 0, guard);
+        std::printf("  leg1: no ending (dead %d, guard %d, cause '%s')\n",
+                    game_is_dead() ? 1 : 0, guard, game_debug_death_cause());
     const bool leg1 = ending == 1;
 
     // Leg 2: do nothing -> the quota ships

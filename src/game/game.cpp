@@ -27,7 +27,8 @@ constexpr int kMaxDeltas = 192;
 
 enum class EType : uint8_t { None = 0, Player, Hound, Corpse, Thumper, Trooper, Spotter,
                              Glowglobe, ShieldTrooper, Naib, Sayyadina, Smuggler,
-                             PanAdder, Hermit, HunterSeeker, SpiceCache, Loot };
+                             PanAdder, Hermit, HunterSeeker, SpiceCache, Loot, Boss,
+                             Caravan, Envoy };
 enum class Ai : uint8_t { Idle = 0, Wander, Hunt, Guard };
 
 struct Entity {
@@ -172,6 +173,13 @@ struct GameState {
     int quest_need = 0;
     int quest_progress = 0;
 
+    // Y4: one timed side objective at a time (1 caravan / 2 guild envoy)
+    int sideobj_kind = 0;
+    uint8_t sideobj_zone = 0;
+    int16_t sideobj_x = 0, sideobj_y = 0;
+    int32_t sideobj_expires = 0;
+    bool sideobj_spawned = false;  // entity placed in-zone
+
     int storm_turns = 0;       // M5: Coriolis storm remaining
     int poison_turns = 0;      // pan adder venom: +thirst while active
     int16_t thopter_x = -1, thopter_y = 0;  // ornithopter sweep during alarms
@@ -220,8 +228,34 @@ worm::Tuning worm_tuning() {
     return t;
 }
 
+// Y3: champions — randomly generated bosses. Entity.data packs
+// (tier | traits<<8); data2 packs (name_a | name_b<<8). Traits are bits:
+inline constexpr uint8_t BT_SHIELDED = 1, BT_SWIFT = 2, BT_BRUTE = 4,
+                         BT_STALWART = 8, BT_TOXIC = 16;
+inline constexpr const char* kBossTitles[8] = {
+    "Warmaster", "Executor", "Beast-Handler", "Count", "Whipmaster",
+    "Provost", "Blade-Tutor", "Overseer"};
+inline constexpr const char* kBossNames[8] = {
+    "Dreth", "Gorou", "Vask", "Ilbam", "Krayt", "Feyd-Rausha", "Mordo", "Skarn"};
+inline constexpr const char* kBossEpithets[8] = {
+    "the Unbowed", "the Flenser", "of the Tithe", "the Whip-Hand",
+    "the Waterless", "the Gilded", "the Patient", "the Cruel"};
+
 // X2: Diablo-style enemy statlines.
 struct Foe { uint8_t level, tohit, dmin, dmax, ac_dodge; uint16_t xp; };
+Foe boss_foe(const Entity& e) {
+    const int tier = e.data & 0xFF;
+    const uint8_t traits = uint8_t(e.data >> 8);
+    Foe f{};
+    f.level = uint8_t(3 + tier);
+    f.tohit = uint8_t(64 + tier * 2);
+    f.dmin = uint8_t(2 + tier + ((traits & BT_BRUTE) ? 2 : 0));
+    f.dmax = uint8_t(5 + tier * 2 + ((traits & BT_BRUTE) ? 3 : 0));
+    f.ac_dodge = uint8_t(8 + tier);
+    f.xp = uint16_t(50 + tier * 30);
+    return f;
+}
+
 const Foe* foe_stats(EType t) {
     static constexpr Foe kHound{1, 60, 1, 3, 8, 12};
     static constexpr Foe kAdder{2, 72, 1, 2, 4, 15};
@@ -551,6 +585,50 @@ void season_turn() {
         --g.season.discovery;
     }
 
+    // Y4: side objectives bloom and wither on their own clocks
+    if (g.sideobj_kind == 0) {
+        if (g.rng.world.chance(1, 140)) {
+            g.sideobj_kind = 1 + int(g.rng.world.below(2));
+            g.sideobj_zone = uint8_t(g.rng.world.chance(1, 2) ? map::kZoneDesert
+                                                              : map::kZoneDeepPan);
+            g.sideobj_x = int16_t(g.rng.world.range(8, map::W - 8));
+            g.sideobj_y = int16_t(g.rng.world.range(8, map::H - 8));
+            g.sideobj_expires = g.pl.turn + 220;
+            g.sideobj_spawned = false;
+            g.log.push(g.sideobj_kind == 1
+                           ? "Word passes: a smuggler CARAVAN camps in the %s."
+                           : "Word passes: a GUILD ENVOY waits in the %s. Bring spice.",
+                       g.sideobj_zone == map::kZoneDesert ? "Rimwall" : "Deep Pan");
+        }
+    } else if (g.pl.turn >= g.sideobj_expires) {
+        g.log.push(g.sideobj_kind == 1 ? "The caravan has moved on."
+                                       : "The Guild envoy departs, unpaid.");
+        for (Entity& e : g.ents)
+            if (e.type == EType::Caravan || e.type == EType::Envoy) e.type = EType::None;
+        g.sideobj_kind = 0;
+    } else if (!g.sideobj_spawned && g.cur_zone == g.sideobj_zone) {
+        // materialize the meeting when you enter its region
+        map::Zone& z2 = zone();
+        for (int r2 = 0; r2 < 10 && !g.sideobj_spawned; ++r2)
+            for (int dy2 = -r2; dy2 <= r2 && !g.sideobj_spawned; ++dy2)
+                for (int dx2 = -r2; dx2 <= r2; ++dx2) {
+                    const int x = g.sideobj_x + dx2, y = g.sideobj_y + dy2;
+                    if (x < 1 || x >= map::W - 1 || y < 1 || y >= map::H - 1) continue;
+                    if (!z2.walkable(x, y) || entity_at(x, y, g.cur_zone)) continue;
+                    for (Entity& e : g.ents)
+                        if (e.type == EType::None) {
+                            e = Entity{g.sideobj_kind == 1 ? EType::Caravan : EType::Envoy,
+                                       Ai::Idle, g.cur_zone, int16_t(x), int16_t(y),
+                                       10, 0, 0};
+                            g.sideobj_x = int16_t(x);
+                            g.sideobj_y = int16_t(y);
+                            g.sideobj_spawned = true;
+                            break;
+                        }
+                    if (g.sideobj_spawned) break;
+                }
+    }
+
     schedule_ops();
 }
 
@@ -708,27 +786,21 @@ void grant_xp(int amount) {
     }
 }
 
-// X1: loot rolls — humans drop gear scaled to their level and the alert.
-void maybe_drop_loot(EType t, int x, int y) {
-    const Foe* f = foe_stats(t);
-    if (!f) return;
-    const bool human = t == EType::Trooper || t == EType::ShieldTrooper ||
-                       t == EType::Spotter || t == EType::Hermit;
-    if (!human) return;
-    const int chance = 40 + 8 * g.pl.st.talents[5];  // Scavenger
-    if (int(g.rng.loot.below(100)) >= chance) return;
+// Y2: run difficulty — each denied harvester and every tier of alert deepens
+// the loot tables. Risk feeds reward.
+int run_difficulty() { return g.season.denied + g.season.alert / 25; }
 
-    // pick a def near the foe's level
+items::Inst roll_item(int item_level, int rarity_bonus) {
     int candidates[items::kDefCount];
     int n = 0;
     for (int i = 0; i < items::kDefCount; ++i)
-        if (items::kDefs[i].level <= f->level + 1 &&
-            items::kDefs[i].level + 3 >= f->level)
+        if (items::kDefs[i].level <= item_level + 1 &&
+            items::kDefs[i].level + 3 >= item_level)
             candidates[n++] = i;
-    if (!n) return;
     items::Inst it;
+    if (!n) return it;
     it.def = uint8_t(candidates[g.rng.loot.below(uint32_t(n))]);
-    const int r = int(g.rng.loot.below(100));
+    const int r = int(g.rng.loot.below(100)) - rarity_bonus;
     it.rarity = r < 10 ? 2 : r < 40 ? 1 : 0;
     if (it.rarity >= 1) {
         if (g.rng.loot.chance(1, 2) || it.rarity == 2)
@@ -736,6 +808,21 @@ void maybe_drop_loot(EType t, int x, int y) {
         if (it.prefix == 0xFF || it.rarity == 2)
             it.suffix = uint8_t(g.rng.loot.below(items::kSuffixCount));
     }
+    return it;
+}
+
+void maybe_drop_loot(EType t, int x, int y) {
+    const Foe* f = foe_stats(t);
+    if (!f) return;
+    const bool human = t == EType::Trooper || t == EType::ShieldTrooper ||
+                       t == EType::Spotter || t == EType::Hermit;
+    if (!human && t != EType::Boss) return;
+    const int chance = (t == EType::Boss ? 100 : 40) + 8 * g.pl.st.talents[5];
+    if (int(g.rng.loot.below(100)) >= chance) return;
+
+    const int diff = run_difficulty();
+    items::Inst it = roll_item(f->level + diff / 2,
+                               diff * 6 + (t == EType::Boss ? 60 : 0));
     for (Entity& e : g.ents)
         if (e.type == EType::None) {
             e = Entity{EType::Loot, Ai::Idle, g.cur_zone, int16_t(x), int16_t(y), 1, 0,
@@ -757,7 +844,9 @@ items::Inst loot_of(const Entity& e) {
     return it;
 }
 
+const char* g_last_death = "";
 void die(const char* cause) {
+    g_last_death = cause;
     g.pl.dead = true;
     g.log.push("%s", cause);
     g.services.mixer->push({audio::Cmd::PlaySfx, 0 /* roar */, 200, 96});
@@ -815,6 +904,52 @@ void raise_standing(int amount) {
     }
 }
 
+void spawn_boss(bool baron) {
+    map::Zone& z = zone();
+    for (int tries = 0; tries < 300; ++tries) {
+        const int edge = int(g.rng.combat.below(4));
+        const int x = edge < 2 ? (edge == 0 ? 2 : map::W - 3)
+                               : g.rng.combat.range(2, map::W - 3);
+        const int y = edge < 2 ? g.rng.combat.range(2, map::H - 3)
+                               : (edge == 2 ? 2 : map::H - 3);
+        if (!z.walkable(x, y) || entity_at(x, y, g.cur_zone)) continue;
+        Entity* e = nullptr;
+        for (Entity& c : g.ents)
+            if (c.type == EType::None) { e = &c; break; }
+        if (!e) return;
+        const int tier = g.season.denied;
+        uint8_t traits;
+        int16_t name_pack;
+        int hp;
+        if (baron) {
+            traits = BT_SHIELDED | BT_BRUTE | BT_STALWART;
+            name_pack = -1;
+            hp = 40 + tier * 8;
+        } else {
+            traits = uint8_t(1 << g.rng.loot.below(5)) |
+                     uint8_t(1 << g.rng.loot.below(5));
+            name_pack = int16_t(g.rng.loot.below(8) | (g.rng.loot.below(8) << 4) |
+                                (g.rng.loot.below(8) << 8));
+            hp = 14 + tier * 5 + ((traits & BT_STALWART) ? 10 : 0);
+        }
+        *e = Entity{EType::Boss, Ai::Hunt, g.cur_zone, int16_t(x), int16_t(y),
+                    int16_t(hp), 0, int16_t(tier | (traits << 8)), name_pack};
+        if (baron) {
+            g.log.push("A gilded thopter descends. BARON HARKONNEN COMES HIMSELF.");
+            g.log.push("Kill him and the season is yours. (Shielded: slow blade!)");
+        } else {
+            char nm[80];
+            std::snprintf(nm, sizeof nm, "%s %s %s",
+                          kBossTitles[name_pack & 7], kBossNames[(name_pack >> 4) & 7],
+                          kBossEpithets[(name_pack >> 8) & 7]);
+            g.log.push("The Baron's champion answers: %s!", nm);
+            if (traits & BT_SHIELDED) g.log.push("A shield shimmer rides with him.");
+        }
+        g.services.mixer->push({audio::Cmd::PlaySfx, 0, 220, 120});
+        return;
+    }
+}
+
 void op_denied(const char* how) {
     if (g.op.denied_reported) return;
     g.op.denied_reported = true;
@@ -843,9 +978,10 @@ void op_denied(const char* how) {
 
     if (g.pl.eyes_ibad) alert_gain += alert_gain > 0 ? 1 : 0;  // a marked face
     if (g.op.mutators & campaign::MUT_CLIMAX) {
-        end_season(campaign::kVictory);
+        spawn_boss(true);  // the Baron himself — victory means killing HIM
         return;
     }
+    spawn_boss(false);  // every fallen harvester sends a champion
     g.log.push("The harvest is DENIED. (%d of %d) The Baron will rage.",
                int(g.season.denied), campaign::kDenialsForClimax + 1);
     if (g.season.denied >= campaign::kDenialsForClimax && !g.season.climax_pending) {
@@ -877,6 +1013,16 @@ void worm_cb_crush(void*, int x, int y) {
         } else {
             if (e.type == EType::Hound) g.log.push("A dust hound vanishes into the maw.");
             if (e.type == EType::Trooper) g.log.push("A trooper is snatched screaming into the sand.");
+            if (e.type == EType::Boss) {
+                if (e.data2 == -1) {
+                    g.log.push("SHAI-HULUD TAKES THE BARON. Shield and all.");
+                    g.log.push("The desert itself has judged him.");
+                    e.type = EType::None;
+                    end_season(campaign::kVictory);
+                    continue;
+                }
+                g.log.push("The champion's shield sang to the worm. It answered.");
+            }
             e.type = EType::None;
         }
     }
@@ -1320,6 +1466,46 @@ void advance_world() {
             }
             continue;
         }
+        if (e.type == EType::Boss) {
+            const uint8_t traits = uint8_t(e.data >> 8);
+            if (traits & BT_SHIELDED) g.noise.add(e.x, e.y, 8);
+            e.energy += int16_t((traits & BT_SWIFT) ? 150 : 100);
+            while (e.energy >= 100 && !g.pl.dead) {
+                e.energy -= 100;
+                const int pdist = g.dmap[e.y * map::W + e.x];
+                if (pdist == 1) {
+                    e.anim.facing = facing_from_tile_delta(player_ent().x - e.x,
+                                                           player_ent().y - e.y);
+                    e.anim.set(anim::State::Attack);
+                    const Foe f = boss_foe(e);
+                    const int dmg = foe_attack_roll(f);
+                    if (dmg == 0) { g.log.push("You slip the champion's blade."); continue; }
+                    if (traits & BT_TOXIC) {
+                        g.poison_turns = 15;
+                        g.log.push("The blade is POISONED - your water burns.");
+                    }
+                    g.log.push("The champion strikes you for %d.", dmg);
+                    damage_player(dmg, e.data2 == -1 ? "Slain by the Baron himself."
+                                                     : "Cut down by the Baron's champion.");
+                } else {
+                    int best_x = e.x, best_y = e.y;
+                    int16_t best = pdist >= 0 ? pdist : INT16_MAX;
+                    for (int dy2 = -1; dy2 <= 1; ++dy2)
+                        for (int dx2 = -1; dx2 <= 1; ++dx2) {
+                            if (!dx2 && !dy2) continue;
+                            const int nx2 = e.x + dx2, ny2 = e.y + dy2;
+                            if (!zone().walkable(nx2, ny2)) continue;
+                            if (entity_at(nx2, ny2, e.zone)) continue;
+                            if (nx2 == player_ent().x && ny2 == player_ent().y) continue;
+                            const int16_t d = g.dmap[ny2 * map::W + nx2];
+                            if (d >= 0 && d < best) { best = d; best_x = nx2; best_y = ny2; }
+                        }
+                    e.x = int16_t(best_x);
+                    e.y = int16_t(best_y);
+                }
+            }
+            continue;
+        }
         if (e.type == EType::Trooper || e.type == EType::ShieldTrooper) {
             if (e.type == EType::ShieldTrooper)
                 g.noise.add(e.x, e.y, 8);  // Holtzman fields madden the worm
@@ -1651,6 +1837,43 @@ void try_move(int dx, int dy) {
         return;
     }
 
+    if (Entity* car = entity_at(nx, ny, g.cur_zone, EType::Caravan)) {
+        const items::Inst gift = roll_item(2 + run_difficulty(), 30 + run_difficulty() * 6);
+        bool taken = false;
+        for (items::Inst& slot : g.pl.inv)
+            if (slot.empty() && !gift.empty()) {
+                slot = gift;
+                char nm[64];
+                gift.full_name(nm, sizeof nm);
+                g.log.push("The caravan master presses contraband on you: %s.", nm);
+                taken = true;
+                break;
+            }
+        if (!taken) g.log.push("The caravan has wares, but your pack is full.");
+        g.pl.spice += 2;
+        g.log.push("They share two grains for the road. The caravan breaks camp.");
+        car->type = EType::None;
+        g.sideobj_kind = 0;
+        advance_world();
+        return;
+    }
+    if (Entity* env = entity_at(nx, ny, g.cur_zone, EType::Envoy)) {
+        const int bribe = 6 + run_difficulty();
+        if (g.pl.spice >= bribe) {
+            g.pl.spice -= bribe;
+            g.season.alert = g.season.alert > 25 ? g.season.alert - 25 : 0;
+            g.season.discovery = 0;
+            g.log.push("The Guildsman weighs %d grains. 'The surveys will... err.'", bribe);
+            g.log.push("The Guild's blindness is bought. Discovery resets.");
+            env->type = EType::None;
+            g.sideobj_kind = 0;
+        } else {
+            g.log.push("'%d grains buys blindness. You carry %d. Return heavier.'",
+                       bribe, g.pl.spice);
+        }
+        advance_world();
+        return;
+    }
     if (entity_at(nx, ny, g.cur_zone, EType::Naib)) { g.menu_open = 1; g.menu_sel = 0; return; }
     if (entity_at(nx, ny, g.cur_zone, EType::Sayyadina)) { g.menu_open = 2; g.menu_sel = 0; return; }
     if (entity_at(nx, ny, g.cur_zone, EType::Smuggler)) { g.menu_open = 3; g.menu_sel = 0; return; }
@@ -1662,23 +1885,30 @@ void try_move(int dx, int dy) {
     if (!victim) victim = entity_at(nx, ny, g.cur_zone, EType::PanAdder);
     if (!victim) victim = entity_at(nx, ny, g.cur_zone, EType::Hermit);
     if (!victim) victim = entity_at(nx, ny, g.cur_zone, EType::HunterSeeker);
+    if (!victim) victim = entity_at(nx, ny, g.cur_zone, EType::Boss);
     if (victim) {
+        const bool shielded_boss =
+            victim->type == EType::Boss && ((victim->data >> 8) & BT_SHIELDED);
         player_ent().anim.facing = facing_from_tile_delta(dx, dy);
         player_ent().anim.set(anim::State::Attack);
         g.impact_x = int16_t(nx);
         g.impact_y = int16_t(ny);
-        g.impact_kind = victim->type == EType::ShieldTrooper ? 1 : 0;
-        if (victim->type == EType::ShieldTrooper && !g.pl.sandwalk) {
+        g.impact_kind =
+            (victim->type == EType::ShieldTrooper || shielded_boss) ? 1 : 0;
+        if ((victim->type == EType::ShieldTrooper || shielded_boss) && !g.pl.sandwalk) {
             g.log.push("Your quick blade GLANCES off the shield shimmer.");
             g.log.push("The slow blade penetrates. (C: sandwalk, then strike.)");
             g.noise.add(nx, ny, 10);
             advance_world();
             return;
         }
-        const Foe* foe = foe_stats(victim->type);
+        Foe boss_f{};
+        if (victim->type == EType::Boss) boss_f = boss_foe(*victim);
+        const Foe* foe = victim->type == EType::Boss ? &boss_f : foe_stats(victim->type);
         bool crit = false;
         int dealt = foe ? player_attack_roll(*foe, &crit) : g.pl.atk;
-        if (dealt == 0 && victim->type == EType::ShieldTrooper && g.pl.sandwalk)
+        if (dealt == 0 && g.pl.sandwalk &&
+            (victim->type == EType::ShieldTrooper || shielded_boss))
             dealt = 1 + g.pl.st.str / 4;  // slow and true: it always lands
         g.noise.add(nx, ny, victim->type == EType::Spotter ? 4 : 12);  // blades are quiet
         if (dealt == 0) {
@@ -1696,7 +1926,15 @@ void try_move(int dx, int dy) {
                 if (g.pl.st.level > foe->level + 2) xp /= 2;
                 grant_xp(xp);
             }
+            const bool was_baron = victim->type == EType::Boss && victim->data2 == -1;
             maybe_drop_loot(victim->type, victim->x, victim->y);
+            if (was_baron) {
+                *victim = Entity{EType::Corpse, Ai::Idle, uint8_t(g.cur_zone),
+                                 victim->x, victim->y, 0, 0, 400};
+                end_season(campaign::kVictory);
+                advance_world();
+                return;
+            }
             switch (victim->type) {
                 case EType::Hound:
                     g.log.push("The dust hound collapses. Its water is yours.");
@@ -1724,6 +1962,15 @@ void try_move(int dx, int dy) {
                 case EType::HunterSeeker:
                     g.log.push("You swat the sliver from the air. Fine work.");
                     raise_standing(2);
+                    break;
+                case EType::Boss:
+                    if (victim->data2 == -1) {
+                        g.log.push("The Baron falls, disbelieving, into the sand.");
+                        g.log.push("His water belongs to the tribe. ALL of it.");
+                    } else {
+                        g.log.push("The champion dies hard. His gear is yours.");
+                        raise_standing(5);
+                    }
                     break;
                 default: break;
             }
@@ -2136,6 +2383,17 @@ const char* describe_at(int tx, int ty) {
             case EType::Hermit: return "spice-mad hermit";
             case EType::HunterSeeker: return "HUNTER-SEEKER";
             case EType::SpiceCache: return "raw spice (G: gather)";
+            case EType::Boss: {
+                if (e.data2 == -1) return "BARON HARKONNEN (shielded!)";
+                static char bbuf[80];
+                std::snprintf(bbuf, sizeof bbuf, "%s %s %s%s",
+                              kBossTitles[e.data2 & 7], kBossNames[(e.data2 >> 4) & 7],
+                              kBossEpithets[(e.data2 >> 8) & 7],
+                              ((e.data >> 8) & BT_SHIELDED) ? " (shielded)" : "");
+                return bbuf;
+            }
+            case EType::Caravan: return "smuggler caravan (bump: trade)";
+            case EType::Envoy: return "Spacing Guild envoy (bump: pay the bribe)";
             case EType::Loot: {
                 static char buf[72];
                 char nm[64];
@@ -2268,7 +2526,9 @@ bool game_update(const InputState& in) {
                     g.menu_open = 0;
                 } else if (g.vault_page == 0) {  // deposit
                     items::Inst& it = g.pl.inv[g.menu_sel];
-                    if (!it.empty() && g_meta.stash_count < 24) {
+                    if (g.season.denied < 1) {
+                        g.log.push("'The vault opens for the blooded. Deny a harvest first.'");
+                    } else if (!it.empty() && g_meta.stash_count < 24) {
                         g_meta.stash[g_meta.stash_count++] = it;
                         char nm[64];
                         it.full_name(nm, sizeof nm);
@@ -2705,6 +2965,24 @@ void pass_entities(RenderCtx& r) {
             case EType::SpiceCache:
                 g.draw_list.add(r.assets->get("spicecache"), 0, sx, sy + 12, light, 0);
                 break;
+            case EType::Boss: {
+                const bool baron = e.data2 == -1;
+                g.draw_list.add(r.assets->get(baron ? "baron" : "champion"),
+                                (g.anim_tick / 8) % 2, sx, sy + 12, light, 1);
+                if (((e.data >> 8) & BT_SHIELDED) && g.anim_tick % 4 == 0)
+                    g.particles.spawn(sx - 12 + int(g.rng.fx.below(25)),
+                                      sy - 26 + int(g.rng.fx.below(30)), 0, -20, 10, 182);
+                if (baron && g.anim_tick % 6 == 0)
+                    g.particles.spawn(sx - 8 + int(g.rng.fx.below(17)), sy - 40, 0, -15,
+                                      14, 230);
+                break;
+            }
+            case EType::Caravan:
+                g.draw_list.add(r.assets->get("smuggler"), 0, sx, sy + 12, light, 1);
+                break;
+            case EType::Envoy:
+                g.draw_list.add(r.assets->get("guildsman"), 0, sx, sy + 12, light, 1);
+                break;
             case EType::Loot: {
                 g.draw_list.add(r.assets->get("thumper"), 0, sx, sy + 10, light, 0);
                 if (g.anim_tick % 9 == 0)  // gleam so drops read at a glance
@@ -2918,6 +3196,13 @@ void pass_ui(RenderCtx& r) {
             if (const char* what = describe_at(g.hover_tx, g.hover_ty))
                 draw_text_shadow(ctx, what, fb::W / 2 - int(std::strlen(what)) * 4,
                                  ui::kPanelY - 12, 24, 1);
+        if (g.sideobj_kind != 0) {
+            std::snprintf(buf, sizeof buf, "%s in the %s (%d)",
+                          g.sideobj_kind == 1 ? "CARAVAN" : "GUILD ENVOY",
+                          g.sideobj_zone == map::kZoneDesert ? "Rimwall" : "Deep Pan",
+                          int(g.sideobj_expires - g.pl.turn));
+            draw_text_shadow(ctx, buf, fb::W - 8 - int(std::strlen(buf)) * 8, 34, 170, 1);
+        }
         if (g.quest_kind != 0) {
             std::snprintf(buf, sizeof buf, "TASK: %s (%d/%d)",
                           g.quest_kind == 1 ? "cull the hounds"
@@ -2971,7 +3256,7 @@ void pass_ui(RenderCtx& r) {
                           int(g.pl.st.level), int(g.pl.st.xp), xp_to_level(g.pl.st.level),
                           int(g.pl.st.statpts), int(g.pl.st.talentpts));
             draw_text(ctx, buf, x0 + 12, y0 + 20, 14);
-            const char* rows[3] = {"Strength", "Dexterity", "Vitality"};
+            const char* rows[3] = {"Ferocity", "Weirding", "Endurance"};
             const int vals[3] = {g.pl.st.str, g.pl.st.dex, g.pl.st.vit};
             for (int i = 0; i < 3; ++i) {
                 const bool sel = g.menu_sel == i;
@@ -3087,13 +3372,37 @@ void pass_ui(RenderCtx& r) {
         draw_text_shadow(ctx, kLine2[e], fb::W / 2 - int(std::strlen(kLine2[e])) * 4, 196, 14, 1);
         draw_text_shadow(ctx, "ENTER: another season", fb::W / 2 - 84, 216, 230, 1);
     } else if (g.pl.dead) {
-        fill_rect(ctx, fb::W / 2 - 150, 120, 300, 74, 2);
-        draw_text_shadow(ctx, "You are one with the sand now.", fb::W / 2 - 120, 132, 210, 1);
-        draw_text_shadow(ctx, "Fear is the mind-killer.", fb::W / 2 - 96, 148, 24, 1);
-        char buf[48];
-        std::snprintf(buf, sizeof buf, "seed %llu", (unsigned long long)g.seed);
-        draw_text_shadow(ctx, buf, fb::W / 2 - 60, 164, 14, 1);
-        draw_text_shadow(ctx, "ENTER: rise again", fb::W / 2 - 68, 178, 230, 1);
+        // count what the desert takes
+        int lost = 0;
+        for (const items::Inst& it : g.pl.inv)
+            if (!it.empty()) ++lost;
+        for (const items::Inst& it : g.pl.equip)
+            if (!it.empty()) ++lost;
+        const int box_h = 84 + (lost < 6 ? lost : 6) * 10;
+        fill_rect(ctx, fb::W / 2 - 170, 110, 340, box_h, 2);
+        draw_text_shadow(ctx, "You are one with the sand now.", fb::W / 2 - 120, 120, 210, 1);
+        draw_text_shadow(ctx, "Fear is the mind-killer.", fb::W / 2 - 96, 134, 24, 1);
+        char buf[80];
+        std::snprintf(buf, sizeof buf, "the sand keeps %d pieces of gear:", lost);
+        draw_text_shadow(ctx, buf, fb::W / 2 - int(std::strlen(buf)) * 4, 150,
+                         uint8_t(lost ? 208 : 14), 1);
+        int row = 0;
+        for (int pass_ = 0; pass_ < 2 && row < 6; ++pass_) {
+            const items::Inst* list = pass_ ? g.pl.equip : g.pl.inv;
+            const int count = pass_ ? 4 : 12;
+            for (int i = 0; i < count && row < 6; ++i)
+                if (!list[i].empty()) {
+                    char nm[64];
+                    list[i].full_name(nm, sizeof nm);
+                    draw_text(ctx, nm, fb::W / 2 - int(std::strlen(nm)) * 4,
+                              162 + row * 10, uint8_t(list[i].rarity == 2 ? 245 : 20));
+                    ++row;
+                }
+        }
+        std::snprintf(buf, sizeof buf, "seed %llu   ENTER: rise again",
+                      (unsigned long long)g.seed);
+        draw_text_shadow(ctx, buf, fb::W / 2 - int(std::strlen(buf)) * 4,
+                         166 + row * 10, 230, 1);
     }
 }
 
@@ -3179,6 +3488,12 @@ void game_serialize(SaveWriter& w) {
     w.bytes(g.flashes, sizeof g.flashes);
     w.bytes(&g.season, sizeof g.season);
     w.i32(g.last_decay_day);
+    w.i32(g.sideobj_kind);
+    w.i32(g.sideobj_zone);
+    w.i32(g.sideobj_x);
+    w.i32(g.sideobj_y);
+    w.i32(g.sideobj_expires);
+    w.u8(g.sideobj_spawned ? 1 : 0);
     w.i32(g.storm_turns);
     w.i32(g.poison_turns);
     w.i32(g.thopter_x);
@@ -3239,6 +3554,12 @@ bool game_deserialize(SaveReader& r) {
     campaign::State season;
     r.bytes(&season, sizeof season);
     const int last_decay_day = r.i32();
+    const int so_kind = r.i32();
+    const int so_zone = r.i32();
+    const int so_x = r.i32();
+    const int so_y = r.i32();
+    const int so_exp = r.i32();
+    const bool so_spawned = r.u8() != 0;
     const int storm_turns = r.i32();
     const int poison_turns = r.i32();
     const int thopter_x = r.i32();
@@ -3275,6 +3596,12 @@ bool game_deserialize(SaveReader& r) {
     g.quest_kind = quest_kind;
     g.quest_need = quest_need;
     g.quest_progress = quest_progress;
+    g.sideobj_kind = so_kind;
+    g.sideobj_zone = uint8_t(so_zone);
+    g.sideobj_x = int16_t(so_x);
+    g.sideobj_y = int16_t(so_y);
+    g.sideobj_expires = so_exp;
+    g.sideobj_spawned = so_spawned;
     g.storm_turns = storm_turns;
     g.poison_turns = poison_turns;
     g.thopter_x = int16_t(thopter_x);
@@ -3407,8 +3734,49 @@ int game_debug_vault_withdraw_one() {
 void game_debug_clear_hostiles() {
     for (Entity& e : g.ents)
         if (e.type == EType::Trooper || e.type == EType::ShieldTrooper ||
-            e.type == EType::Hound)
+            e.type == EType::Hound || e.type == EType::Boss)
             e.type = EType::None;
+}
+
+void game_debug_warp_to_boss(int* atk_dx, int* atk_dy) {
+    if (atk_dx) *atk_dx = 0;
+    if (atk_dy) *atk_dy = 0;
+    for (const Entity& e : g.ents) {
+        if (e.type != EType::Boss || e.zone != g.cur_zone) continue;
+        static const int kAdj[8][2] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1},
+                                       {-1, -1}, {1, 1}, {-1, 1}, {1, -1}};
+        for (const auto& d : kAdj) {
+            const int x = e.x + d[0], y = e.y + d[1];
+            if (!zone().walkable(x, y) || entity_at(x, y, g.cur_zone)) continue;
+            g.ents[0].x = int16_t(x);
+            g.ents[0].y = int16_t(y);
+            if (atk_dx) *atk_dx = -d[0];
+            if (atk_dy) *atk_dy = -d[1];
+            refresh_fov_and_paths();
+            return;
+        }
+    }
+}
+
+const char* game_debug_death_cause() { return g_last_death; }
+
+void game_debug_buff() {  // harness only: end fights before the worm arrives
+    g.pl.st.str = 60;
+    g.pl.st.dex = 40;
+    g.pl.st.vit = 30;
+    g.pl.hp = player_max_hp();
+}
+
+bool game_debug_boss_is_baron() {
+    for (const Entity& e : g.ents)
+        if (e.type == EType::Boss && e.zone == g.cur_zone && e.data2 == -1) return true;
+    return false;
+}
+
+bool game_debug_boss_alive() {
+    for (const Entity& e : g.ents)
+        if (e.type == EType::Boss && e.zone == g.cur_zone) return true;
+    return false;
 }
 
 int game_debug_shield_hp() {
