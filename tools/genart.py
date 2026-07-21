@@ -30,6 +30,23 @@ SPRITES = {
     "player":  "a lone desert nomad warrior in a worn dark hooded stillsuit robe "
                "with subtle tubing, faint glowing blue eyes under the hood, "
                "standing pose, full body, facing slightly left",
+    "player_fedaykin":
+               "a fierce desert commando warrior in a fitted dark stillsuit with "
+               "chest-crossed straps and a tribal headband, scarred face, "
+               "gripping a curved pale crystalline knife low and ready, battle "
+               "stance, full body, facing slightly left, isolated figure on a "
+               "fully transparent background, no ground, no scene",
+    "player_saboteur":
+               "a lean desert saboteur in a hooded dark stillsuit hung with "
+               "satchels, det-cord coils and small charges across the chest, "
+               "wary hunched posture, full body, facing slightly left, isolated "
+               "figure on a fully transparent background, no ground, no scene",
+    "player_sayyadina":
+               "a desert mystic seeress in flowing indigo-shadowed robes over a "
+               "stillsuit, veiled face with intensely glowing blue-within-blue "
+               "eyes, one hand raised in a prescient gesture, full body, facing "
+               "slightly left, isolated figure on a fully transparent "
+               "background, no ground, no scene",
     "hound":   "a lean sinewy desert hound predator, mangy tan-grey hide, "
                "ember-orange eyes, prowling stance, side view, full body",
     "corpse":  "a fallen desert warrior's corpse lying flat on its back, "
@@ -87,7 +104,64 @@ TEXTURES = {
                  "grey-brown stone plates with dust in the cracks",
     "tex_spice": "seamless top-down texture of desert sand veined with "
                  "glittering rust-red crystalline cinnamon-colored deposits",
+    "tex_ripple": "seamless top-down texture of strong concentric sand ripple "
+                  "rings radiating across desert sand, deep wave shadows, "
+                  "agitated disturbed sand",
 }
+
+# Specials: generated once, frames synthesized in post.
+SPECIALS = {
+    "mound":    "a swelling mound of disturbed desert sand bulging upward with "
+                "cracks radiating from its crest, dust sifting off, isolated on "
+                "a fully transparent background, no scene, no border",
+    "carryall": "top-down silhouette of a massive heavy-lift dragonfly-winged "
+                "cargo aircraft with twin hulls, solid dark shape, isolated on "
+                "a fully transparent background, no scene",
+}
+
+def build_ripple(tex, fw, fh, frames):
+    """Animate by rolling the ripple texture between frames."""
+    sheet = Image.new("RGBA", (fw * frames, fh), (0, 0, 0, 0))
+    mask = diamond_mask(fw, fh)
+    for i in range(frames):
+        ox, oy = 128 + i * 9, 128 + i * 5
+        crop = tex.crop((ox, oy, ox + fw, oy + fh)).convert("RGBA")
+        tile = Image.new("RGBA", (fw, fh), (0, 0, 0, 0))
+        tile.paste(crop, (0, 0), mask)
+        sheet.paste(tile, (i * fw, 0), tile)
+    return sheet
+
+def build_mound(img, fw, fh, frames):
+    """Growth cycle: progressive scale of one generated mound."""
+    img = strip_background(img)
+    bbox = img.getbbox()
+    if bbox:
+        img = img.crop(bbox)
+    sheet = Image.new("RGBA", (fw * frames, fh), (0, 0, 0, 0))
+    for i in range(frames):
+        t = (i + 1) / frames
+        s = min((fw - 2) * t / img.width, (fh - 2) * t / img.height)
+        scaled = img.resize((max(1, int(img.width * s)), max(1, int(img.height * s))),
+                            Image.LANCZOS)
+        sheet.paste(scaled, (i * fw + (fw - scaled.width) // 2, fh - scaled.height - 1),
+                    scaled)
+    return sheet
+
+def build_carryall(img, fw, fh, frames):
+    """Aircraft silhouette flattened to a dithered ground shadow."""
+    img = strip_background(img)
+    bbox = img.getbbox()
+    if bbox:
+        img = img.crop(bbox)
+    img = img.resize((fw - 2, fh - 2), Image.LANCZOS)
+    shadow = Image.new("RGBA", (fw * frames, fh), (0, 0, 0, 0))
+    px_src = img.load()
+    px_dst = shadow.load()
+    for y in range(img.height):
+        for x in range(img.width):
+            if px_src[x, y][3] > 100 and (x + y) % 2 == 0:  # 50% dither
+                px_dst[x + 1, y + 1] = (16, 12, 10, 255)
+    return shadow
 
 def api_key():
     key = os.environ.get("OPENAI_API_KEY")
@@ -279,6 +353,18 @@ def main():
     _, fw, fh, frames, _, _ = meta["tiles"]
     build_tiles(textures, fw, fh, frames).save(os.path.join(RAW, "tiles.png"))
     print(f"  tiles: composed {frames} diamonds at {fw}x{fh}")
+
+    _, fw, fh, frames, _, _ = meta["ripple"]
+    build_ripple(textures["tex_ripple"], fw, fh, frames).save(os.path.join(RAW, "ripple.png"))
+    print(f"  ripple: {frames} rolled frames at {fw}x{fh}")
+
+    for name, builder in (("mound", build_mound), ("carryall", build_carryall)):
+        if name not in meta:
+            continue
+        img = generate(key, name, SPECIALS[name], transparent=True)
+        _, fw, fh, frames, _, _ = meta[name]
+        builder(img, fw, fh, frames).save(os.path.join(RAW, f"{name}.png"))
+        print(f"  {name}: {frames} synthesized frames at {fw}x{fh}")
 
     for name, prompt in SPRITES.items():
         if name not in meta:

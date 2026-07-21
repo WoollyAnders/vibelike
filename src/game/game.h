@@ -16,6 +16,7 @@ struct GameServices {
     audio::Mixer* mixer;
     const Assets* assets;
     const Colormaps* cmaps;
+    bool interactive = false;  // true: show the background chooser on new runs
 };
 
 void game_init(uint64_t seed, const GameServices& services);

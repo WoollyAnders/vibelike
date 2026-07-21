@@ -15,6 +15,9 @@ crawler crawler.png 128 96 2 64 80
 trooper trooper.png 32 64 2 16 60
 spotter spotter.png 32 64 2 16 60
 carryall carryall.png 112 48 1 56 24
+player_fedaykin player_fedaykin.png 32 64 4 16 60
+player_saboteur player_saboteur.png 32 64 4 16 60
+player_sayyadina player_sayyadina.png 32 64 4 16 60
 ui_panel ui_panel.png 640 44 1 0 0
 ui_socket ui_socket.png 44 44 1 22 22
 ui_plaque ui_plaque.png 240 24 1 0 0

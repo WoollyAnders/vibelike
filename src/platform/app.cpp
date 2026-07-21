@@ -407,7 +407,7 @@ int main(int argc, char** argv) {
     if (!audio_load(mixer)) return 1;
 
     bool seamtest = false, slicetest = false, wormtest = false, autodemo = false,
-         optest = false, opdemo = false;
+         optest = false, opdemo = false, uishot = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
         if (SDL_strcmp(argv[i], "--seamtest") == 0) seamtest = true;
@@ -416,6 +416,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--autodemo") == 0) autodemo = true;
         if (SDL_strcmp(argv[i], "--opdemo") == 0) { autodemo = true; opdemo = true; }
         if (SDL_strcmp(argv[i], "--optest") == 0) optest = true;
+        if (SDL_strcmp(argv[i], "--uishot") == 0) uishot = true;
     }
 
     Palette master;
@@ -440,7 +441,7 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    GameServices services{&mixer, &assets, &cmaps};
+    GameServices services{&mixer, &assets, &cmaps, /*interactive=*/!autodemo || uishot};
     game_init(autodemo ? (opdemo ? 9001 : 4242) : uint64_t(SDL_GetPerformanceCounter()),
               services);
     mixer.push({audio::Cmd::PlaySong, uint8_t(g_song_ambient), 0, 0});
@@ -542,6 +543,15 @@ int main(int argc, char** argv) {
                 std::snprintf(name, sizeof name, "demo_%02d.bmp", shot++);
                 bmp_save(name, frame, lut);
             }
+        }
+        if (uishot) {
+            static int ui_ticks = 0;
+            ++ui_ticks;
+            if (ui_ticks == 90 || ui_ticks == 150) input.pressed[int(Key::Right)] = true;
+            if (ui_ticks == 60) bmp_save("uishot_0.bmp", frame, lut);
+            if (ui_ticks == 120) bmp_save("uishot_1.bmp", frame, lut);
+            if (ui_ticks == 180) bmp_save("uishot_2.bmp", frame, lut);
+            if (ui_ticks > 200) running = false;
         }
 
         ++fps_frames;

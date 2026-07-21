@@ -34,6 +34,23 @@ struct Entity {
     int16_t data = 0;  // corpse: water yield
 };
 
+enum class Background : uint8_t { Fedaykin = 0, Saboteur, Sayyadina, Count };
+
+struct BackgroundDef {
+    const char* name;
+    const char* sprite;
+    const char* blurb1;
+    const char* blurb2;
+};
+constexpr BackgroundDef kBackgrounds[] = {
+    {"FEDAYKIN", "player_fedaykin",
+     "Death commando of the inner sietch.", "Crysknife-trained: strikes hit harder."},
+    {"SABOTEUR", "player_saboteur",
+     "Quiet hands, loud results.", "Extra charges, toxin and thumpers."},
+    {"SAYYADINA-TOUCHED", "player_sayyadina",
+     "The spice has opened one eye.", "Carries spice; the desert drinks slower."},
+};
+
 struct Player {
     int hp = tune::kPlayerHpMax;
     int water = tune::kStartWater;
@@ -43,9 +60,30 @@ struct Player {
     int charges = 1;   // demolition
     int poisons = 1;   // hold toxin
     int spice = 0;     // grains
+    int atk = tune::kPlayerAtk;
+    Background background = Background::Fedaykin;
     bool sandwalk = false;
     bool dead = false;
 };
+
+void apply_background(Player& pl, Background bg) {
+    pl.background = bg;
+    switch (bg) {
+        case Background::Fedaykin:
+            pl.atk = tune::kPlayerAtk + 2;
+            break;
+        case Background::Saboteur:
+            pl.charges = 3;
+            pl.poisons = 2;
+            pl.thumpers = 5;
+            break;
+        case Background::Sayyadina:
+            pl.spice = 10;
+            pl.water = tune::kStartWater + 200;
+            break;
+        default: break;
+    }
+}
 
 // Persistent per-zone terrain change (worm churn); replayed after regen.
 struct Delta {
@@ -86,6 +124,9 @@ struct GameState {
     int anim_tick = 0;
     int fade = 0;
     uint8_t fade_r = 255, fade_g = 255, fade_b = 255;
+
+    bool choosing = false;      // background chooser (interactive new runs)
+    int choose_idx = 0;
 };
 GameState g;
 
@@ -682,7 +723,7 @@ void try_move(int dx, int dy) {
 
     // the surfaced worm is a wall of flesh — bump = strike
     if (worm_occupies(nx, ny)) {
-        const int dealt = worm::hit(g.wrm, nx, ny, tune::kPlayerAtk, worm_callbacks());
+        const int dealt = worm::hit(g.wrm, nx, ny, g.pl.atk, worm_callbacks());
         if (dealt > 0) g.log.push("Your blade bites the soft flesh of the maw!");
         g.noise.add(p.x, p.y, 12);
         advance_world();
@@ -705,7 +746,7 @@ void try_move(int dx, int dy) {
     if (!victim) victim = entity_at(nx, ny, g.cur_zone, EType::Trooper);
     if (!victim) victim = entity_at(nx, ny, g.cur_zone, EType::Spotter);
     if (victim) {
-        victim->hp -= tune::kPlayerAtk;
+        victim->hp -= g.pl.atk;
         g.services.mixer->push({audio::Cmd::PlaySfx, 1, 200, 60});
         g.noise.add(nx, ny, victim->type == EType::Spotter ? 4 : 12);  // blades are quiet
         if (victim->hp <= 0) {
@@ -857,7 +898,7 @@ void try_harvest() {
 void restart() {
     const GameServices services = g.services;
     const uint64_t seed = g.seed + 1;
-    game_init(seed, services);
+    game_init(seed, services);  // interactive runs return to the chooser
 }
 
 }  // namespace
@@ -874,6 +915,9 @@ void game_init(uint64_t seed, const GameServices& services) {
                        int16_t(sx), int16_t(sy), int16_t(tune::kPlayerHpMax), 0, 0};
     g.spawned_mask = 1 << map::kZoneSietch;
 
+    g.choosing = services.interactive;
+    if (!g.choosing) apply_background(g.pl, Background::Fedaykin);
+
     g.log.push("The Naib's word: deny them the spice. Go.");
     g.log.push("Arrows move. G harvest. T thumper. C sandwalk.");
     refresh_fov_and_paths();
@@ -887,6 +931,19 @@ void game_init(uint64_t seed, const GameServices& services) {
 bool game_update(const InputState& in) {
     ++g.anim_tick;
     if (g.fade > 0) g.fade -= 6;
+
+    if (g.choosing) {
+        const int n = int(Background::Count);
+        if (in.was_pressed(Key::Left)) g.choose_idx = (g.choose_idx + n - 1) % n;
+        if (in.was_pressed(Key::Right)) g.choose_idx = (g.choose_idx + 1) % n;
+        if (in.was_pressed(Key::Confirm)) {
+            apply_background(g.pl, Background(g.choose_idx));
+            g.choosing = false;
+            g.log.push("You are %s. The Tanzerouft waits.", kBackgrounds[g.choose_idx].name);
+            flash(10, 10, 10);
+        }
+        return !in.was_pressed(Key::Cancel);
+    }
 
     if (g.pl.dead) {
         if (in.was_pressed(Key::Confirm)) restart();
@@ -1051,7 +1108,9 @@ void pass_objects(RenderCtx& r) {
 
 // Entities: actors (and the surfaced worm), into the scene list.
 void pass_entities(RenderCtx& r) {
-    const SpriteSheet* player_spr = r.assets->get("player");
+    const SpriteSheet* player_spr =
+        r.assets->get(kBackgrounds[int(g.pl.background)].sprite);
+    if (!player_spr) player_spr = r.assets->get("player");
     const SpriteSheet* hound_spr = r.assets->get("hound");
     const SpriteSheet* corpse_spr = r.assets->get("corpse");
     const SpriteSheet* thumper_spr = r.assets->get("thumper");
@@ -1147,6 +1206,32 @@ void pass_weather(RenderCtx&) {}
 void pass_ui(RenderCtx& r) {
     DrawCtx& ctx = r.ctx;
     const map::Zone& z = *r.z;
+
+    if (g.choosing) {
+        fill_rect(ctx, 0, 0, fb::W, fb::H, 1);
+        draw_text_shadow(ctx, "D U S T F A L L", fb::W / 2 - 64, 60, 230, 1);
+        draw_text_shadow(ctx, "Choose your path", fb::W / 2 - 64, 84, 24, 1);
+
+        const int n = int(Background::Count);
+        for (int i = 0; i < n; ++i) {
+            const int cx = fb::W / 2 + (i - 1) * 170;
+            const bool sel = i == g.choose_idx;
+            if (const SpriteSheet* spr = r.assets->get(kBackgrounds[i].sprite)) {
+                if (sel)
+                    fill_rect(ctx, cx - 40, 130, 80, 100, 3);
+                draw_sprite(ctx, *spr, (g.anim_tick / 9) % spr->frames, cx, 220,
+                            sel ? 31 : 24);
+            }
+            const int name_x = cx - int(std::strlen(kBackgrounds[i].name)) * 4;
+            draw_text_shadow(ctx, kBackgrounds[i].name, name_x, 240,
+                             sel ? 245 : 12, 1);
+        }
+        const BackgroundDef& b = kBackgrounds[g.choose_idx];
+        draw_text_shadow(ctx, b.blurb1, fb::W / 2 - int(std::strlen(b.blurb1)) * 4, 290, 28, 1);
+        draw_text_shadow(ctx, b.blurb2, fb::W / 2 - int(std::strlen(b.blurb2)) * 4, 304, 230, 1);
+        draw_text_shadow(ctx, "left/right choose   ENTER begin", fb::W / 2 - 124, 360, 14, 1);
+        return;
+    }
 
     ui::HudState hud{g.pl.hp, tune::kPlayerHpMax, g.pl.water, tune::kWaterMax,
                      g.pl.exposure, hour_now(), ambient_now(),
@@ -1252,6 +1337,8 @@ void game_serialize(SaveWriter& w) {
     w.i32(g.pl.charges);
     w.i32(g.pl.poisons);
     w.i32(g.pl.spice);
+    w.i32(g.pl.atk);
+    w.u8(uint8_t(g.pl.background));
     w.u8(g.pl.sandwalk ? 1 : 0);
     w.u8(g.pl.dead ? 1 : 0);
     w.u8(g.spawned_mask);
@@ -1282,6 +1369,8 @@ bool game_deserialize(SaveReader& r) {
     pl.charges = r.i32();
     pl.poisons = r.i32();
     pl.spice = r.i32();
+    pl.atk = r.i32();
+    pl.background = Background(r.u8());
     pl.sandwalk = r.u8() != 0;
     pl.dead = r.u8() != 0;
     const uint8_t spawned = r.u8();
@@ -1371,6 +1460,7 @@ uint64_t game_state_hash() {
     mix(uint64_t(uint32_t(g.pl.water)));
     mix(uint64_t(uint32_t(g.pl.exposure)));
     mix(uint64_t(uint32_t(g.pl.turn)));
+    mix(uint64_t(uint8_t(g.pl.background)) | (uint64_t(uint32_t(g.pl.atk)) << 8));
     for (const Entity& e : g.ents) {
         mix(uint64_t(uint8_t(e.type)) | (uint64_t(e.zone) << 8) |
             (uint64_t(uint16_t(e.x)) << 16) | (uint64_t(uint16_t(e.y)) << 32) |
