@@ -80,6 +80,9 @@ SPRITES = {
                "full body",
     "spotter": "a military observer in dark fatigues and goggles holding up a "
                "long brass telescope, standing on watch, full body",
+    "glowglobe": "a small floating luminous orb lamp glowing warm amber inside "
+                 "a delicate brass tether cage, hovering, softly radiant, "
+                 "isolated object on a fully transparent background, no scene",
 }
 
 # UI elements: stretched to fill their exact frame (no aspect-fit).

@@ -11,6 +11,7 @@
 #include "engine/rng.h"
 #include "game/map.h"
 #include "game/harvest.h"
+#include "game/light.h"
 #include "game/tunables.h"
 #include "game/ui.h"
 #include "game/worm.h"
@@ -21,7 +22,8 @@ constexpr uint32_t kChunkGame = 0x454D4147;  // 'GAME'
 constexpr int kMaxEnts = 64;
 constexpr int kMaxDeltas = 192;
 
-enum class EType : uint8_t { None = 0, Player, Hound, Corpse, Thumper, Trooper, Spotter };
+enum class EType : uint8_t { None = 0, Player, Hound, Corpse, Thumper, Trooper, Spotter,
+                             Glowglobe };
 enum class Ai : uint8_t { Idle = 0, Wander, Hunt, Guard };
 
 struct Entity {
@@ -60,6 +62,7 @@ struct Player {
     int charges = 1;   // demolition
     int poisons = 1;   // hold toxin
     int spice = 0;     // grains
+    int glowglobes = 2;
     int atk = tune::kPlayerAtk;
     Background background = Background::Fedaykin;
     bool sandwalk = false;
@@ -108,6 +111,10 @@ struct GameState {
     harvest::Op op;
     int alarm_turns = 0;       // local reinforcement pressure after sabotage
     int alarm_spawn_cd = 0;
+
+    uint8_t lightmap[map::N];  // M7: per-tile light levels, rebuilt per turn
+    light::Source flashes[8];  // transient sources (explosions, breaches)
+    int flash_count = 0;
     uint8_t noise_meter = 0;          // HUD value (near player)
     uint8_t seismo[64] = {};          // history ring for the trace
     uint8_t seismo_head = 0;
@@ -296,9 +303,55 @@ void recompute_shade(uint8_t zone_id, int hour) {
     g.shade_hour = hour;
 }
 
+void add_flash(int x, int y, int radius, int intensity, int ttl) {
+    if (g.flash_count < 8)
+        g.flashes[g.flash_count++] = light::Source{int16_t(x), int16_t(y),
+                                                   uint8_t(radius), uint8_t(intensity),
+                                                   int8_t(ttl)};
+}
+
+// Rebuild the per-tile lightmap from this turn's sources.
+void recompute_light() {
+    light::Source srcs[40];
+    int n = 0;
+    const map::Zone& z = zone();
+
+    // the player's suit lamp
+    srcs[n++] = {player_ent().x, player_ent().y, 7, 26, 0};
+
+    // placed lights and machines
+    for (const Entity& e : g.ents) {
+        if (e.zone != g.cur_zone || n >= 36) continue;
+        if (e.type == EType::Glowglobe) srcs[n++] = {e.x, e.y, 6, 29, 0};
+        else if (e.type == EType::Thumper) srcs[n++] = {e.x, e.y, 2, 14, 0};
+    }
+    if (g.op.live() && g.op.zone == g.cur_zone)
+        srcs[n++] = {g.op.x, g.op.y, 8, 26, 0};  // crawler floodlights
+
+    // the worm's violence glows with static discharge
+    if (g.wrm.state == worm::State::Breaching || g.wrm.state == worm::State::Surfaced)
+        if (n < 38) srcs[n++] = {g.wrm.x, g.wrm.y, 5, 18, 0};
+
+    // sietch lamps: cistern + door pads
+    if (g.cur_zone == map::kZoneSietch) {
+        for (int i = 0; i < map::N && n < 38; ++i) {
+            if (z.flags[i] & map::TF_CISTERN)
+                srcs[n++] = {int16_t(i % map::W), int16_t(i / map::W), 4, 24, 0};
+            else if (z.flags[i] & map::TF_DOOR)
+                srcs[n++] = {int16_t(i % map::W), int16_t(i / map::W), 2, 16, 0};
+        }
+    }
+
+    // transient flashes
+    for (int i = 0; i < g.flash_count && n < 40; ++i) srcs[n++] = g.flashes[i];
+
+    light::compute(z, srcs, n, light::kAmbientByHour[hour_now()], g.lightmap);
+}
+
 void refresh_fov_and_paths() {
     map::compute_fov(zone(), player_ent().x, player_ent().y, fov_radius());
     map::compute_dijkstra(zone(), player_ent().x, player_ent().y, g.dmap);
+    recompute_light();
 }
 
 void die(const char* cause) {
@@ -597,6 +650,15 @@ void upkeep() {
 void advance_world() {
     upkeep();
     if (g.pl.dead) return;
+
+    // transient light flashes decay
+    for (int i = 0; i < g.flash_count;) {
+        if (--g.flashes[i].ttl <= 0)
+            g.flashes[i] = g.flashes[--g.flash_count];
+        else
+            ++i;
+    }
+
     refresh_fov_and_paths();
     for (int i = 1; i < kMaxEnts; ++i) {
         Entity& e = g.ents[i];
@@ -641,8 +703,10 @@ void advance_world() {
             case worm::State::Surfaced: intensity = 190; break;
         }
         g.services.mixer->push({audio::Cmd::Rumble, 0, uint8_t(intensity), 0});
-        if (g.wrm.state == worm::State::Surfaced)
+        if (g.wrm.state == worm::State::Surfaced) {
             g.services.mixer->push({audio::Cmd::PlaySfx, 0, 255, 110});
+            add_flash(g.wrm.x, g.wrm.y, 8, 24, 2);  // breach static-discharge
+        }
     }
 
     // hour changed? re-cast the shadows
@@ -804,6 +868,29 @@ void try_move(int dx, int dy) {
     if (g.pl.sandwalk && !g.pl.dead) advance_world();  // slow, broken rhythm
 }
 
+void place_glowglobe() {
+    Entity& p = player_ent();
+    // standing on one? pick it back up
+    if (Entity* globe = entity_at(p.x, p.y, g.cur_zone, EType::Glowglobe)) {
+        globe->type = EType::None;
+        ++g.pl.glowglobes;
+        g.log.push("You pocket the glowglobe.");
+        advance_world();
+        return;
+    }
+    if (g.pl.glowglobes <= 0) {
+        g.log.push("No glowglobes left.");
+        return;
+    }
+    Entity* globe = alloc_entity();
+    if (!globe) return;
+    *globe = Entity{EType::Glowglobe, Ai::Idle, g.cur_zone, p.x, p.y, 1, 0, 0};
+    --g.pl.glowglobes;
+    g.log.push("The glowglobe rises and burns steady. A pool of light.");
+    g.services.mixer->push({audio::Cmd::PlaySfx, 1, 140, 150});
+    advance_world();
+}
+
 void place_thumper() {
     if (g.cur_zone == map::kZoneSietch) {
         g.log.push("Not inside the sietch.");
@@ -847,6 +934,7 @@ void try_plant() {
         g.noise.add(g.op.x, g.op.y, 90);
         g.services.mixer->push({audio::Cmd::PlaySfx, 0, 255, 140});
         flash(255, 180, 60);
+        add_flash(g.op.x, g.op.y, 10, 31, 3);  // fireball light
         op_denied("The crawler blossoms into fire and shrapnel.");
     }
     advance_world();
@@ -964,6 +1052,7 @@ bool game_update(const InputState& in) {
     else if (in.pressed_or_repeat(Key::Wait)) advance_world();
     else if (in.was_pressed(Key::Harvest)) try_harvest();
     else if (in.was_pressed(Key::Thumper)) place_thumper();
+    else if (in.was_pressed(Key::Glowglobe)) place_glowglobe();
     else if (in.was_pressed(Key::Plant)) try_plant();
     else if (in.was_pressed(Key::Poison)) try_poison();
     else if (in.was_pressed(Key::Sandwalk)) {
@@ -1018,13 +1107,11 @@ struct RenderCtx {
 
 int tile_light(const RenderCtx& r, int idx) {
     const uint8_t vis = r.z->vis[idx];
-    if (!(vis & map::V_VISIBLE)) return 7;  // remembered
-    int light = r.night ? 16 : 31;
-    if (!(r.z->flags[idx] & map::TF_INDOOR) && (r.z->flags[idx] & map::TF_SHADE) && !r.night)
-        light = 24;  // shade reads visibly cooler
-    if (r.z->flags[idx] & map::TF_INDOOR) light = 20;
-    return light;
+    if (!(vis & map::V_VISIBLE)) return light::kRemembered;
+    return g.lightmap[idx];
 }
+
+int light_at(int x, int y) { return g.lightmap[y * map::W + x]; }
 
 // Ground: floor diamonds, immediate (no overlap between floors).
 void pass_ground(RenderCtx& r) {
@@ -1047,10 +1134,12 @@ void pass_ground_decals(RenderCtx& r) {
     int sx, sy;
     for (int i = 0; i < worm::kSegments; i += 2) {
         iso::tile_to_screen(g.wrm.seg_x[i], g.wrm.seg_y[i], g.cam, sx, sy);
-        draw_sprite(r.ctx, *ripple, (g.anim_tick / 6 + i) % 2, sx, sy, r.base_light);
+        draw_sprite(r.ctx, *ripple, (g.anim_tick / 6 + i) % 2, sx, sy,
+                    light_at(g.wrm.seg_x[i], g.wrm.seg_y[i]));
     }
     iso::tile_to_screen(g.wrm.x, g.wrm.y, g.cam, sx, sy);
-    draw_sprite(r.ctx, *ripple, (g.anim_tick / 4) % 2, sx, sy, r.base_light);
+    draw_sprite(r.ctx, *ripple, (g.anim_tick / 4) % 2, sx, sy,
+                light_at(g.wrm.x, g.wrm.y));
 }
 
 // Walls: architecture, into the shared y-sorted scene list.
@@ -1092,7 +1181,8 @@ void pass_objects(RenderCtx& r) {
         if (r.z->vis[idx] & (map::V_VISIBLE | map::V_REMEMBERED)) {
             int sx, sy;
             iso::tile_to_screen(g.op.x, g.op.y, g.cam, sx, sy);
-            const int light = (r.z->vis[idx] & map::V_VISIBLE) ? r.base_light : 7;
+            const int light = (r.z->vis[idx] & map::V_VISIBLE)
+                                  ? g.lightmap[idx] : light::kRemembered;
             const bool churning = g.op.state == harvest::OpState::Working;
             g.draw_list.add(r.assets->get("crawler"), churning ? (g.anim_tick / 6) % 2 : 0,
                             sx - 32, sy + 8, light, 1);
@@ -1102,7 +1192,7 @@ void pass_objects(RenderCtx& r) {
         int sx, sy;
         iso::tile_to_screen(g.wrm.x, g.wrm.y, g.cam, sx, sy);
         g.draw_list.add(r.assets->get("mound"), 2 - (g.wrm.timer > 2 ? 2 : g.wrm.timer),
-                        sx, sy + 16, r.base_light, 1);
+                        sx, sy + 16, light_at(g.wrm.x, g.wrm.y), 1);
     }
 }
 
@@ -1123,7 +1213,7 @@ void pass_entities(RenderCtx& r) {
         if (!(r.z->vis[idx] & map::V_VISIBLE)) continue;
         int sx, sy;
         iso::tile_to_screen(e.x, e.y, g.cam, sx, sy);
-        const int light = r.night ? 18 : 31;
+        const int light = g.lightmap[idx];
         switch (e.type) {
             case EType::Player:
                 g.draw_list.add(player_spr, (g.anim_tick / 9) % 4, sx, sy + 12, light, 1);
@@ -1143,6 +1233,11 @@ void pass_entities(RenderCtx& r) {
             case EType::Spotter:
                 g.draw_list.add(spotter_spr, (g.anim_tick / 14) % 2, sx, sy + 12, light, 1);
                 break;
+            case EType::Glowglobe: {
+                const int bob = (g.anim_tick / 16) % 2;
+                g.draw_list.add(r.assets->get("glowglobe"), 0, sx, sy + 4 - bob, 31, 1);
+                break;
+            }
             default: break;
         }
     }
@@ -1152,11 +1247,12 @@ void pass_entities(RenderCtx& r) {
         int sx, sy;
         for (int i = worm::kSegments - 1; i >= 0; --i) {
             iso::tile_to_screen(g.wrm.seg_x[i], g.wrm.seg_y[i], g.cam, sx, sy);
-            g.draw_list.add(seg, 0, sx, sy + 20, r.base_light, 1);
+            g.draw_list.add(seg, 0, sx, sy + 20,
+                            light_at(g.wrm.seg_x[i], g.wrm.seg_y[i]), 1);
         }
         iso::tile_to_screen(g.wrm.x, g.wrm.y, g.cam, sx, sy);
         g.draw_list.add(r.assets->get("wormhead"), (g.anim_tick / 10) % 2, sx, sy + 24,
-                        r.base_light, 2);
+                        light_at(g.wrm.x, g.wrm.y), 2);
     }
 }
 
@@ -1169,7 +1265,7 @@ void pass_effects(RenderCtx& r) {
             iso::tile_to_screen(g.op.x, g.op.y, g.cam, sx, sy);
             const int bob = (g.anim_tick / 12) % 3 - 1;
             draw_sprite(r.ctx, *r.assets->get("carryall"), 0, sx - 20, sy - 80 + bob,
-                        r.base_light);
+                        light_at(g.op.x, g.op.y));
         }
     }
 }
@@ -1337,6 +1433,7 @@ void game_serialize(SaveWriter& w) {
     w.i32(g.pl.charges);
     w.i32(g.pl.poisons);
     w.i32(g.pl.spice);
+    w.i32(g.pl.glowglobes);
     w.i32(g.pl.atk);
     w.u8(uint8_t(g.pl.background));
     w.u8(g.pl.sandwalk ? 1 : 0);
@@ -1345,6 +1442,8 @@ void game_serialize(SaveWriter& w) {
     w.bytes(&g.op, sizeof g.op);
     w.i32(g.alarm_turns);
     w.i32(g.alarm_spawn_cd);
+    w.i32(g.flash_count);
+    w.bytes(g.flashes, sizeof g.flashes);
     w.bytes(g.ents, sizeof g.ents);
     w.bytes(&g.rng.world, sizeof g.rng.world);
     w.bytes(&g.rng.combat, sizeof g.rng.combat);
@@ -1369,6 +1468,7 @@ bool game_deserialize(SaveReader& r) {
     pl.charges = r.i32();
     pl.poisons = r.i32();
     pl.spice = r.i32();
+    pl.glowglobes = r.i32();
     pl.atk = r.i32();
     pl.background = Background(r.u8());
     pl.sandwalk = r.u8() != 0;
@@ -1378,6 +1478,9 @@ bool game_deserialize(SaveReader& r) {
     r.bytes(&op, sizeof op);
     const int alarm_turns = r.i32();
     const int alarm_cd = r.i32();
+    const int flash_count = r.i32();
+    light::Source flashes[8];
+    r.bytes(flashes, sizeof flashes);
     Entity ents[kMaxEnts];
     r.bytes(ents, sizeof ents);
     Pcg32 world, combat, loot;
@@ -1402,6 +1505,8 @@ bool game_deserialize(SaveReader& r) {
     g.op = op;
     g.alarm_turns = alarm_turns;
     g.alarm_spawn_cd = alarm_cd;
+    g.flash_count = flash_count >= 0 && flash_count <= 8 ? flash_count : 0;
+    std::memcpy(g.flashes, flashes, sizeof g.flashes);
     std::memcpy(g.ents, ents, sizeof g.ents);
     g.rng.world = world;
     g.rng.combat = combat;

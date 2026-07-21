@@ -107,7 +107,7 @@ gothic-flavored bitmap font, styled modal frames, title + death screens.
 **Exit:** a side-by-side before/after where every screen reads as a finished
 retro game; no placeholder sprite remains in the manifest.
 
-### M7 — Lighting ⬜
+### M7 — Lighting ✅
 Diablo-style proper lighting on the colormap infrastructure: per-tile light
 levels composed from multiple sources (player torch radius, glowglobes,
 crawler floodlights, spice-blow ember glow, explosion flashes), radial
