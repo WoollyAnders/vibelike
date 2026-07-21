@@ -625,7 +625,7 @@ int main(int argc, char** argv) {
     bool seamtest = false, slicetest = false, wormtest = false, autodemo = false,
          optest = false, opdemo = false, uishot = false, shieldtest = false,
          campaigntest = false, dettest = false, ridetest = false, animdebug = false,
-         circledemo = false;
+         circledemo = false, fightdemo = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
         if (SDL_strcmp(argv[i], "--seamtest") == 0) seamtest = true;
@@ -634,6 +634,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--autodemo") == 0) autodemo = true;
         if (SDL_strcmp(argv[i], "--opdemo") == 0) { autodemo = true; opdemo = true; }
         if (SDL_strcmp(argv[i], "--circledemo") == 0) { autodemo = true; circledemo = true; }
+        if (SDL_strcmp(argv[i], "--fightdemo") == 0) { autodemo = true; fightdemo = true; }
         if (SDL_strcmp(argv[i], "--optest") == 0) optest = true;
         if (SDL_strcmp(argv[i], "--uishot") == 0) uishot = true;
         if (SDL_strcmp(argv[i], "--shieldtest") == 0) shieldtest = true;
@@ -688,6 +689,9 @@ int main(int argc, char** argv) {
         {Key::Glowglobe, 1}, {Key::Left, 3}, {Key::Wait, 60},
     };
     static const DemoStep kOpScript[] = {{Key::Wait, 220}};
+    static const DemoStep kFightScript[] = {
+        {Key::Sandwalk, 1}, {Key::Right, 8}, {Key::Thumper, 1}, {Key::Wait, 10},
+    };
     static const DemoStep kCircleScript[] = {
         {Key::Down, 13},
         {Key::Right, 4}, {Key::UpRight, 3}, {Key::Up, 4}, {Key::UpLeft, 3},
@@ -696,15 +700,22 @@ int main(int argc, char** argv) {
         {Key::Wait, 30},
     };
     const DemoStep* demo_script = opdemo ? kOpScript
-                                  : circledemo ? kCircleScript : kWormScript;
+                                  : circledemo ? kCircleScript
+                                  : fightdemo ? kFightScript : kWormScript;
     const int demo_script_len = opdemo ? int(SDL_arraysize(kOpScript))
                                 : circledemo ? int(SDL_arraysize(kCircleScript))
-                                             : int(SDL_arraysize(kWormScript));
+                                : fightdemo ? int(SDL_arraysize(kFightScript))
+                                            : int(SDL_arraysize(kWormScript));
     if (opdemo) {
         game_debug_warp(2, 2, 32);
         int st = 0, ox = 0, oy = 0;
         game_debug_op_info(&st, &ox, &oy);
         game_debug_warp(2, ox - 7 >= 1 ? ox - 7 : 1, oy - 2);
+    }
+    if (fightdemo) {
+        game_debug_warp(1, 30, 30);
+        int hp = 0;
+        game_debug_spawn_shield_adjacent(&hp);
     }
     int demo_step = 0, demo_left = autodemo ? demo_script[0].count : 0, demo_cooldown = 0;
 
@@ -780,7 +791,7 @@ int main(int argc, char** argv) {
 
         if (autodemo) {
             static int demo_ticks = 0, shot = 0;
-            if (++demo_ticks % 24 == 0 && shot < 24) {
+            if (++demo_ticks % (fightdemo ? 6 : 24) == 0 && shot < 24) {
                 char name[32];
                 std::snprintf(name, sizeof name, "demo_%02d.bmp", shot++);
                 bmp_save(name, frame, lut);

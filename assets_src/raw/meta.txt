@@ -44,3 +44,14 @@ player_saboteur_dirwalk player_saboteur_dirwalk.png 32 64 20 16 60
 player_sayyadina_dirwalk player_sayyadina_dirwalk.png 32 64 20 16 60
 trooper_dirwalk trooper_dirwalk.png 32 64 20 16 60
 hound_dirwalk hound_dirwalk.png 32 32 20 16 26
+player_fedaykin_dirattack player_fedaykin_dirattack.png 32 64 15 16 60
+player_fedaykin_diruse player_fedaykin_diruse.png 32 64 10 16 60
+player_saboteur_dirattack player_saboteur_dirattack.png 32 64 15 16 60
+player_saboteur_diruse player_saboteur_diruse.png 32 64 10 16 60
+player_sayyadina_dirattack player_sayyadina_dirattack.png 32 64 15 16 60
+player_sayyadina_diruse player_sayyadina_diruse.png 32 64 10 16 60
+trooper_dirattack trooper_dirattack.png 32 64 15 16 60
+trooper_diruse trooper_diruse.png 32 64 10 16 60
+hound_dirattack hound_dirattack.png 32 32 15 16 26
+hound_diruse hound_diruse.png 32 32 10 16 26
+hound_attack hound_attack.png 32 32 3 16 26

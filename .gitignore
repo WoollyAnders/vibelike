@@ -3,3 +3,4 @@ build/
 compile_commands.json
 assets_src/indexed/
 .env
+__pycache__/

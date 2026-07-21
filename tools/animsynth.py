@@ -12,6 +12,36 @@ RAW = os.path.join(os.path.dirname(__file__), "..", "assets_src", "raw")
 WALKERS = ["player_fedaykin", "player_saboteur", "player_sayyadina",
            "trooper", "hound", "hermit"]
 
+def synth_attack(base_frame, fw, fh):
+    """3 frames: windup (lean back), impact (lunge), recover."""
+    frames = []
+    for shear, bob in ((-3, 0), (5, -2), (1, 0)):
+        img = Image.new("RGBA", (fw, fh), (0, 0, 0, 0))
+        for y in range(fh):
+            t = y / max(1, fh - 1)
+            dx = int(shear * (1.0 - t))
+            row = base_frame.crop((0, y, fw, y + 1))
+            img.paste(row, (dx, y + bob), row)
+        frames.append(img)
+    sheet = Image.new("RGBA", (fw * 3, fh), (0, 0, 0, 0))
+    for i, f in enumerate(frames):
+        sheet.paste(f, (i * fw, 0), f)
+    return sheet
+
+def synth_use(base_frame, fw, fh):
+    """2 frames: kneel (squash + drop), rise."""
+    frames = []
+    for squash, drop in ((0.82, 4), (0.94, 1)):
+        nh = max(1, int(fh * squash))
+        img = Image.new("RGBA", (fw, fh), (0, 0, 0, 0))
+        scaled = base_frame.resize((fw, nh), Image.LANCZOS)
+        img.paste(scaled, (0, fh - nh - 1 + drop), scaled)
+        frames.append(img)
+    sheet = Image.new("RGBA", (fw * 2, fh), (0, 0, 0, 0))
+    for i, f in enumerate(frames):
+        sheet.paste(f, (i * fw, 0), f)
+    return sheet
+
 def synth_walk(base_frame, fw, fh):
     """4 frames: lean-left, upright+bob, lean-right, upright+bob."""
     frames = []
@@ -55,23 +85,39 @@ def main():
             lines.append(f"{walk_name} {walk_name}.png {fw} {fh} 4 {ax} {ay}")
             added += 1
 
-    # directional strips get per-view walk cycles: 5 views x 4 frames = 20
+    # directional strips get per-view cycles: walk (5x4), attack (5x3), use (5x2)
     for name in WALKERS:
         dir_name = f"{name}_dir"
         if dir_name not in entries:
             continue
-        dirwalk_name = f"{name}_dirwalk"
         _, fname, fw, fh, _, ax, ay = entries[dir_name]
         fw, fh = int(fw), int(fh)
         sheet = Image.open(os.path.join(RAW, fname)).convert("RGBA")
-        out = Image.new("RGBA", (fw * 20, fh), (0, 0, 0, 0))
-        for v in range(5):
-            view = sheet.crop((v * fw, 0, (v + 1) * fw, fh))
-            walk = synth_walk(view, fw, fh)
-            out.paste(walk, (v * 4 * fw, 0), walk)
-        out.save(os.path.join(RAW, f"{dirwalk_name}.png"))
-        if dirwalk_name not in entries:
-            lines.append(f"{dirwalk_name} {dirwalk_name}.png {fw} {fh} 20 {ax} {ay}")
+        for suffix, synth, fpd in (("dirwalk", synth_walk, 4),
+                                   ("dirattack", synth_attack, 3),
+                                   ("diruse", synth_use, 2)):
+            out_name = f"{name}_{suffix}"
+            out = Image.new("RGBA", (fw * fpd * 5, fh), (0, 0, 0, 0))
+            for v in range(5):
+                view = sheet.crop((v * fw, 0, (v + 1) * fw, fh))
+                cycle = synth(view, fw, fh)
+                out.paste(cycle, (v * fpd * fw, 0), cycle)
+            out.save(os.path.join(RAW, f"{out_name}.png"))
+            if out_name not in entries:
+                lines.append(f"{out_name} {out_name}.png {fw} {fh} {fpd * 5} {ax} {ay}")
+                added += 1
+
+    # single-view attack lunges for the mirror-only creatures
+    for name in ("hound",):
+        if name not in entries:
+            continue
+        atk_name = f"{name}_attack"
+        _, fname, fw, fh, _, ax, ay = entries[name]
+        fw, fh = int(fw), int(fh)
+        base = Image.open(os.path.join(RAW, fname)).convert("RGBA").crop((0, 0, fw, fh))
+        synth_attack(base, fw, fh).save(os.path.join(RAW, f"{atk_name}.png"))
+        if atk_name not in entries:
+            lines.append(f"{atk_name} {atk_name}.png {fw} {fh} 3 {ax} {ay}")
             added += 1
 
     with open(meta_path, "w") as f:
