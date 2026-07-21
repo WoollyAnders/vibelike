@@ -41,7 +41,7 @@ into an idle breathe loop; a debug overlay shows state/frame/facing.
 **Exit:** walking a circle shows the character turning through all 8 facings,
 enemies face the player as they hunt, and mirrored views are seam-free.
 
-## G3 — Attack & action animations ⬜
+## G3 — Attack & action animations ✅
 - **Attack state**: windup → impact → recover for player and melee enemies;
   damage, sound and hit-flash land exactly on the `impact` event frame (the
   sim result is precomputed; the animation replays it).

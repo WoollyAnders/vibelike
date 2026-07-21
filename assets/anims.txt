@@ -13,3 +13,11 @@ hound             idle   hound                     14  loop  1  -
 hound             walk   hound_walk                5   loop  1  1:footstep,3:footstep
 hermit            idle   hermit                    12  loop  1  -
 hermit            walk   hermit_walk               6   loop  1  1:footstep,3:footstep
+player_fedaykin   attack player_fedaykin_dirattack   4  once  5  1:impact
+player_fedaykin   use    player_fedaykin_diruse      8  once  5  -
+player_saboteur   attack player_saboteur_dirattack   4  once  5  1:impact
+player_saboteur   use    player_saboteur_diruse      8  once  5  -
+player_sayyadina  attack player_sayyadina_dirattack  4  once  5  1:impact
+player_sayyadina  use    player_sayyadina_diruse     8  once  5  -
+trooper           attack trooper_dirattack           4  once  5  1:impact
+hound             attack hound_attack                4  once  1  1:impact

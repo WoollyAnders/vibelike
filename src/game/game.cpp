@@ -40,6 +40,7 @@ struct Entity {
     // G1 presentation-only state (persisted with the entity, never gameplay):
     int16_t vpx = 0, vpy = 0;   // visual world-pixel position (glides)
     anim::Animator anim;
+    uint8_t hurt_flash = 0;     // G3: bright flinch frames remaining
 };
 
 enum class Background : uint8_t { Fedaykin = 0, Saboteur, Sayyadina, Count };
@@ -158,6 +159,7 @@ struct GameState {
     particles::Pool particles;
     ui::Log log;
 
+    int16_t impact_x = -1, impact_y = -1;  // where the player's blow will land
     int current_song = -1;
     int16_t hover_tx = -1, hover_ty = -1;
     int anim_tick = 0;
@@ -748,6 +750,7 @@ void trooper_act(Entity& e) {
         if (pdist < 0 || pdist > 14) { e.ai = Ai::Guard; return; }
         if (pdist == 1) {
             e.anim.facing = facing_from_tile_delta(p.x - e.x, p.y - e.y);
+            e.anim.set(anim::State::Attack);
             const int dmg = g.rng.combat.range(2, 3);
             g.log.push("The trooper's blade finds you for %d.", dmg);
             damage_player(dmg, "Cut down by Harkonnen steel.");
@@ -977,6 +980,7 @@ void hound_act(Entity& e) {
     if (e.ai == Ai::Hunt) {
         if (pdist == 1) {  // adjacent: bite
             e.anim.facing = facing_from_tile_delta(p.x - e.x, p.y - e.y);
+            e.anim.set(anim::State::Attack);
             const int dmg = g.rng.combat.range(tune::kHoundAtkMin, tune::kHoundAtkMax);
             g.log.push("The dust hound bites you for %d.", dmg);
             damage_player(dmg, "Torn apart by dust hounds.");
@@ -1456,6 +1460,9 @@ void try_move(int dx, int dy) {
     if (!victim) victim = entity_at(nx, ny, g.cur_zone, EType::HunterSeeker);
     if (victim) {
         player_ent().anim.facing = facing_from_tile_delta(dx, dy);
+        player_ent().anim.set(anim::State::Attack);
+        g.impact_x = int16_t(nx);
+        g.impact_y = int16_t(ny);
         if (victim->type == EType::ShieldTrooper && !g.pl.sandwalk) {
             g.log.push("Your quick blade GLANCES off the shield shimmer.");
             g.log.push("The slow blade penetrates. (C: sandwalk, then strike.)");
@@ -1464,7 +1471,6 @@ void try_move(int dx, int dy) {
             return;
         }
         victim->hp -= g.pl.atk;
-        g.services.mixer->push({audio::Cmd::PlaySfx, 1, 200, 60});
         g.noise.add(nx, ny, victim->type == EType::Spotter ? 4 : 12);  // blades are quiet
         if (victim->hp <= 0) {
             switch (victim->type) {
@@ -1575,6 +1581,7 @@ void place_glowglobe() {
     }
     Entity* globe = alloc_entity();
     if (!globe) return;
+    p.anim.set(anim::State::Use);
     *globe = Entity{EType::Glowglobe, Ai::Idle, g.cur_zone, p.x, p.y, 1, 0, 0};
     --g.pl.glowglobes;
     g.log.push("The glowglobe rises and burns steady. A pool of light.");
@@ -1594,6 +1601,7 @@ void place_thumper() {
     Entity* t = alloc_entity();
     if (!t) return;
     Entity& p = player_ent();
+    p.anim.set(anim::State::Use);
     *t = Entity{EType::Thumper, Ai::Idle, g.cur_zone, p.x, p.y, 1, 0, 15};
     --g.pl.thumpers;
     g.log.push("Thumper planted. lump... lump... lump...");
@@ -1615,6 +1623,7 @@ void try_plant() {
         g.log.push("No demolition charges.");
         return;
     }
+    player_ent().anim.set(anim::State::Use);
     ++g.op.plant_progress;
     if (g.op.plant_progress < harvest::kPlantTurns) {
         g.log.push("Working the charge into the hull seam... (%d/%d)",
@@ -1663,6 +1672,7 @@ void try_harvest() {
         return;
     }
     if (Entity* cache = entity_at(p.x, p.y, g.cur_zone, EType::SpiceCache)) {
+        p.anim.set(anim::State::Use);
         g.pl.spice += cache->data;
         g.log.push("You scoop %d grains of raw spice from the sand.", int(cache->data));
         cache->type = EType::None;
@@ -1672,6 +1682,7 @@ void try_harvest() {
         return;
     }
     if (Entity* c = entity_at(p.x, p.y, g.cur_zone, EType::Corpse)) {
+        p.anim.set(anim::State::Use);
         g.pl.water += c->data;
         if (g.pl.water > tune::kWaterMax) g.pl.water = tune::kWaterMax;
         g.log.push("The deathstill takes its due. +%d water.", int(c->data));
@@ -1793,6 +1804,7 @@ void visual_tick() {
             e.anim.set(anim::State::Walk);
         else if (anim::State(e.anim.state) == anim::State::Walk && !moving)
             e.anim.set(anim::State::Idle);
+        if (e.hurt_flash > 0) --e.hurt_flash;
         const uint8_t ev = e.anim.tick(set);
         if (ev == anim::EV_FOOTSTEP) {
             // dust at the feet (fx-only)
@@ -1800,6 +1812,17 @@ void visual_tick() {
             const int sy = e.vpy - g.cam.y + fb::H / 2;
             if (sx >= 0 && sx < fb::W && sy >= 0 && sy < fb::H)
                 g.particles.burst_dust(g.rng.fx, sx, sy + 10, 1, 66);
+        } else if (ev == anim::EV_IMPACT) {
+            g.services.mixer->push({audio::Cmd::PlaySfx, 1, 200, 60});
+            if (e.type == EType::Player && g.impact_x >= 0) {
+                for (Entity& v : g.ents)
+                    if (v.type != EType::None && v.zone == g.cur_zone &&
+                        v.x == g.impact_x && v.y == g.impact_y)
+                        v.hurt_flash = 8;
+                g.impact_x = -1;
+            } else if (e.type != EType::Player) {
+                player_ent().hurt_flash = 8;  // their blow lands on you
+            }
         }
     }
 }
@@ -2199,14 +2222,19 @@ void pass_entities(RenderCtx& r) {
             int frame = 0;
             const SpriteSheet* sheet = e.anim.current(set, &frame);
             if (sheet) {
-                const int sx = e.vpx - g.cam.x + fb::W / 2;
+                int sx = e.vpx - g.cam.x + fb::W / 2;
                 const int sy = e.vpy - g.cam.y + fb::H / 2;
                 int view_;
                 bool flip;
                 anim::facing_to_view5(e.anim.facing, view_, flip);
+                int light2 = g.lightmap[idx];
+                if (e.hurt_flash > 0) {
+                    light2 = 31;
+                    sx += int(g.rng.fx.below(3)) - 1;
+                }
                 const bool riding = e.type == EType::Player && g.pl.riding;
                 g.draw_list.add(sheet, frame, sx, sy + (riding ? -20 : 12),
-                                g.lightmap[idx], riding ? 3 : 1, flip);
+                                light2, riding ? 3 : 1, flip);
                 if (e.type == EType::ShieldTrooper && g.anim_tick % 5 == 0)
                     g.particles.spawn(sx - 10 + int(g.rng.fx.below(21)),
                                       sy - 20 + int(g.rng.fx.below(25)),
