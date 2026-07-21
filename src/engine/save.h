@@ -7,7 +7,7 @@
 #include <vector>
 
 inline constexpr uint32_t kSaveMagic = 0x54535544;  // 'DUST'
-inline constexpr uint16_t kSaveVersion = 1;
+inline constexpr uint16_t kSaveVersion = 2;  // v2: Entity gained visual/anim state
 
 class SaveWriter {
 public:

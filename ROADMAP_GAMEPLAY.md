@@ -10,7 +10,7 @@ criterion is demonstrated in the running game.
 
 ---
 
-## G1 — Animation core ⬜
+## G1 — Animation core ✅
 The foundation everything else sits on.
 - **Atlas v2**: sheets gain rows — an entry becomes `(state, direction, frame)`
   addressed as grid cells, with an `anims.txt` sidecar per sheet: state name,

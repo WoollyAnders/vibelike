@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "engine/animator.h"
 #include "engine/particles.h"
 #include "engine/passes.h"
 #include "engine/render.h"
@@ -36,6 +37,9 @@ struct Entity {
     int16_t hp = 0;
     int16_t energy = 0;
     int16_t data = 0;  // corpse: water yield
+    // G1 presentation-only state (persisted with the entity, never gameplay):
+    int16_t vpx = 0, vpy = 0;   // visual world-pixel position (glides)
+    anim::Animator anim;
 };
 
 enum class Background : uint8_t { Fedaykin = 0, Saboteur, Sayyadina, Count };
@@ -1709,6 +1713,78 @@ void game_init(uint64_t seed, const GameServices& services) {
     g.cam.y = py - fb::H / 2;
 }
 
+// ---- G1: visual glide + animator ------------------------------------------------
+
+void world_px_of(int tx, int ty, int& wx, int& wy) {
+    wx = (tx - ty) * iso::kHalfW;
+    wy = (tx + ty) * iso::kHalfH;
+}
+
+const anim::Set* anim_set_for(const Entity& e) {
+    if (!g.services.anims) return nullptr;
+    switch (e.type) {
+        case EType::Player:
+            return g.services.anims->get(kBackgrounds[int(g.pl.background)].sprite);
+        case EType::Hound: return g.services.anims->get("hound");
+        case EType::Trooper:
+        case EType::ShieldTrooper: return g.services.anims->get("trooper");
+        case EType::Hermit: return g.services.anims->get("hermit");
+        default: return nullptr;
+    }
+}
+
+bool glide_done(const Entity& e) {
+    int wx, wy;
+    world_px_of(e.x, e.y, wx, wy);
+    const int dx = wx - e.vpx, dy = wy - e.vpy;
+    return dx * dx + dy * dy <= 16;
+}
+
+// Per render tick (60Hz): every visible entity glides toward its logical
+// tile, walks while gliding, breathes while still. Purely presentational.
+void visual_tick() {
+    for (Entity& e : g.ents) {
+        if (e.type == EType::None || e.zone != g.cur_zone) continue;
+        int wx, wy;
+        world_px_of(e.x, e.y, wx, wy);
+        int dx = wx - e.vpx, dy = wy - e.vpy;
+        if (dx * dx + dy * dy > 96 * 96) {  // teleport/spawn: snap
+            e.vpx = int16_t(wx);
+            e.vpy = int16_t(wy);
+            dx = dy = 0;
+        }
+        const int step = 5;
+        const bool moving = dx || dy;
+        if (moving) {
+            e.vpx = int16_t(e.vpx + (dx > step ? step : dx < -step ? -step : dx));
+            e.vpy = int16_t(e.vpy + (dy > step ? step : dy < -step ? -step : dy));
+            // 8-way facing from travel direction (E=0, going CCW)
+            if (dx > 0 && dy == 0) e.anim.facing = 0;
+            else if (dx > 0 && dy < 0) e.anim.facing = 1;
+            else if (dx == 0 && dy < 0) e.anim.facing = 2;
+            else if (dx < 0 && dy < 0) e.anim.facing = 3;
+            else if (dx < 0 && dy == 0) e.anim.facing = 4;
+            else if (dx < 0 && dy > 0) e.anim.facing = 5;
+            else if (dx == 0 && dy > 0) e.anim.facing = 6;
+            else e.anim.facing = 7;
+        }
+        const anim::Set* set = anim_set_for(e);
+        if (!set) continue;
+        if (anim::State(e.anim.state) == anim::State::Idle && moving)
+            e.anim.set(anim::State::Walk);
+        else if (anim::State(e.anim.state) == anim::State::Walk && !moving)
+            e.anim.set(anim::State::Idle);
+        const uint8_t ev = e.anim.tick(set);
+        if (ev == anim::EV_FOOTSTEP) {
+            // dust at the feet (fx-only)
+            const int sx = e.vpx - g.cam.x + fb::W / 2;
+            const int sy = e.vpy - g.cam.y + fb::H / 2;
+            if (sx >= 0 && sx < fb::W && sy >= 0 && sy < fb::H)
+                g.particles.burst_dust(g.rng.fx, sx, sy + 10, 1, 66);
+        }
+    }
+}
+
 const char* describe_at(int tx, int ty) {
     if (tx < 0 || tx >= map::W || ty < 0 || ty >= map::H) return nullptr;
     if (!(zone().vis[ty * map::W + tx] & (map::V_VISIBLE | map::V_REMEMBERED)))
@@ -1755,6 +1831,7 @@ const char* describe_at(int tx, int ty) {
 
 bool game_update(const InputState& in) {
     ++g.anim_tick;
+    if (!g.choosing) visual_tick();
     g.hover_tx = -1;
     if (in.mouse_x >= 0 && !g.choosing && !g.menu_open) {
         int tx, ty;
@@ -1913,15 +1990,21 @@ bool game_update(const InputState& in) {
         return true;
     }
 
+    // a fresh press moves at once; a held key re-steps as the glide lands
+    const bool can_continue = glide_done(player_ent());
+    auto move_input = [&](Key k) {
+        return in.was_pressed(k) ||
+               (in.is_down(k) && can_continue && in.held_ticks[int(k)] >= 6);
+    };
     int dx = 0, dy = 0;
-    if (in.pressed_or_repeat(Key::Up)) { dy = -1; }
-    else if (in.pressed_or_repeat(Key::Down)) { dy = 1; }
-    else if (in.pressed_or_repeat(Key::Left)) { dx = -1; }
-    else if (in.pressed_or_repeat(Key::Right)) { dx = 1; }
-    else if (in.pressed_or_repeat(Key::UpLeft)) { dx = -1; dy = -1; }
-    else if (in.pressed_or_repeat(Key::UpRight)) { dx = 1; dy = -1; }
-    else if (in.pressed_or_repeat(Key::DownLeft)) { dx = -1; dy = 1; }
-    else if (in.pressed_or_repeat(Key::DownRight)) { dx = 1; dy = 1; }
+    if (move_input(Key::Up)) { dy = -1; }
+    else if (move_input(Key::Down)) { dy = 1; }
+    else if (move_input(Key::Left)) { dx = -1; }
+    else if (move_input(Key::Right)) { dx = 1; }
+    else if (move_input(Key::UpLeft)) { dx = -1; dy = -1; }
+    else if (move_input(Key::UpRight)) { dx = 1; dy = -1; }
+    else if (move_input(Key::DownLeft)) { dx = -1; dy = 1; }
+    else if (move_input(Key::DownRight)) { dx = 1; dy = 1; }
 
     if (dx || dy) {
         if (g.pl.riding) ride_move(dx, dy);
@@ -1962,11 +2045,9 @@ bool game_update(const InputState& in) {
         }
     }
 
-    // camera follows the player (offset by half-screen so they sit centered,
-    // nudged up a bit to favor the map over the HUD panel)
-    int px, py;
-    iso::tile_to_screen(player_ent().x, player_ent().y, iso::Camera{}, px, py);
-    const int tx = px - fb::W / 2, ty = py - (fb::H - ui::kPanelH) / 2;
+    // camera follows the player's gliding visual position
+    const int tx = player_ent().vpx;
+    const int ty = player_ent().vpy + fb::H / 2 - (fb::H - ui::kPanelH) / 2;
     g.cam.x += (tx - g.cam.x) / 6;
     g.cam.y += (ty - g.cam.y) / 6;
 
@@ -2091,6 +2172,26 @@ void pass_entities(RenderCtx& r) {
         if (e.type == EType::None || e.zone != g.cur_zone) continue;
         const int idx = e.y * map::W + e.x;
         if (!(r.z->vis[idx] & map::V_VISIBLE)) continue;
+
+        // animated actors draw from their gliding visual position
+        if (const anim::Set* set = anim_set_for(e)) {
+            int frame = 0;
+            const SpriteSheet* sheet = e.anim.current(set, &frame);
+            if (sheet) {
+                const int sx = e.vpx - g.cam.x + fb::W / 2;
+                const int sy = e.vpy - g.cam.y + fb::H / 2;
+                const bool flip = e.anim.facing >= 3 && e.anim.facing <= 5;
+                const bool riding = e.type == EType::Player && g.pl.riding;
+                g.draw_list.add(sheet, frame, sx, sy + (riding ? -20 : 12),
+                                g.lightmap[idx], riding ? 3 : 1, flip);
+                if (e.type == EType::ShieldTrooper && g.anim_tick % 5 == 0)
+                    g.particles.spawn(sx - 10 + int(g.rng.fx.below(21)),
+                                      sy - 20 + int(g.rng.fx.below(25)),
+                                      0, -20, 10, 182);
+                continue;
+            }
+        }
+
         int sx, sy;
         iso::tile_to_screen(e.x, e.y, g.cam, sx, sy);
         const int light = g.lightmap[idx];
@@ -2336,6 +2437,17 @@ void pass_ui(RenderCtx& r) {
             draw_text_shadow(ctx, buf, fb::W - 8 - int(std::strlen(buf)) * 8,
                              ui::kPanelY - 12, 240, 1);
         }
+    }
+
+    if (g.services.debug_anim) {
+        const Entity& p = player_ent();
+        int wx, wy;
+        world_px_of(p.x, p.y, wx, wy);
+        char dbuf[64];
+        std::snprintf(dbuf, sizeof dbuf, "anim s=%d f=%d face=%d glide=%d,%d",
+                      int(p.anim.state), int(p.anim.frame), int(p.anim.facing),
+                      wx - p.vpx, wy - p.vpy);
+        draw_text_shadow(ctx, dbuf, 4, 34, 31, 1);
     }
 
     // CHOAM ledger + season gauges, top-right.

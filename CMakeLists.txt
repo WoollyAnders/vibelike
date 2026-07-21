@@ -28,6 +28,7 @@ add_executable(dustfall
   src/engine/audio.cpp
   src/engine/wav.cpp
   src/engine/save.cpp
+  src/engine/animator.cpp
   src/game/game.cpp
   src/game/map.cpp
   src/game/worm.cpp
