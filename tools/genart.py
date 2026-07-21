@@ -83,6 +83,14 @@ SPRITES = {
     "glowglobe": "a small floating luminous orb lamp glowing warm amber inside "
                  "a delicate brass tether cage, hovering, softly radiant, "
                  "isolated object on a fully transparent background, no scene",
+    "naib":    "a weathered desert tribe elder chieftain in layered dark robes "
+               "with a heavy woven mantle and water rings braided into a grey "
+               "beard, stern bearing, arms folded, full body, isolated figure "
+               "on a fully transparent background, no scene",
+    "smuggler": "a grizzled off-world smuggler in a patched long duster coat "
+                "over desert gear, goggles pushed up, sly grin, one hand "
+                "resting on a strongbox, full body, isolated figure on a "
+                "fully transparent background, no scene",
 }
 
 # UI elements: stretched to fill their exact frame (no aspect-fit).

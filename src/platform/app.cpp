@@ -365,16 +365,23 @@ int run_optest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps
         in.end_tick();
     };
 
-    game_debug_warp(2 /* Deep Pan */, 2, 32);  // entering spawns the op
-    int op_state = 0, ox = 0, oy = 0;
-    game_debug_op_info(&op_state, &ox, &oy);
+    // ops are campaign-scheduled: wait for the season's first harvest
+    game_debug_warp(2 /* Deep Pan */, 2, 32);
+    int op_state = 0, ox = 0, oy = 0, op_zone = 0;
+    for (int t = 0; t < 400 && op_state != 1; ++t) {
+        if (t % 12 == 0) game_debug_refill();
+        tick_with(Key::Wait);
+        game_debug_op_info(&op_state, &ox, &oy);
+    }
     if (op_state != 1) { std::printf("optest FAIL (no op)\n"); return 1; }
-    game_debug_warp(2, ox - 12 >= 1 ? ox - 12 : 1, oy);  // watch from a distance
+    game_debug_op_zone(&op_zone);
+    game_debug_warp(uint8_t(op_zone), ox - 12 >= 1 ? ox - 12 : 1, oy);
+    game_debug_clear_hostiles();  // stale wanderers aren't this test's subject
 
     // Phase 1 (control): spotters alive — the pause discipline must keep the
     // crawler alive through 120 turns of worm cycles.
     for (int t = 0; t < 120 && !game_is_dead(); ++t) {
-        if (t % 40 == 0) game_debug_refill();
+        if (t % 12 == 0) game_debug_refill();
         tick_with(Key::Wait);
     }
     game_debug_op_info(&op_state, nullptr, nullptr);
@@ -387,7 +394,7 @@ int run_optest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps
     game_debug_kill_spotters();
     int turns = 0;
     while (turns < 150 && !game_is_dead()) {
-        if (turns % 40 == 0) game_debug_refill();
+        if (turns % 12 == 0) game_debug_refill();
         tick_with(Key::Wait);
         game_debug_op_info(&op_state, nullptr, nullptr);
         if (op_state >= 4) break;
@@ -401,6 +408,111 @@ int run_optest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps
     return pass ? 0 : 1;
 }
 
+// Holtzman shield rule: the quick blade glances, the slow blade penetrates.
+int run_shieldtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(777, services);
+
+    InputState in;
+    auto tick_with = [&](Key k) {
+        in.pressed[int(k)] = true;
+        game_update(in);
+        in.end_tick();
+    };
+
+    game_debug_warp(1, 30, 30);
+    int hp0 = 0;
+    game_debug_spawn_shield_adjacent(&hp0);
+    if (hp0 <= 0) { std::printf("shieldtest FAIL (no spawn)\n"); return 1; }
+
+    tick_with(Key::Right);  // quick blade: must glance off
+    const int hp_fast = game_debug_shield_hp();
+    tick_with(Key::Sandwalk);
+    tick_with(Key::Right);  // slow blade: must penetrate
+    const int hp_slow = game_debug_shield_hp();
+
+    std::printf("shield hp: %d -> fast %d -> slow %d\n", hp0, hp_fast, hp_slow);
+    const bool pass = hp_fast == hp0 && (hp_slow < hp_fast || hp_slow == -1);
+    std::printf("shieldtest %s\n", pass ? "PASS" : "FAIL");
+    return pass ? 0 : 1;
+}
+
+// A whole season, three ways: win by denials + climax, lose by quota, lose by raid.
+int run_campaigntest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    GameServices services{&mixer, &assets, &cmaps};
+    InputState in;
+    auto tick_with = [&](Key k) {
+        in.pressed[int(k)] = true;
+        game_update(in);
+        in.end_tick();
+    };
+
+    // Leg 1: deny everything -> climax -> victory
+    game_init(31337, services);
+    int ending = 0, guard = 0;
+    while (guard++ < 9000 && !game_is_dead()) {
+        if (guard % 12 == 0) game_debug_refill();
+        int opstate = 0, ox = 0, oy = 0, opzone = 0;
+        game_debug_op_info(&opstate, &ox, &oy);
+        game_debug_op_zone(&opzone);
+        if (opstate >= 1 && opstate <= 3) {
+            game_debug_warp(opzone, ox - 12 >= 1 ? ox - 12 : 1, oy);
+            game_debug_clear_hostiles();  // flow test, not a combat test
+            game_debug_kill_spotters();
+            int w = 0;
+            while (w++ < 400 && !game_is_dead()) {
+                if (w % 12 == 0) game_debug_refill();
+                tick_with(Key::Wait);
+                game_debug_op_info(&opstate, nullptr, nullptr);
+                if (opstate >= 4) break;
+            }
+            game_debug_warp(0, 33, 30);  // melt back to the sietch, Fremen-style
+        } else {
+            tick_with(Key::Wait);
+        }
+        int sh, de, al, st;
+        game_debug_campaign(&sh, &de, &al, &st, &ending);
+        if (ending) {
+            std::printf("  leg1: ending %d after %d loop steps (ship %d deny %d "
+                        "alert %d standing %d)\n", ending, guard, sh, de, al, st);
+            break;
+        }
+    }
+    if (!ending)
+        std::printf("  leg1: no ending (dead %d, guard %d)\n", game_is_dead() ? 1 : 0, guard);
+    const bool leg1 = ending == 1;
+
+    // Leg 2: do nothing -> the quota ships
+    game_init(31338, services);
+    ending = 0;
+    game_debug_warp(0, 33, 30);  // wait it out in the sietch
+    for (guard = 0; guard < 9000 && !ending; ++guard) {
+        if (guard % 12 == 0) game_debug_refill();
+        tick_with(Key::Wait);
+        game_debug_campaign(nullptr, nullptr, nullptr, nullptr, &ending);
+    }
+    std::printf("  leg2: ending %d after %d waits\n", ending, guard);
+    const bool leg2 = ending == 2;
+
+    // Leg 3: blow the alert -> discovery -> raid
+    game_init(31339, services);
+    ending = 0;
+    game_debug_warp(0, 33, 30);
+    game_debug_set_alert(85);
+    for (guard = 0; guard < 800 && !ending; ++guard) {
+        if (guard % 12 == 0) game_debug_refill();
+        tick_with(Key::Wait);
+        game_debug_campaign(nullptr, nullptr, nullptr, nullptr, &ending);
+    }
+    std::printf("  leg3: ending %d after %d waits\n", ending, guard);
+    const bool leg3 = ending == 3;
+
+    const bool pass = leg1 && leg2 && leg3;
+    std::printf("campaigntest %s (win %d quota %d raid %d)\n", pass ? "PASS" : "FAIL",
+                leg1 ? 1 : 0, leg2 ? 1 : 0, leg3 ? 1 : 0);
+    return pass ? 0 : 1;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -408,7 +520,8 @@ int main(int argc, char** argv) {
     if (!audio_load(mixer)) return 1;
 
     bool seamtest = false, slicetest = false, wormtest = false, autodemo = false,
-         optest = false, opdemo = false, uishot = false;
+         optest = false, opdemo = false, uishot = false, shieldtest = false,
+         campaigntest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
         if (SDL_strcmp(argv[i], "--seamtest") == 0) seamtest = true;
@@ -418,6 +531,8 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--opdemo") == 0) { autodemo = true; opdemo = true; }
         if (SDL_strcmp(argv[i], "--optest") == 0) optest = true;
         if (SDL_strcmp(argv[i], "--uishot") == 0) uishot = true;
+        if (SDL_strcmp(argv[i], "--shieldtest") == 0) shieldtest = true;
+        if (SDL_strcmp(argv[i], "--campaigntest") == 0) campaigntest = true;
     }
 
     Palette master;
@@ -435,6 +550,8 @@ int main(int argc, char** argv) {
     if (slicetest) return run_slicetest(mixer, assets, cmaps);
     if (wormtest) return run_wormtest(mixer, assets, cmaps);
     if (optest) return run_optest(mixer, assets, cmaps);
+    if (shieldtest) return run_shieldtest(mixer, assets, cmaps);
+    if (campaigntest) return run_campaigntest(mixer, assets, cmaps);
 
     Platform platform;
     if (!platform_init(platform, &mixer)) {

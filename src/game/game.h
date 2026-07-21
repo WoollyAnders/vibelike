@@ -42,3 +42,9 @@ void game_debug_warp(int zone, int x, int y);
 void game_debug_op_info(int* state, int* x, int* y);  // harvest::OpState as int
 void game_debug_kill_spotters();
 void game_debug_refill();  // water + hp top-up (test harness only)
+void game_debug_campaign(int* shipped, int* denied, int* alert, int* standing, int* ending);
+void game_debug_set_alert(int v);
+void game_debug_op_zone(int* zone_out);
+void game_debug_spawn_shield_adjacent(int* hp_out);
+int game_debug_shield_hp();
+void game_debug_clear_hostiles();
