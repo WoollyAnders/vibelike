@@ -58,7 +58,7 @@ enemies face the player as they hunt, and mirrored views are seam-free.
 swing, impact flash, lunge back — and planting a thumper shows the kneel and
 the spike driven into sand before it starts pounding.
 
-## G4 — World motion ⬜
+## G4 — World motion ✅
 - **Worm slither**: surfaced segments interpolate along their path with
   per-segment phase lag (body flows, not a chain of teleports); the head gets
   a strike lunge when it crushes; burrowed ripples ripple *along* the travel
@@ -75,7 +75,7 @@ the spike driven into sand before it starts pounding.
 flickering floodlights, carryall fly-in, worm ripples flowing — looks alive
 with zero player input.
 
-## G5 — Feel pass ⬜
+## G5 — Feel pass ✅
 - Footstep dust puffs sized by terrain (big on drum sand) via animation
   events; audio footsteps alternate L/R samples.
 - Impact particles: blood flecks on flesh hits, sparks on the crawler hull,
