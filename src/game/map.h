@@ -48,6 +48,11 @@ void generate(Zone& z, uint64_t seed, ZoneId id, int& spawn_x, int& spawn_y);
 // V_REMEMBERED within radius around (cx, cy).
 void compute_fov(Zone& z, int cx, int cy, int radius);
 
+// Flood the connected indoor room containing (cx, cy) as V_VISIBLE|V_REMEMBERED,
+// including its enclosing walls — so an enclosed room is fully lit regardless of
+// shape or FOV radius. No-op when (cx, cy) is not an indoor tile. Bounded.
+void reveal_room(Zone& z, int cx, int cy);
+
 // Player-centered Dijkstra map (uniform costs, 8-way). dist = -1 unreachable.
 void compute_dijkstra(const Zone& z, int cx, int cy, int16_t dist[N]);
 
