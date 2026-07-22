@@ -21,7 +21,8 @@ inline constexpr uint8_t kAmbientByHour[24] = {
     4, 4, 3, 3, 3, 4, 8, 14, 20, 24, 28, 30,
     31, 31, 31, 30, 28, 24, 18, 12, 8, 6, 5, 4,
 };
-inline constexpr int kAmbientIndoor = 24;  // the sietch is a lamp-lit home, not a night cave
+inline constexpr int kAmbientIndoor = 28;  // the sietch is a lamp-lit home, not a night cave
+inline constexpr int kEntityMinLight = 16;  // actors in view are never near-black (see the mobs)
 inline constexpr int kShadePenalty = 5;   // daytime shade reads cooler
 inline constexpr int kDaylightShadeAt = 12;  // outdoor ambient above this = "day" (shade bites)
 inline constexpr int kRemembered = 4;     // out-of-sight memory level

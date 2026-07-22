@@ -27,7 +27,7 @@ inline constexpr int kAmbientByHour[24] = {2, 2, 1, 1, 1, 2, 3, 4, 5, 6, 7, 8,
                                            9, 9, 9, 8, 7, 6, 5, 4, 3, 3, 2, 2};
 inline constexpr int kExposureHotThreshold = 8;   // ambient >= this builds exposure
 inline constexpr int kExposureGain = 4;           // per turn in direct sun
-inline constexpr int kExposureRecover = 6;        // per turn in shade/indoors/night
+inline constexpr int kExposureRecover = 8;        // per turn in shade/indoors/night
 inline constexpr int kExposureSlow = 50;          // moves cost 1.5 turns of energy
 inline constexpr int kExposureCollapse = 90;      // damage per turn
 inline constexpr int kExposureDamage = 2;
@@ -40,7 +40,7 @@ inline constexpr int kHeldStepFloor = 3;      // min ticks a key is held before 
 
 // --- fov ---
 inline constexpr int kFovDay = 9;
-inline constexpr int kFovNight = 5;
+inline constexpr int kFovNight = 8;  // was 5 — see mobs/terrain approaching at night
 inline constexpr int kFovDehydrated = 3;
 inline constexpr int kFovIndoor = 10;  // sietch/caves: lit interior, day or night
 

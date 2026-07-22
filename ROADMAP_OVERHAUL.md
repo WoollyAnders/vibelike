@@ -61,6 +61,24 @@ dot; hidden under menus. `map_scope` reserved for the Phase-B world overview.
 **Exit:** ✅ M shows a legible map of everywhere seen this run (verified by
 screenshot — the sietch cross-shape renders); unexplored absent; 10/10 tests green.
 
+### A6 — Playtest polish ✅ *(second-playtest feedback)*
+Five engineering fixes from the second playtest:
+- **Cursor aim true** — tiles are centre-anchored, so the reticle was drawn half a
+  tile down-right ("aim with the bottom-right of the cursor"); now offset by
+  `-half` so it sits on the picked tile.
+- **Sietch brighter** — `kAmbientIndoor` 24→28.
+- **Mobs visible** — night FOV 5→8 and an entity min-light (`kEntityMinLight=16`)
+  so actors in view are never near-black.
+- **Heatstroke survivable** — an equipped stillsuit blunts sun exposure (Mk I
+  halves, Mk III negates); recovery 6→8.
+- **Clickable menus** — hovering a row selects it, left-click confirms, right/middle
+  click closes (all menus: vendor lists, character, pack, vault).
+**Exit:** ✅ reticle centred on the cursor tile (screenshot); sietch reads lit; mobs
+render in the dark; heat is survivable with a suit; menus work by mouse; `dettest`
+still `942bc42517b8679f`, 10/10 tests green.
+*(Deferred to the art pass: OpenAI-generated walk animations and detailed/varied
+terrain — the remaining "hopping animation" and "flat world" feedback.)*
+
 ---
 
 ## PHASE B — Run / World / Extraction Architecture
