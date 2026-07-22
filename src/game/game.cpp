@@ -3203,7 +3203,7 @@ void pass_ui(RenderCtx& r) {
         if (g.hover_tx >= 0)
             if (const char* what = describe_at(g.hover_tx, g.hover_ty))
                 draw_text_shadow(ctx, what, fb::W / 2 - int(std::strlen(what)) * 4,
-                                 ui::kPanelY - 12, 24, 1);
+                                 ui::kPanelY - 24, 24, 1);  // A2: lifted off the level/task row
         if (g.sideobj_kind != 0) {
             std::snprintf(buf, sizeof buf, "%s in the %s (%d)",
                           g.sideobj_kind == 1 ? "CARAVAN" : "GUILD ENVOY",

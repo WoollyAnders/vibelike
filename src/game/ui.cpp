@@ -61,12 +61,17 @@ void draw_hud(DrawCtx& ctx, const HudState& s, const Log& log, int anim_tick,
     draw_text(ctx, "BLOOD", 6, kPanelY + 2, 14);
     draw_text(ctx, "WATER", fb::W - 46, kPanelY + 2, 14);
 
-    // Message log, newest at the bottom.
-    for (int i = 0; i < 3 && i < log.count; ++i)
-        draw_text(ctx, log.lines[i], 56, kPanelY + 30 - i * 10, uint8_t(i == 0 ? 28 : 20));
+    // Message log, newest at the bottom. Truncated so it never runs into the
+    // seismograph on the panel's right (A2 relayout).
+    for (int i = 0; i < 3 && i < log.count; ++i) {
+        char line[48];  // 47 chars -> ends by ~x432, clear of the seismograph at x450
+        std::snprintf(line, sizeof line, "%s", log.lines[i]);
+        draw_text(ctx, line, 56, kPanelY + 30 - i * 10, uint8_t(i == 0 ? 28 : 20));
+    }
 
-    // Sun-arc thermometer: a bar with the sun marker; color by ambient heat.
-    const int bx = fb::W - 190, bw = 120, by = kPanelY + 6;
+    // Sun-arc thermometer: a world readout, so it lives in a top strip (A2)
+    // rather than the bottom panel, leaving the panel's right for the seismograph.
+    const int bx = fb::W / 2 - 90, bw = 120, by = 3;
     fill_rect(ctx, bx, by, bw, 6, 2);
     for (int i = 0; i < bw; ++i) {
         const int hour = i * 24 / bw;

@@ -29,11 +29,13 @@ Sayyadina actually spawn; cheap deterministic sietch floor variety (no art).
 all drawn (verified by a vis dump), cistern reachable, both NPCs present; 9/9 headless
 tests green, dettest bit-identical.
 
-### A2 — HUD relayout (fix overlaps) ⬜
-Thermometer → top strip; seismograph → bottom-right; narrow the log; split the
-y=424 clash. Every widget survives; leaves room for the later Life/shield/Will/
-skill-bar/flask HUD.
-**Exit:** op live + quest active + hovering a tile → no two widgets share pixels.
+### A2 — HUD relayout (fix overlaps) ✅
+Thermometer → top-center strip (frees the panel's right for the seismograph, now
+unobstructed); log truncated to clear the seismograph; hover description lifted to
+y=412 off the level/task row. Every widget survives.
+**Exit:** ✅ verified by screenshots — thermometer (top-center), CHOAM/alert/standing
+(top-right), op-status (top-left), level line (bottom-left), seismograph + log
+(panel) no longer share pixels; 9/9 tests green.
 
 ### A3 — Smoother movement (kill the hopping) ⬜
 Raise the glide pre-buffer, bump glide step, lower the held floor, add a
