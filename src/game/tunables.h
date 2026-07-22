@@ -32,6 +32,12 @@ inline constexpr int kExposureSlow = 50;          // moves cost 1.5 turns of ene
 inline constexpr int kExposureCollapse = 90;      // damage per turn
 inline constexpr int kExposureDamage = 2;
 
+// --- movement feel (presentation/cadence only; must NOT affect the sim) ---
+inline constexpr int kStepBufferPx = 18;      // held walking re-steps this close to touchdown
+inline constexpr int kGlideStep = 4;          // px/tick the sprite slides toward its tile
+inline constexpr int kGlideStepSandwalk = 2;  // sandwalk stays deliberate + slow
+inline constexpr int kHeldStepFloor = 3;      // min ticks a key is held before auto-repeat
+
 // --- fov ---
 inline constexpr int kFovDay = 9;
 inline constexpr int kFovNight = 5;
