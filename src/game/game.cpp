@@ -338,6 +338,9 @@ bool is_night() { return ambient_now() <= 2; }
 int fov_radius() {
     if (g.storm_turns > 0) return 3;  // the storm swallows the world
     if (g.pl.water <= 0 && g.pl.litany_turns == 0) return tune::kFovDehydrated;
+    // Indoors (sietch, caves) the interior is lit day or night; the enclosed
+    // room is fully revealed by reveal_room regardless of this radius.
+    if (zone().at(player_ent().x, player_ent().y) & map::TF_INDOOR) return tune::kFovIndoor;
     return is_night() ? tune::kFovNight : tune::kFovDay;
 }
 
@@ -727,6 +730,8 @@ void recompute_light() {
 
 void refresh_fov_and_paths() {
     map::compute_fov(zone(), player_ent().x, player_ent().y, fov_radius());
+    // An enclosed indoor room is lit whole (no black no-man's-land in the sietch).
+    map::reveal_room(zone(), player_ent().x, player_ent().y);
     map::compute_dijkstra(zone(), player_ent().x, player_ent().y, g.dmap);
     recompute_light();
 }
@@ -2204,7 +2209,10 @@ void game_init(uint64_t seed, const GameServices& services) {
     map::generate(g.zones[map::kZoneSietch], seed, map::kZoneSietch, sx, sy);
     g.ents[0] = Entity{EType::Player, Ai::Idle, map::kZoneSietch,
                        int16_t(sx), int16_t(sy), int16_t(tune::kPlayerHpMax), 0, 0};
-    g.spawned_mask = 1 << map::kZoneSietch;
+    // Populate the sietch now that the player entity exists (the Naib + Sayyadina
+    // are placed relative to it). This also sets spawned_mask for the zone; the
+    // old code set the mask directly, which silently skipped the NPC spawn.
+    spawn_zone_wildlife(map::kZoneSietch);
 
     g.pl.equip[int(items::Slot::Weapon)].def = 0;  // Dust Knife
     g.pl.equip[int(items::Slot::Suit)].def = 9;    // Stillsuit Mk I

@@ -36,6 +36,7 @@ inline constexpr int kExposureDamage = 2;
 inline constexpr int kFovDay = 9;
 inline constexpr int kFovNight = 5;
 inline constexpr int kFovDehydrated = 3;
+inline constexpr int kFovIndoor = 10;  // sietch/caves: lit interior, day or night
 
 // --- dust hound ---
 inline constexpr int kHoundHp = 6;

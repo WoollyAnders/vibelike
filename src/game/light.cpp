@@ -13,7 +13,7 @@ int isqrt2x(int v4) {  // v4 = d2 * 4
 
 void compute(const map::Zone& z, const Source* sources, int count,
              int ambient_outdoor, uint8_t out[map::N]) {
-    const bool day = ambient_outdoor > kAmbientIndoor + kShadePenalty;
+    const bool day = ambient_outdoor > kDaylightShadeAt;
     for (int i = 0; i < map::N; ++i) {
         const uint8_t f = z.flags[i];
         int a = (f & map::TF_INDOOR) ? kAmbientIndoor : ambient_outdoor;

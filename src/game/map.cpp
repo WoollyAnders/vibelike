@@ -15,7 +15,15 @@ void carve_room(Zone& z, int x0, int y0, int x1, int y1) {
             uint8_t& f = z.flags[y * W + x];
             f &= uint8_t(~(TF_BLOCK | TF_WALL | TF_OPAQUE));
             f |= TF_INDOOR;
-            z.floor[y * W + x] = 8;  // sietch stone
+            // Cheap deterministic floor variety (no art, no RNG stream): a stone
+            // interior with a worn rock rim and the odd spice-fleck underfoot.
+            const bool rim = (x == x0 || x == x1 || y == y0 || y == y1);
+            const uint32_t h = hash_combine(x, y) & 255u;
+            uint8_t frame = 8;                          // sietch stone
+            if (rim)          frame = uint8_t(3 + (h & 1));  // rock ground rim
+            else if (h < 36)  frame = uint8_t(3 + (h & 1));  // scattered rock
+            else if (h < 48)  frame = 5;                     // spice-fleck
+            z.floor[y * W + x] = frame;
         }
 }
 
@@ -162,6 +170,41 @@ void compute_fov(Zone& z, int cx, int cy, int radius) {
     for (int i = 0; i < N; ++i) z.vis[i] &= uint8_t(~V_VISIBLE);
     z.vis[cy * W + cx] |= V_VISIBLE | V_REMEMBERED;
     for (const Octant& o : kOctants) cast_light(z, cx, cy, radius, 1, 1.0f, 0.0f, o);
+}
+
+void reveal_room(Zone& z, int cx, int cy) {
+    if (cx < 0 || cx >= W || cy < 0 || cy >= H) return;
+    if (!(z.flags[cy * W + cx] & TF_INDOOR)) return;  // interiors only
+    static int16_t queue[N];
+    static uint8_t seen[N];
+    std::memset(seen, 0, sizeof seen);
+    int head = 0, count = 0;
+    const int start = cy * W + cx;
+    seen[start] = 1;
+    queue[count++] = int16_t(start);
+    while (head < count) {
+        const int idx = queue[head++];
+        const int x = idx % W, y = idx / W;
+        // Reveal this interior tile and its 8 neighbours, so the enclosing walls
+        // draw too (an unremembered wall renders as black).
+        for (int ny = y - 1; ny <= y + 1; ++ny)
+            for (int nx = x - 1; nx <= x + 1; ++nx)
+                if (nx >= 0 && nx < W && ny >= 0 && ny < H)
+                    z.vis[ny * W + nx] |= V_VISIBLE | V_REMEMBERED;
+        // Flood 4-connected through open (non-opaque) indoor tiles only, so the
+        // room stops at its walls and never leaks diagonally into the next region.
+        constexpr int dxs[4] = {1, -1, 0, 0}, dys[4] = {0, 0, 1, -1};
+        for (int k = 0; k < 4; ++k) {
+            const int nx = x + dxs[k], ny = y + dys[k];
+            if (nx < 0 || nx >= W || ny < 0 || ny >= H) continue;
+            const int nidx = ny * W + nx;
+            if (seen[nidx]) continue;
+            const uint8_t f = z.flags[nidx];
+            if (!(f & TF_INDOOR) || (f & TF_OPAQUE)) continue;
+            seen[nidx] = 1;
+            if (count < N) queue[count++] = int16_t(nidx);
+        }
+    }
 }
 
 // ---- Dijkstra (uniform BFS, 8-way) --------------------------------------------
