@@ -37,11 +37,13 @@ y=412 off the level/task row. Every widget survives.
 (top-right), op-status (top-left), level line (bottom-left), seismograph + log
 (panel) no longer share pixels; 9/9 tests green.
 
-### A3 — Smoother movement (kill the hopping) ⬜
-Raise the glide pre-buffer, bump glide step, lower the held floor, add a
-queued-next-step. Cadence/visual only.
-**Exit:** holding a direction is continuous walking; a scripted walk hashes
-identically (sim unchanged).
+### A3 — Smoother movement (kill the hopping) ✅
+Glide pre-buffer 8→18px (`kStepBufferPx`), glide step 3→4px (`kGlideStep`;
+sandwalk stays 2), held-repeat floor 6→3 (`kHeldStepFloor`), camera lerp /6→/8.
+The raised buffer + gate is the queued-next-step (a held key re-steps the instant
+the glide crosses the buffer; reused by A4's click-path). Cadence/visual only.
+**Exit:** ✅ held walking re-steps continuously; `dettest` bit-identical
+(942bc42517b8679f), 9/9 tests green — the scripted walk hashes exactly as before.
 
 ### A4 — PoE2 controls: WASD movement + cursor aim ⬜ *(depends on A3)*
 WASD movement (gliding), mouse cursor aims, Left-mouse primary action.

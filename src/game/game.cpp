@@ -2268,9 +2268,9 @@ bool glide_done(const Entity& e) {
     int wx, wy;
     world_px_of(e.x, e.y, wx, wy);
     const int dx = wx - e.vpx, dy = wy - e.vpy;
-    // pre-buffer: the next step may queue slightly before touchdown, so held
-    // walking flows without the per-tile stall
-    return dx * dx + dy * dy <= 64;
+    // pre-buffer: the next step queues before touchdown, so held walking flows
+    // continuously instead of stalling once per tile (A3).
+    return dx * dx + dy * dy <= tune::kStepBufferPx * tune::kStepBufferPx;
 }
 
 // Per render tick (60Hz): every visible entity glides toward its logical
@@ -2308,7 +2308,8 @@ void visual_tick() {
             e.vpy = int16_t(wy);
             dx = dy = 0;
         }
-        const int step = (e.type == EType::Player && g.pl.sandwalk) ? 2 : 3;
+        const int step = (e.type == EType::Player && g.pl.sandwalk)
+                             ? tune::kGlideStepSandwalk : tune::kGlideStep;
         const bool moving = dx || dy;
         if (moving) {
             e.vpx = int16_t(e.vpx + (dx > step ? step : dx < -step ? -step : dx));
@@ -2703,7 +2704,7 @@ bool game_update(const InputState& in) {
     const bool can_continue = glide_done(player_ent());
     auto move_input = [&](Key k) {
         return in.was_pressed(k) ||
-               (in.is_down(k) && can_continue && in.held_ticks[int(k)] >= 6);
+               (in.is_down(k) && can_continue && in.held_ticks[int(k)] >= tune::kHeldStepFloor);
     };
     int dx = 0, dy = 0;
     if (move_input(Key::Up)) { dy = -1; }
@@ -2756,11 +2757,11 @@ bool game_update(const InputState& in) {
         }
     }
 
-    // camera follows the player's gliding visual position
+    // camera follows the player's gliding visual position (A3: gentler lerp)
     const int tx = player_ent().vpx;
     const int ty = player_ent().vpy + fb::H / 2 - (fb::H - ui::kPanelH) / 2;
-    g.cam.x += (tx - g.cam.x) / 6;
-    g.cam.y += (ty - g.cam.y) / 6;
+    g.cam.x += (tx - g.cam.x) / 8;
+    g.cam.y += (ty - g.cam.y) / 8;
 
     return !in.was_pressed(Key::Cancel);
 }
