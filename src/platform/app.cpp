@@ -158,10 +158,14 @@ void toggle_fullscreen(Platform& p) {
 
 struct Binding { SDL_Scancode sc; Key key; };
 constexpr Binding kBindings[] = {
-    {SDL_SCANCODE_UP, Key::Up},       {SDL_SCANCODE_W, Key::Up},     {SDL_SCANCODE_KP_8, Key::Up},
-    {SDL_SCANCODE_DOWN, Key::Down},   {SDL_SCANCODE_S, Key::Down},   {SDL_SCANCODE_KP_2, Key::Down},
-    {SDL_SCANCODE_LEFT, Key::Left},   {SDL_SCANCODE_A, Key::Left},   {SDL_SCANCODE_KP_4, Key::Left},
-    {SDL_SCANCODE_RIGHT, Key::Right}, {SDL_SCANCODE_D, Key::Right},  {SDL_SCANCODE_KP_6, Key::Right},
+    // Arrows + numpad keep the tile-cardinal directions (also used by tests).
+    {SDL_SCANCODE_UP, Key::Up},       {SDL_SCANCODE_KP_8, Key::Up},
+    {SDL_SCANCODE_DOWN, Key::Down},   {SDL_SCANCODE_KP_2, Key::Down},
+    {SDL_SCANCODE_LEFT, Key::Left},   {SDL_SCANCODE_KP_4, Key::Left},
+    {SDL_SCANCODE_RIGHT, Key::Right}, {SDL_SCANCODE_KP_6, Key::Right},
+    // WASD is PoE2 screen-relative (W = up on screen), composed to iso moves in-game.
+    {SDL_SCANCODE_W, Key::WalkUp},    {SDL_SCANCODE_S, Key::WalkDown},
+    {SDL_SCANCODE_A, Key::WalkLeft},  {SDL_SCANCODE_D, Key::WalkRight},
     {SDL_SCANCODE_KP_7, Key::UpLeft},   {SDL_SCANCODE_KP_9, Key::UpRight},
     {SDL_SCANCODE_KP_1, Key::DownLeft}, {SDL_SCANCODE_KP_3, Key::DownRight},
     {SDL_SCANCODE_KP_5, Key::Wait},     {SDL_SCANCODE_PERIOD, Key::Wait},
@@ -705,6 +709,31 @@ int run_rpgtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmap
     return pass ? 0 : 1;
 }
 
+// A4: click-to-move pathfinds to the goal and is deterministic across runs.
+int run_clicktest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    GameServices services{&mixer, &assets, &cmaps};
+    const int gx = 33, gy = 33;  // a clear sietch-hall tile below spawn (33,30), no NPCs
+    uint64_t h[2] = {0, 0};
+    int reached[2] = {0, 0};
+    for (int run = 0; run < 2; ++run) {
+        game_init(20260722, services);
+        game_debug_click(gx, gy);
+        InputState in;
+        for (int i = 0; i < 400 && !reached[run]; ++i) {
+            game_update(in);
+            in.end_tick();
+            int cx = 0, cy = 0;
+            game_debug_player_pos(&cx, &cy);
+            if (cx == gx && cy == gy) reached[run] = 1;
+        }
+        h[run] = game_state_hash();
+    }
+    const bool pass = reached[0] && reached[1] && h[0] == h[1];
+    std::printf("clicktest %s (reached %d/%d, %016llx vs %016llx)\n", pass ? "PASS" : "FAIL",
+                reached[0], reached[1], (unsigned long long)h[0], (unsigned long long)h[1]);
+    return pass ? 0 : 1;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -714,7 +743,7 @@ int main(int argc, char** argv) {
     bool seamtest = false, slicetest = false, wormtest = false, autodemo = false,
          optest = false, opdemo = false, uishot = false, shieldtest = false,
          campaigntest = false, dettest = false, ridetest = false, animdebug = false,
-         circledemo = false, fightdemo = false, rpgtest = false;
+         circledemo = false, fightdemo = false, rpgtest = false, clicktest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
         if (SDL_strcmp(argv[i], "--seamtest") == 0) seamtest = true;
@@ -732,6 +761,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--ridetest") == 0) ridetest = true;
         if (SDL_strcmp(argv[i], "--animdebug") == 0) animdebug = true;
         if (SDL_strcmp(argv[i], "--rpgtest") == 0) rpgtest = true;
+        if (SDL_strcmp(argv[i], "--clicktest") == 0) clicktest = true;
     }
 
     Palette master;
@@ -749,6 +779,7 @@ int main(int argc, char** argv) {
     const bool anims_ok = anims.load("data", assets);
     if (!anims_ok) std::fprintf(stderr, "anims.txt missing or empty; static sprites\n");
 
+    if (clicktest) return run_clicktest(mixer, assets, cmaps);
     if (seamtest) return run_seamtest(mixer, assets, cmaps);
     if (slicetest) return run_slicetest(mixer, assets, cmaps);
     if (wormtest) return run_wormtest(mixer, assets, cmaps);
