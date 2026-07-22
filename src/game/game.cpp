@@ -1431,13 +1431,19 @@ void upkeep() {
         g.noise.decay();  // the roar swallows every other sound
     }
 
-    // heat exposure
+    // heat exposure — a stillsuit shields the body from the open sun (its
+    // canonical purpose), so an equipped suit blunts the gain and better suits
+    // negate it; the Litany halves whatever is left.
     const bool sheltered = (tf & (map::TF_INDOOR | map::TF_SHADE)) != 0;
     if (amb >= tune::kExposureHotThreshold && !sheltered) {
-        g.pl.exposure += g.pl.litany_turns > 0 ? tune::kExposureGain / 2
-                                               : tune::kExposureGain;
-        if (g.pl.exposure == tune::kExposureGain)
-            g.log.push("The sun hammers down. Find shade.");
+        int gain = tune::kExposureGain;
+        const items::Inst& suit = g.pl.equip[int(items::Slot::Suit)];
+        if (!suit.empty()) gain -= (4 - suit.d().a) + 1;  // Mk I halves, Mk III negates
+        if (g.pl.litany_turns > 0) gain /= 2;
+        if (gain < 0) gain = 0;
+        if (g.pl.exposure == 0 && gain > 0)
+            g.log.push("The sun hammers down. Reach shade or a better stillsuit.");
+        g.pl.exposure += gain;
     } else {
         g.pl.exposure -= tune::kExposureRecover;
     }
@@ -2466,6 +2472,38 @@ const char* describe_at(int tx, int ty) {
     }
 }
 
+// A6: which menu row is under the mouse (matching the pass_ui draw geometry), or
+// -1. Lets menus be navigated by hover + click instead of only the arrow keys.
+int menu_row_under_mouse(const InputState& in) {
+    if (in.mouse_x < 0) return -1;
+    const int mx = in.mouse_x, my = in.mouse_y;
+    if (g.menu_open >= 1 && g.menu_open <= 4) {           // vendor lists
+        const int x0 = fb::W / 2 - 150, y0 = 140;
+        if (mx < x0 + 8 || mx > x0 + 8 + 284) return -1;
+        const int counts[5] = {0, 5, 3, 5, 4};
+        for (int i = 0; i < counts[g.menu_open]; ++i) {
+            const int ry = y0 + 34 + i * 14 - 2;
+            if (my >= ry && my < ry + 14) return i;
+        }
+        return -1;
+    }
+    const int x0 = fb::W / 2 - 190, y0 = 60;              // char / pack / vault
+    if (mx < x0 + 8 || mx > x0 + 8 + 364) return -1;
+    auto band = [&](int ry) { return my >= ry - 1 && my < ry + 11; };
+    if (g.menu_open == 5) {
+        for (int i = 0; i < 3; ++i) if (band(y0 + 34 + i * 12)) return i;
+        for (int i = 0; i < kTalentCount; ++i) if (band(y0 + 74 + i * 12)) return 3 + i;
+        if (band(y0 + 206)) return 12;
+    } else if (g.menu_open == 6) {
+        for (int i = 0; i < 12; ++i) if (band(y0 + 70 + i * 12)) return i;
+        if (band(y0 + 218)) return 12;
+    } else if (g.menu_open == 7) {
+        for (int i = 0; i < 12; ++i) if (band(y0 + 40 + i * 12)) return i;
+        if (band(y0 + 190)) return 12;
+    }
+    return -1;
+}
+
 }  // namespace
 
 bool game_update(const InputState& in) {
@@ -2508,12 +2546,17 @@ bool game_update(const InputState& in) {
         // 5 = character sheet, 6 = inventory, 7 = the vault
         int counts[8] = {0, 5, 3, 5, 4, 3 + kTalentCount + 1, 13, 13};
         const int n = counts[g.menu_open];
+        // A6: mouse — hovering a row selects it, left-click confirms it, right-click closes.
+        const int mrow = menu_row_under_mouse(in);
+        if (mrow >= 0) g.menu_sel = mrow;
+        const bool mclick = mrow >= 0 && in.mouse_pressed[0];
+        if (in.mouse_pressed[2] || in.mouse_pressed[1]) { g.menu_open = 0; return true; }
         if (g.menu_open == 5) {
             // 0..2 stats, 3..11 talents, 12 close
             if (in.was_pressed(Key::Up)) g.menu_sel = (g.menu_sel + n - 1) % n;
             if (in.was_pressed(Key::Down)) g.menu_sel = (g.menu_sel + 1) % n;
             if (in.was_pressed(Key::Cancel)) g.menu_open = 0;
-            if (in.was_pressed(Key::Confirm)) {
+            if (in.was_pressed(Key::Confirm) || mclick) {
                 if (g.menu_sel < 3 && g.pl.st.statpts > 0) {
                     (g.menu_sel == 0 ? g.pl.st.str
                      : g.menu_sel == 1 ? g.pl.st.dex : g.pl.st.vit) += 1;
@@ -2538,7 +2581,7 @@ bool game_update(const InputState& in) {
             if (in.was_pressed(Key::Up)) g.menu_sel = (g.menu_sel + n - 1) % n;
             if (in.was_pressed(Key::Down)) g.menu_sel = (g.menu_sel + 1) % n;
             if (in.was_pressed(Key::Cancel)) g.menu_open = 0;
-            if (in.was_pressed(Key::Confirm)) {
+            if (in.was_pressed(Key::Confirm) || mclick) {
                 if (g.menu_sel == 12) {
                     g.menu_open = 0;
                 } else if (!g.pl.inv[g.menu_sel].empty()) {
@@ -2565,7 +2608,7 @@ bool game_update(const InputState& in) {
             if (in.was_pressed(Key::Up)) g.menu_sel = (g.menu_sel + n - 1) % n;
             if (in.was_pressed(Key::Down)) g.menu_sel = (g.menu_sel + 1) % n;
             if (in.was_pressed(Key::Cancel)) g.menu_open = 0;
-            if (in.was_pressed(Key::Confirm)) {
+            if (in.was_pressed(Key::Confirm) || mclick) {
                 if (g.menu_sel == 12) {
                     g.menu_open = 0;
                 } else if (g.vault_page == 0) {  // deposit
@@ -2602,7 +2645,7 @@ bool game_update(const InputState& in) {
         if (in.was_pressed(Key::Up)) g.menu_sel = (g.menu_sel + n - 1) % n;
         if (in.was_pressed(Key::Down)) g.menu_sel = (g.menu_sel + 1) % n;
         if (in.was_pressed(Key::Cancel)) g.menu_open = 0;
-        if (in.was_pressed(Key::Confirm)) {
+        if (in.was_pressed(Key::Confirm) || mclick) {
             switch (g.menu_open * 10 + g.menu_sel) {
                 case 10:  // Naib: tribute water
                     if (g.pl.water >= 300) {
@@ -2898,11 +2941,14 @@ void pass_cursor(RenderCtx& r) {
     int sx, sy;
     iso::tile_to_screen(g.hover_tx, g.hover_ty, g.cam, sx, sy);
     const uint8_t col = ((g.anim_tick / 8) & 1) ? 246 : 232;  // green/amber pulse
+    // Tiles are centre-anchored (ax=32, ay=16), so tile_to_screen gives the tile
+    // CENTRE. Plot the diamond centred there (offset by -half) so the reticle sits
+    // exactly on the tile under the cursor, not half a tile down-right.
     for (int yy = 0; yy < 32; ++yy)
         for (int xx = 0; xx < 64; ++xx) {
             const int e = (xx < 32 ? 32 - xx : xx - 32) + 2 * (yy < 16 ? 16 - yy : yy - 16);
             if (e < 28 || e > 32) continue;  // the diamond edge band
-            const int px = sx + xx, py = sy + yy;
+            const int px = sx - iso::kHalfW + xx, py = sy - iso::kHalfH + yy;
             if (px >= 0 && px < fb::W && py >= 0 && py < fb::H)
                 r.ctx.frame->at(px, py) = col;
         }
@@ -2989,6 +3035,7 @@ void pass_entities(RenderCtx& r) {
                 bool flip;
                 anim::facing_to_view5(e.anim.facing, view_, flip);
                 int light2 = g.lightmap[idx];
+                if (light2 < light::kEntityMinLight) light2 = light::kEntityMinLight;  // mobs stay visible
                 if (e.hurt_flash > 0) {
                     light2 = 31;
                     sx += int(g.rng.fx.below(3)) - 1;
@@ -3006,7 +3053,8 @@ void pass_entities(RenderCtx& r) {
 
         int sx, sy;
         iso::tile_to_screen(e.x, e.y, g.cam, sx, sy);
-        const int light = g.lightmap[idx];
+        int light = g.lightmap[idx];
+        if (light < light::kEntityMinLight) light = light::kEntityMinLight;  // mobs stay visible
         switch (e.type) {
             case EType::Player:
                 g.draw_list.add(player_spr, (g.anim_tick / 9) % 4, sx,
