@@ -54,9 +54,12 @@ right-click/Cancel/keyboard override. A pulsing diamond reticle marks the hovere
 **Exit:** ✅ new `clicktest` pathfinds to the goal and is deterministic (4412b797977030e6);
 reticle verified by screenshot; `dettest` bit-identical (942bc42517b8679f); 10/10 tests green.
 
-### A5 — Minimap ⬜
-`M` toggles a scaled `V_REMEMBERED` overlay colored by feature.
-**Exit:** M shows a legible map of everywhere seen this run; toggles cleanly.
+### A5 — Minimap ✅
+`M` toggles a gold-framed top-right panel: a 2px/tile render of remembered tiles
+coloured by feature (wall / rock / spice / cistern / door) with a blinking player
+dot; hidden under menus. `map_scope` reserved for the Phase-B world overview.
+**Exit:** ✅ M shows a legible map of everywhere seen this run (verified by
+screenshot — the sietch cross-shape renders); unexplored absent; 10/10 tests green.
 
 ---
 

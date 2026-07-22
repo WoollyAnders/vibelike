@@ -206,6 +206,8 @@ struct GameState {
     int current_song = -1;
     int16_t hover_tx = -1, hover_ty = -1;
     int16_t move_goal_x = -1, move_goal_y = -1;  // A4: click-to-move destination (-1 = none)
+    bool show_map = false;   // A5: minimap toggle (M)
+    uint8_t map_scope = 0;   // A5: 0 = local zone; reserved for Phase-B world/section overview
     int anim_tick = 0;
     int fade = 0;
     uint8_t fade_r = 255, fade_g = 255, fade_b = 255;
@@ -2734,6 +2736,8 @@ bool game_update(const InputState& in) {
     }
 
     // a fresh press moves at once; a held key re-steps as the glide lands
+    if (in.was_pressed(Key::Map)) g.show_map = !g.show_map;  // A5: toggle the minimap
+
     const bool can_continue = glide_done(player_ent());
     auto move_input = [&](Key k) {
         return in.was_pressed(k) ||
@@ -3338,6 +3342,35 @@ void pass_ui(RenderCtx& r) {
             std::snprintf(buf, sizeof buf, "DISCOVERY %d%%",
                           g.season.discovery * 100 / campaign::kDiscoveryRaidAt);
             draw_text_shadow(ctx, buf, fb::W - 8 - int(std::strlen(buf)) * 8, 24, 208, 1);
+        }
+    }
+
+    // A5: minimap of everywhere seen this run — a gold-framed top-right panel,
+    // 2px/tile, coloured by feature. Toggled with M; hidden under menus.
+    if (g.show_map && !g.menu_open) {
+        const map::Zone& mz = zone();
+        const int scale = 2;
+        const int mw = map::W * scale, mh = map::H * scale;  // 128 x 128
+        const int mx = fb::W - mw - 6, my = 30;
+        fill_rect(ctx, mx - 2, my - 2, mw + 4, mh + 4, 230);  // gold frame
+        fill_rect(ctx, mx - 1, my - 1, mw + 2, mh + 2, 4);    // dark backdrop
+        for (int ty = 0; ty < map::H; ++ty)
+            for (int tx = 0; tx < map::W; ++tx) {
+                const int idx = ty * map::W + tx;
+                if (!(mz.vis[idx] & (map::V_VISIBLE | map::V_REMEMBERED))) continue;
+                const uint8_t f = mz.flags[idx];
+                uint8_t c;
+                if (f & map::TF_DOOR) c = 246;             // green exit pad
+                else if (f & map::TF_CISTERN) c = 172;     // blue cistern
+                else if (f & map::TF_WALL) c = 24;         // wall
+                else if (f & map::TF_ROCKPROP) c = 20;     // rock prop
+                else if (mz.floor[idx] == 5) c = 232;      // spice-veined pan
+                else c = 14;                               // open floor
+                fill_rect(ctx, mx + tx * scale, my + ty * scale, scale, scale, c);
+            }
+        if ((g.anim_tick / 15) & 1) {  // blinking player dot
+            const Entity& p = player_ent();
+            fill_rect(ctx, mx + p.x * scale - 1, my + p.y * scale - 1, scale + 2, scale + 2, 245);
         }
     }
 
