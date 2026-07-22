@@ -45,10 +45,14 @@ the glide crosses the buffer; reused by A4's click-path). Cadence/visual only.
 **Exit:** ✅ held walking re-steps continuously; `dettest` bit-identical
 (942bc42517b8679f), 9/9 tests green — the scripted walk hashes exactly as before.
 
-### A4 — PoE2 controls: WASD movement + cursor aim ⬜ *(depends on A3)*
-WASD movement (gliding), mouse cursor aims, Left-mouse primary action.
-**Exit:** WASD walks; cursor highlights a target; Left-mouse attacks/interacts;
-turn count per action unchanged.
+### A4 — PoE2 controls: WASD movement + cursor aim ✅
+Screen-relative WASD (new `Key::Walk*`; W walks *up the screen* via the inverse iso
+transform `dx=sign(Sx+Sy), dy=sign(Sy-Sx)`); arrows/numpad keep tile directions
+(so tests are unchanged). Mouse cursor sets a click-to-move goal (`click_step_toward`,
+goal-rooted Dijkstra); the final bump onto a hostile/NPC/cistern attacks or interacts;
+right-click/Cancel/keyboard override. A pulsing diamond reticle marks the hovered tile.
+**Exit:** ✅ new `clicktest` pathfinds to the goal and is deterministic (4412b797977030e6);
+reticle verified by screenshot; `dettest` bit-identical (942bc42517b8679f); 10/10 tests green.
 
 ### A5 — Minimap ⬜
 `M` toggles a scaled `V_REMEMBERED` overlay colored by feature.

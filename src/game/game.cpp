@@ -205,6 +205,7 @@ struct GameState {
     int disp_hp = -1, disp_water = -1;  // G5: orb slosh (displayed values)
     int current_song = -1;
     int16_t hover_tx = -1, hover_ty = -1;
+    int16_t move_goal_x = -1, move_goal_y = -1;  // A4: click-to-move destination (-1 = none)
     int anim_tick = 0;
     int fade = 0;
     uint8_t fade_r = 255, fade_g = 255, fade_b = 255;
@@ -2273,6 +2274,38 @@ bool glide_done(const Entity& e) {
     return dx * dx + dy * dy <= tune::kStepBufferPx * tune::kStepBufferPx;
 }
 
+// A4: take one step toward a click destination. A goal-rooted Dijkstra gives the
+// distance-to-goal from every tile; we descend to the lowest-cost walkable
+// neighbour. The final bump onto a blocked goal (enemy / cistern / door / wall)
+// is delegated to try_move, so click-to-attack and click-to-interact fall out for
+// free. Returns false when there is no legal step (stuck / unreachable).
+bool click_step_toward(int gx, int gy) {
+    const Entity& p = player_ent();
+    if (p.x == gx && p.y == gy) return false;
+    static int16_t pd[map::N];
+    map::compute_dijkstra(zone(), gx, gy, pd);
+    const int kNone = 1 << 30;
+    int best = kNone, bdx = 0, bdy = 0;
+    for (int ddy = -1; ddy <= 1; ++ddy)
+        for (int ddx = -1; ddx <= 1; ++ddx) {
+            if (!ddx && !ddy) continue;
+            const int nx = p.x + ddx, ny = p.y + ddy;
+            if (nx < 0 || nx >= map::W || ny < 0 || ny >= map::H) continue;
+            int d;
+            if (nx == gx && ny == gy) {
+                d = 0;  // adjacent to the goal itself: bump it (attack / interact)
+            } else {
+                if (!zone().walkable(nx, ny)) continue;
+                d = pd[ny * map::W + nx];
+                if (d < 0) continue;  // unreachable from the goal
+            }
+            if (d < best) { best = d; bdx = ddx; bdy = ddy; }
+        }
+    if (best == kNone) return false;
+    try_move(bdx, bdy);
+    return true;
+}
+
 // Per render tick (60Hz): every visible entity glides toward its logical
 // tile, walks while gliding, breathes while still. Purely presentational.
 void worm_visual_tick() {
@@ -2707,18 +2740,58 @@ bool game_update(const InputState& in) {
                (in.is_down(k) && can_continue && in.held_ticks[int(k)] >= tune::kHeldStepFloor);
     };
     int dx = 0, dy = 0;
-    if (move_input(Key::Up)) { dy = -1; }
-    else if (move_input(Key::Down)) { dy = 1; }
-    else if (move_input(Key::Left)) { dx = -1; }
-    else if (move_input(Key::Right)) { dx = 1; }
-    else if (move_input(Key::UpLeft)) { dx = -1; dy = -1; }
-    else if (move_input(Key::UpRight)) { dx = 1; dy = -1; }
-    else if (move_input(Key::DownLeft)) { dx = -1; dy = 1; }
-    else if (move_input(Key::DownRight)) { dx = 1; dy = 1; }
+
+    // PoE2 screen-relative WASD: compose an 8-way tile step from the four keys so
+    // W walks *up the screen* (an iso diagonal). Inverse of the iso projection:
+    // dx = sign(Sx+Sy), dy = sign(Sy-Sx), for screen intent (Sx, Sy).
+    const int wsx = (in.is_down(Key::WalkRight) ? 1 : 0) - (in.is_down(Key::WalkLeft) ? 1 : 0);
+    const int wsy = (in.is_down(Key::WalkDown) ? 1 : 0) - (in.is_down(Key::WalkUp) ? 1 : 0);
+    if (wsx || wsy) {
+        int held = 0;
+        for (Key k : {Key::WalkUp, Key::WalkDown, Key::WalkLeft, Key::WalkRight})
+            if (in.is_down(k) && in.held_ticks[int(k)] > held) held = in.held_ticks[int(k)];
+        const bool fresh = in.was_pressed(Key::WalkUp) || in.was_pressed(Key::WalkDown) ||
+                           in.was_pressed(Key::WalkLeft) || in.was_pressed(Key::WalkRight);
+        if (fresh || (can_continue && held >= tune::kHeldStepFloor)) {
+            const int tdx = wsx + wsy, tdy = wsy - wsx;
+            dx = tdx > 0 ? 1 : tdx < 0 ? -1 : 0;
+            dy = tdy > 0 ? 1 : tdy < 0 ? -1 : 0;
+        }
+    }
+    if (!dx && !dy) {  // classic tile-cardinal keys (arrows / numpad / headless tests)
+        if (move_input(Key::Up)) { dy = -1; }
+        else if (move_input(Key::Down)) { dy = 1; }
+        else if (move_input(Key::Left)) { dx = -1; }
+        else if (move_input(Key::Right)) { dx = 1; }
+        else if (move_input(Key::UpLeft)) { dx = -1; dy = -1; }
+        else if (move_input(Key::UpRight)) { dx = 1; dy = -1; }
+        else if (move_input(Key::DownLeft)) { dx = -1; dy = 1; }
+        else if (move_input(Key::DownRight)) { dx = 1; dy = 1; }
+    }
+
+    // Left-click aims: set a move goal at the cursor tile (hold-drag re-steers).
+    // Right-click or Cancel aborts it; any keyboard move overrides it below.
+    if (in.mouse_pressed[1] || in.was_pressed(Key::Cancel)) { g.move_goal_x = -1; }
+    const bool cursor_in_world = in.mouse_x >= 0 && in.mouse_y >= 30 &&
+                                 in.mouse_y < ui::kPanelY && g.hover_tx >= 0 && !g.pl.riding;
+    if (cursor_in_world && (in.mouse_pressed[0] || in.mouse_down[0])) {
+        g.move_goal_x = g.hover_tx;
+        g.move_goal_y = g.hover_ty;
+    }
 
     if (dx || dy) {
+        g.move_goal_x = -1;  // keyboard movement overrides click-to-move
         if (g.pl.riding) ride_move(dx, dy);
         else try_move(dx, dy);
+    }
+    else if (g.move_goal_x >= 0) {
+        if (can_continue) {
+            const Entity& p = player_ent();
+            if ((p.x == g.move_goal_x && p.y == g.move_goal_y) ||
+                !click_step_toward(g.move_goal_x, g.move_goal_y))
+                g.move_goal_x = -1;  // arrived or stuck
+            if (g.menu_open) g.move_goal_x = -1;  // clicked into an NPC/vault: stop here
+        }
     }
     else if (in.pressed_or_repeat(Key::Wait)) advance_world();
     else if (in.was_pressed(Key::Ride)) try_ride();
@@ -2813,6 +2886,22 @@ void pass_ground_decals(RenderCtx& r) {
     iso::tile_to_screen(g.wrm.x, g.wrm.y, g.cam, sx, sy);
     draw_sprite(r.ctx, *ripple, (g.anim_tick / 4) % 2, sx, sy,
                 light_at(g.wrm.x, g.wrm.y));
+}
+
+// A4: a pulsing iso-diamond reticle on the tile under the mouse cursor.
+void pass_cursor(RenderCtx& r) {
+    if (g.hover_tx < 0 || g.choosing || g.menu_open) return;
+    int sx, sy;
+    iso::tile_to_screen(g.hover_tx, g.hover_ty, g.cam, sx, sy);
+    const uint8_t col = ((g.anim_tick / 8) & 1) ? 246 : 232;  // green/amber pulse
+    for (int yy = 0; yy < 32; ++yy)
+        for (int xx = 0; xx < 64; ++xx) {
+            const int e = (xx < 32 ? 32 - xx : xx - 32) + 2 * (yy < 16 ? 16 - yy : yy - 16);
+            if (e < 28 || e > 32) continue;  // the diamond edge band
+            const int px = sx + xx, py = sy + yy;
+            if (px >= 0 && px < fb::W && py >= 0 && py < fb::H)
+                r.ctx.frame->at(px, py) = col;
+        }
 }
 
 // Walls: architecture, into the shared y-sorted scene list.
@@ -3448,6 +3537,7 @@ void game_render(Framebuffer& frame) {
     pass_particles(r);
     pass_lighting(r);
     pass_weather(r);
+    pass_cursor(r);  // A4: aim reticle, over the lit world, under the HUD
 
     g.cam = saved_cam;
     pass_ui(r);
@@ -3695,6 +3785,16 @@ void game_debug_warp_to_worm() {
 void game_debug_worm_pos(int* x, int* y) {
     if (x) *x = g.wrm.x;
     if (y) *y = g.wrm.y;
+}
+
+void game_debug_player_pos(int* x, int* y) {
+    if (x) *x = g.ents[0].x;
+    if (y) *y = g.ents[0].y;
+}
+
+void game_debug_click(int tx, int ty) {  // A4: set a click-to-move goal (headless)
+    g.move_goal_x = int16_t(tx);
+    g.move_goal_y = int16_t(ty);
 }
 
 void game_debug_rpg(int* level, int* inv_count, int* stash_count) {

@@ -13,6 +13,7 @@ enum class Key : uint8_t {
     Inventory, Look, Powers, Sandwalk, Map, Harvest, Thumper, Plant, Poison,
     Glowglobe, Ride, Character,
     Save, Load,
+    WalkUp, WalkDown, WalkLeft, WalkRight,  // A4: PoE2 screen-relative WASD (W = up on screen)
     Count
 };
 inline constexpr int kKeyCount = int(Key::Count);
