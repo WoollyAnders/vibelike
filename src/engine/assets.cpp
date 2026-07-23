@@ -37,16 +37,17 @@ bool Assets::load_all(const char* data_dir) {
         std::fread(&hdr.page_count, 2, 1, f) != 1 ||
         std::fread(&hdr.entry_count, 2, 1, f) != 1 ||
         std::fread(&hdr.page_w, 2, 1, f) != 1 || std::fread(&hdr.page_h, 2, 1, f) != 1 ||
-        hdr.magic != 0x4C544144u || hdr.version != 2) {
-        std::fprintf(stderr, "assets: %s is not a v2 atlas\n", path);
+        hdr.magic != 0x4C544144u || hdr.version != 3) {
+        std::fprintf(stderr, "assets: %s is not a v3 (RGBA) atlas\n", path);
         std::fclose(f);
         return false;
     }
 
     pages_.resize(hdr.page_count);
     for (auto& page : pages_) {
-        page.resize(size_t(hdr.page_w) * hdr.page_h);
-        if (std::fread(page.data(), 1, page.size(), f) != page.size()) {
+        page.resize(size_t(hdr.page_w) * hdr.page_h);  // uint32 elements (RGBA)
+        const size_t bytes = page.size() * sizeof(uint32_t);
+        if (std::fread(page.data(), 1, bytes, f) != bytes) {
             std::fprintf(stderr, "assets: truncated atlas pages\n");
             std::fclose(f);
             return false;
@@ -71,6 +72,20 @@ bool Assets::load_all(const char* data_dir) {
         e.sheet.ay = ae.ay;
     }
     std::fclose(f);
+
+    // Build the missing-key placeholder: a 16x16 magenta/black checkerboard so a
+    // gap in the atlas draws as a loud marker instead of crashing on a null sheet.
+    constexpr int kPS = 16;
+    placeholder_px_.resize(kPS * kPS);
+    for (int y = 0; y < kPS; ++y)
+        for (int x = 0; x < kPS; ++x)
+            placeholder_px_[y * kPS + x] =
+                (((x >> 2) ^ (y >> 2)) & 1) ? 0xffff00ffu : 0xff200020u;
+    placeholder_.px = placeholder_px_.data();
+    placeholder_.pitch = kPS;
+    placeholder_.fw = placeholder_.fh = kPS;
+    placeholder_.frames = 1;
+    placeholder_.ax = placeholder_.ay = kPS / 2;
     return true;
 }
 

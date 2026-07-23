@@ -2906,6 +2906,13 @@ int tile_light(const RenderCtx& r, int idx) {
 
 int light_at(int x, int y) { return g.lightmap[y * map::W + x]; }
 
+// Sprite by key, falling back to the loud magenta placeholder rather than
+// dereferencing null — so a missing atlas key is a visible marker, not a crash.
+const SpriteSheet& sheet_or_ph(RenderCtx& r, const char* name) {
+    const SpriteSheet* s = r.assets->get(name);
+    return s ? *s : *r.assets->placeholder();
+}
+
 // Ground: floor diamonds, immediate (no overlap between floors).
 void pass_ground(RenderCtx& r) {
     const SpriteSheet* tiles = r.assets->get("tiles");
@@ -3173,7 +3180,7 @@ void pass_effects(RenderCtx& r) {
             const int ax = sx - 20 + off * 2;
             const int ay = sy - 80 - off;
             const int bob = (g.anim_tick / 12) % 3 - 1;
-            draw_sprite(r.ctx, *r.assets->get("carryall"), 0, ax, ay + bob,
+            draw_sprite(r.ctx, sheet_or_ph(r, "carryall"), 0, ax, ay + bob,
                         light_at(g.op.x, g.op.y));
         }
     }
@@ -3185,7 +3192,7 @@ void pass_particles(RenderCtx& r) {
         int sx, sy;
         iso::tile_to_screen(g.thopter_x, g.thopter_y, g.cam, sx, sy);
         if (sx > -60 && sx < fb::W + 60 && sy > -60 && sy < fb::H + 60)
-            draw_sprite(r.ctx, *r.assets->get("carryall"), 0, sx, sy - 60, 31);
+            draw_sprite(r.ctx, sheet_or_ph(r, "carryall"), 0, sx, sy - 60, 31);
     }
     int sx, sy;
     if (g.wrm.state == worm::State::Breaching) {
@@ -3264,7 +3271,7 @@ void pass_ui(RenderCtx& r) {
         draw_text_shadow(ctx, "Choose your path", fb::W / 2 - 16 * kCh, 170, 24, 1);
 
         const int n = int(Background::Count);
-        set_draw_scale(2);  // class portraits at the world zoom for this full-screen menu
+        set_draw_scale(1);  // R3: class portraits authored at native size, blit 1:1
         for (int i = 0; i < n; ++i) {
             const int cx = fb::W / 2 + (i - 1) * 320;
             const bool sel = i == g.choose_idx;
@@ -3593,7 +3600,8 @@ void pass_ui(RenderCtx& r) {
 
 void game_render(Framebuffer& frame) {
     frame.clear(0xff000000u | g.services.pal->color[1]);  // near-black background
-    set_draw_scale(iso::kView);  // world sprites blit at the 2x D2 zoom
+    set_draw_scale(1);  // R3: art is authored at native on-screen size, blit 1:1
+                        // (iso projection still uses kView; only the blit scale is 1)
 
     RenderCtx r{DrawCtx{&frame, g.services.cmaps, g.services.pal}, &zone(), is_night(),
                 is_night() ? 18 : 31, g.services.assets};
