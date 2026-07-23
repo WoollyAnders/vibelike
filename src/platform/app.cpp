@@ -129,8 +129,11 @@ bool platform_init(Platform& p, audio::Mixer* mixer) {
         if (win_w > max_w) { win_w = max_w; win_h = win_w * fb::H / fb::W; }
         if (win_h > max_h) { win_h = max_h; win_w = win_h * fb::W / fb::H; }
     }
+    // Start MAXIMIZED so it fills the work area (minus the taskbar) without
+    // overflowing; win_w/win_h become the restored (un-maximized) size. Aspect-fit
+    // present letterboxes as needed. F toggles true fullscreen.
     p.window = SDL_CreateWindow("DUSTFALL", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                                win_w, win_h, SDL_WINDOW_RESIZABLE);
+                                win_w, win_h, SDL_WINDOW_RESIZABLE | SDL_WINDOW_MAXIMIZED);
     if (!p.window) return false;
     p.renderer = SDL_CreateRenderer(p.window, -1,
                                     SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
