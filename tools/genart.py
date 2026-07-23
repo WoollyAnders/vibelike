@@ -182,14 +182,23 @@ TURNAROUNDS = {
              "ember-orange eyes, standing alert",
 }
 
+# Sprites whose subject colour is too close to a sandy backdrop for corner-flood
+# keying (they came back invisible). Regenerate these on a solid chroma-key GREEN
+# screen; strip_background() then keys the green cleanly. Requested opaque (not
+# transparent) so the model actually paints the flat green field.
+CHROMA = {"hound", "spotter", "carryall"}
+CHROMA_BG = (" , the ENTIRE background a single flat uniform chroma-key green "
+             "(rgb 0 200 0), even studio lighting, no ground, no shadow, no other "
+             "green anywhere on the subject, the subject fully inside the frame")
+
 # Specials: generated once, frames synthesized in post.
 SPECIALS = {
     "mound":    "a swelling mound of disturbed desert sand bulging upward with "
                 "cracks radiating from its crest, dust sifting off, isolated on "
                 "a fully transparent background, no scene, no border",
-    "carryall": "top-down silhouette of a massive heavy-lift dragonfly-winged "
-                "cargo aircraft with twin hulls, solid dark shape, isolated on "
-                "a fully transparent background, no scene",
+    "carryall": "a detailed top-down view of a massive heavy-lift ornithopter "
+                "cargo aircraft with dragonfly wings and twin hulls, weathered "
+                "metallic bronze and grey plating, seen from directly above",
 }
 
 def build_ripple(tex, fw, fh, frames):
@@ -302,13 +311,40 @@ HEIGHTS = {k: v * FIG_SCALE for k, v in {
     "champion": 58, "baron": 60, "guildsman": 54,
 }.items()}
 
+def _green_dominant(c):
+    """A chroma-key green pixel. Two tiers: (a) strong pure green; (b) the
+    desaturated green *fringe* left by antialiasing at the subject edge — green
+    is the top channel and clearly above blue. Sandy/brown subjects have red as
+    the top channel (r > g), so neither tier touches them."""
+    if c[3] < 128:
+        return False
+    r, g, b = c[0], c[1], c[2]
+    if g > 80 and g - r > 45 and g - b > 45:   # (a) pure green screen
+        return True
+    if g >= r and g > b + 18 and g > 50:       # (b) green fringe (not sand: g>=r)
+        return True
+    return False
+
 def strip_background(img):
     """If the model painted a backdrop despite background=transparent, remove
     it: flood from every edge pixel, clearing anything close to the corner
-    colors. No-op when the image already has real transparency."""
+    colors. No-op when the image already has real transparency.
+
+    R3: some masters (a sand-coloured creature on a sandy backdrop) are impossible
+    to key by corner colour — they are regenerated on a solid chroma-key GREEN
+    screen instead. When the corners read green, drop every green-dominant pixel
+    globally (not just edge-connected), which also clears green seen between limbs."""
     w, h = img.size
     px = img.load()
     corners = [px[0, 0], px[w - 1, 0], px[0, h - 1], px[w - 1, h - 1]]
+
+    if sum(_green_dominant(c) for c in corners) >= 3:  # green screen
+        for y in range(h):
+            for x in range(w):
+                if _green_dominant(px[x, y]):
+                    px[x, y] = (0, 0, 0, 0)
+        return img
+
     if any(c[3] < 128 for c in corners):
         return img  # already transparent
 
@@ -465,7 +501,9 @@ def main():
     for name, builder in (("mound", build_mound), ("carryall", build_carryall)):
         if name not in meta:
             continue
-        img = generate(key, name, SPECIALS[name], transparent=True)
+        chroma = name in CHROMA
+        img = generate(key, name, SPECIALS[name] + (CHROMA_BG if chroma else ""),
+                       transparent=not chroma)
         _, fw, fh, frames, _, _ = meta[name]
         builder(img, fw, fh, frames).save(os.path.join(RAW, f"{name}.png"))
         print(f"  {name}: {frames} synthesized frames at {fw}x{fh}")
@@ -474,7 +512,9 @@ def main():
         if name not in meta:
             print(f"  {name}: not in meta.txt, skipped")
             continue
-        img = generate(key, name, prompt, transparent=True)
+        chroma = name in CHROMA
+        img = generate(key, name, prompt + (CHROMA_BG if chroma else ""),
+                       transparent=not chroma)
         _, fw, fh, frames, _, _ = meta[name]
         sheet = make_sheet(fit_sprite(img, fw, fh, HEIGHTS.get(name)), fw, fh, frames)
         sheet.save(os.path.join(RAW, f"{name}.png"))
