@@ -2950,7 +2950,7 @@ void pass_cursor(RenderCtx& r) {
             if (e < 28 || e > 32) continue;  // the diamond edge band
             const int px = sx - iso::kHalfW + xx, py = sy - iso::kHalfH + yy;
             if (px >= 0 && px < fb::W && py >= 0 && py < fb::H)
-                r.ctx.frame->at(px, py) = col;
+                r.ctx.frame->at(px, py) = 0xff000000u | r.ctx.pal->color[col];
         }
 }
 
@@ -3219,8 +3219,8 @@ void pass_weather(RenderCtx& r) {
             for (int i = 0; i < 220; ++i) {
                 const int x = int(g.rng.fx.below(fb::W));
                 const int y = 20 + int(g.rng.fx.below(fb::H - ui::kPanelH - 40));
-                uint8_t* px = r.ctx.frame->px;
-                const uint8_t tmp = px[y * fb::W + x];
+                uint32_t* px = r.ctx.frame->px;
+                const uint32_t tmp = px[y * fb::W + x];
                 px[y * fb::W + x] = px[(y + 1) * fb::W + x];
                 px[(y + 1) * fb::W + x] = tmp;
             }
@@ -3242,9 +3242,9 @@ void pass_weather(RenderCtx& r) {
     // dithered haze veil
     const int phase = g.anim_tick / 2;
     for (int y = 0; y < fb::H; ++y) {
-        uint8_t* row = r.ctx.frame->px + y * fb::W;
+        uint32_t* row = r.ctx.frame->px + y * fb::W;
         for (int x = (y + phase) & 3; x < fb::W; x += 4)
-            row[x] = uint8_t(60 + ((x + y) % 5));
+            row[x] = 0xff000000u | r.ctx.pal->color[60 + ((x + y) % 5)];
     }
 }
 
@@ -3588,9 +3588,9 @@ void pass_ui(RenderCtx& r) {
 }  // namespace
 
 void game_render(Framebuffer& frame) {
-    frame.clear(1);
+    frame.clear(0xff000000u | g.services.pal->color[1]);  // near-black background
 
-    RenderCtx r{DrawCtx{&frame, g.services.cmaps}, &zone(), is_night(),
+    RenderCtx r{DrawCtx{&frame, g.services.cmaps, g.services.pal}, &zone(), is_night(),
                 is_night() ? 18 : 31, g.services.assets};
 
     // screen shake (visual only; fx stream never touches gameplay)

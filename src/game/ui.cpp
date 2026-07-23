@@ -37,7 +37,7 @@ void draw_orb(DrawCtx& ctx, int cx, int cy, int r, int fill_permille,
                 c = 3;  // empty glass
             }
             if (px >= 0 && px < fb::W && py >= 0 && py < fb::H)
-                ctx.frame->at(px, py) = c;
+                ctx.frame->at(px, py) = 0xff000000u | ctx.pal->color[c];
         }
     }
 }
@@ -76,7 +76,7 @@ void draw_hud(DrawCtx& ctx, const HudState& s, const Log& log, int anim_tick,
     for (int i = 0; i < bw; ++i) {
         const int hour = i * 24 / bw;
         const int amb = (hour >= 6 && hour <= 18) ? 5 + (9 - (hour > 12 ? hour - 12 : 12 - hour)) / 2 : 2;
-        ctx.frame->at(bx + i, by + 2) = uint8_t(amb >= 8 ? 150 : amb >= 5 ? 88 : 165);
+        ctx.frame->at(bx + i, by + 2) = 0xff000000u | ctx.pal->color[amb >= 8 ? 150 : amb >= 5 ? 88 : 165];
     }
     const int sun_x = bx + s.hour * bw / 24;
     fill_rect(ctx, sun_x - 1, by - 1, 3, 8, uint8_t(s.ambient >= 8 ? 158 : 30));
@@ -106,10 +106,10 @@ void draw_hud(DrawCtx& ctx, const HudState& s, const Log& log, int anim_tick,
             const uint8_t v = s.seismo[(s.seismo_head + i) & 63];
             const int h = 1 + v * (gh - 2) / 100;
             const int x = gx + i;
-            ctx.frame->at(x, gy + gh - 1 - h) = trace;
+            ctx.frame->at(x, gy + gh - 1 - h) = 0xff000000u | ctx.pal->color[trace];
             if (i == gw - 1)
                 for (int yy = gy + gh - h; yy < gy + gh; ++yy)
-                    ctx.frame->at(x, yy) = trace;
+                    ctx.frame->at(x, yy) = 0xff000000u | ctx.pal->color[trace];
         }
         draw_text(ctx, "WORMSIGN", gx - 2, gy + gh + 3, uint8_t(s.worm_state >= 2 ? 208 : 14));
     }

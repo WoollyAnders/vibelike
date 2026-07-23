@@ -20,6 +20,7 @@ struct GameServices {
     const anim::Registry* anims = nullptr;
     bool interactive = false;  // true: show the background chooser on new runs
     bool debug_anim = false;   // overlay: state/frame/facing
+    const Palette* pal = nullptr;  // R1: index -> RGB for the RGBA render path
 };
 
 void game_init(uint64_t seed, const GameServices& services);

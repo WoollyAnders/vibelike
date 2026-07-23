@@ -45,7 +45,7 @@ public:
             p.vy += 2;  // faint gravity
             const int px = p.x >> 8, py = p.y >> 8;
             if (px >= 0 && px < fb::W && py >= 0 && py < fb::H)
-                ctx.frame->at(px, py) = p.color;
+                ctx.frame->at(px, py) = 0xff000000u | ctx.pal->color[p.color];
         }
     }
 
