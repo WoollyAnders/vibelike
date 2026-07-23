@@ -7,8 +7,8 @@
 #include <cstdint>
 
 namespace fb {
-inline constexpr int W = 640;
-inline constexpr int H = 480;
+inline constexpr int W = 1920;  // R2: 1080p internal. Iso tiles stay 64x32 (D2
+inline constexpr int H = 1080;  // 2:1 diamonds) -> a wider, sharper tactical view.
 }  // namespace fb
 
 struct Framebuffer {
