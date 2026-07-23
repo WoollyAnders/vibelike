@@ -40,29 +40,32 @@ def api_key():
             return line.split("=", 1)[1].strip()
     return None
 
+GRID_ROWS, GRID_COLS = 2, 4   # 8 keyframes, read left-to-right then top-to-bottom
+
 def prompt_for(desc):
     return (
-        "2D game character walk-cycle sprite sheet on a fully transparent "
-        "background. A single horizontal row of SIX frames, left to right. "
-        "CRITICAL LAYOUT: each frame contains EXACTLY ONE small figure; the "
-        "figures are widely separated with a large empty transparent gap between "
-        "them (each gap at least as wide as a figure); figures must NEVER touch, "
-        "overlap, or share a frame. Every frame shows the SAME character in "
-        "strict right-facing side profile at a different point of one smooth walk "
-        "cycle: the legs swing (one forward, one back, then passing, then the "
-        "opposite) and the arms swing opposite the legs, so the six frames played "
-        "in order animate a walking loop. "
-        f"Character: {desc}. Identical costume, colors, proportions and height in "
-        "every frame; all feet aligned to one common ground baseline. " + STYLE +
-        ". No ground, no shadow, no grid, no boxes, no text, no numbers.")
+        f"A {GRID_ROWS}-row by {GRID_COLS}-column grid of {GRID_ROWS*GRID_COLS} "
+        "animation keyframes on a fully transparent background, exactly ONE figure "
+        "centered in each grid cell, read left-to-right then top-to-bottom as the "
+        "frames of one smooth walk cycle. Every cell shows the SAME character in "
+        "strict right-facing side profile at the next point of the stride: contact "
+        "with the left foot forward, passing, contact with the right foot forward, "
+        "passing, and so on — legs swing (one forward, one back) and arms swing "
+        "opposite the legs, so the cells in order animate a walking loop. "
+        f"Character: {desc}. CRITICAL: keep the character's costume, colors, "
+        "proportions and overall SIZE IDENTICAL in every cell; only the limb pose "
+        "changes between cells. Center each figure in its cell with generous "
+        "transparent margins; figures never touch or cross cell boundaries; feet "
+        "level within each cell. " + STYLE + ". Evenly sized cells, no visible grid "
+        "lines, no panel borders, no ground, no shadow, no text, no numbers.")
 
 def generate(key, name, desc):
     cache = os.path.join(CACHE, f"{name}_walkcycle.png")
     if os.path.isfile(cache):
         print(f"  {name}: cached")
         return Image.open(cache).convert("RGBA")
-    body = {"model": "gpt-image-1", "prompt": prompt_for(desc), "size": "1536x1024",
-            "quality": "medium", "output_format": "png", "background": "transparent", "n": 1}
+    body = {"model": "gpt-image-1", "prompt": prompt_for(desc), "size": "1024x1024",
+            "quality": "high", "output_format": "png", "background": "transparent", "n": 1}
     req = urllib.request.Request(
         "https://api.openai.com/v1/images/generations",
         data=json.dumps(body).encode(),
@@ -75,22 +78,67 @@ def generate(key, name, desc):
     open(cache, "wb").write(png)
     return Image.open(cache).convert("RGBA")
 
-def slice_frames(img):
+def _largest_component(cell):
+    """Keep only the largest connected opaque blob in a cell — drops the stray
+    detached marks the model sometimes paints (a floating blade, a stray box)
+    while keeping the figure and anything it holds/touches."""
+    from collections import deque
+    w, h = cell.size
+    a = cell.getchannel("A").load()
+    seen = bytearray(w * h)
+    best, best_n = None, 0
+    for sy in range(h):
+        for sx in range(w):
+            if seen[sy * w + sx] or a[sx, sy] <= 60:
+                continue
+            comp, q = [], deque([(sx, sy)])
+            seen[sy * w + sx] = 1
+            while q:
+                x, y = q.popleft(); comp.append((x, y))
+                for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                    nx, ny = x + dx, y + dy
+                    if 0 <= nx < w and 0 <= ny < h and not seen[ny * w + nx] and a[nx, ny] > 60:
+                        seen[ny * w + nx] = 1; q.append((nx, ny))
+            if len(comp) > best_n:
+                best_n, best = len(comp), comp
+    out = Image.new("RGBA", cell.size, (0, 0, 0, 0))
+    if best:
+        src, dst = cell.load(), out.load()
+        for (x, y) in best:
+            dst[x, y] = src[x, y]
+    return out
+
+def grid_cells(img):
+    """Divide the image into the GRID_ROWS x GRID_COLS grid and return the
+    cleaned, bbox-cropped figure from each non-empty cell, in reading order
+    (the frame sequence). A fixed grid slices far more reliably than gaps."""
     w, h = img.size
-    a = img.getchannel("A").load()
-    occ = [any(a[x, y] > 40 for y in range(0, h, 3)) for x in range(w)]
-    spans, start = [], None
-    for x, o in enumerate(occ + [False]):
-        if o and start is None: start = x
-        elif not o and start is not None:
-            spans.append((start, x)); start = None
-    # keep only real figures: wide spans (drop specks / edge fragments)
-    return [s for s in spans if s[1] - s[0] >= 120]
+    cw, ch = w // GRID_COLS, h // GRID_ROWS
+    cells = []
+    for r in range(GRID_ROWS):
+        for c in range(GRID_COLS):
+            cell = _largest_component(img.crop((c * cw, r * ch, (c + 1) * cw, (r + 1) * ch)))
+            bb = cell.getbbox()
+            if not bb:
+                continue
+            fig = cell.crop(bb)
+            if fig.width >= 20 and fig.height >= 36:   # skip specks / stray marks
+                cells.append(fig)
+    return cells
 
 def _alpha_area(c):
     a = c.getchannel("A").load()
     w, h = c.size
     return sum(1 for y in range(h) for x in range(w) if a[x, y] > 60) or 1
+
+def _head_ref(c):
+    """Opaque mass in the top ~20% (head + hood). Nearly pose-invariant across a
+    walk cycle, so it's a stable proxy for the character's true scale — unlike
+    full-body mass or bbox height, which change as the legs spread."""
+    a = c.getchannel("A").load()
+    w, h = c.size
+    band = max(2, int(h * 0.20))
+    return sum(1 for y in range(band) for x in range(w) if a[x, y] > 60) or 1
 
 def _centroid_x(c):
     a = c.getchannel("A").load()
@@ -103,25 +151,25 @@ def _centroid_x(c):
     return sx / n if n else w / 2
 
 def build_strip(img):
-    crops = []
-    for (x0, x1) in slice_frames(img):
-        c = img.crop((x0, 0, x1, img.height))
-        bb = c.getbbox()
-        if bb: c = c.crop(bb)
-        crops.append(c)
+    crops = grid_cells(img)
     if not crops:
         return None, 0
+    # Drop mis-sliced fragments (a detached blade/box that crossed a cell edge):
+    # they carry far less opaque mass than a real figure.
+    a_all = [_alpha_area(c) for c in crops]
+    med = sorted(a_all)[len(a_all) // 2]
+    crops = [c for c, a in zip(crops, a_all) if a >= 0.55 * med]
     n = len(crops)
     # gpt-image-1 draws each frame at a slightly different scale — the source of
-    # the frame-to-frame "size change". Normalize every frame to the same opaque
-    # pixel-MASS (pose-stable, unlike bbox height), then a single global scale so
-    # the median frame stands ~HEIGHT tall. Feet bottom-anchored, body centred by
-    # centroid so arm/leg swing doesn't slide the torso sideways.
-    areas = sorted(_alpha_area(c) for c in crops)
-    target_area = areas[len(areas) // 2]
+    # the frame-to-frame "size change". Normalize every frame by its HEAD-band size
+    # (pose-invariant: the head/hood doesn't change as the legs spread, unlike full
+    # mass or bbox height), then one global scale so the median head sits at HEIGHT.
+    # Feet bottom-anchored; body centred by centroid so limb swing doesn't slide it.
+    refs = [_head_ref(c) for c in crops]
+    target_ref = sorted(refs)[len(refs) // 2]
     normed = []
-    for c in crops:
-        s = (target_area / _alpha_area(c)) ** 0.5
+    for c, rf in zip(crops, refs):
+        s = (target_ref / rf) ** 0.5
         normed.append(c.resize((max(1, round(c.width * s)), max(1, round(c.height * s))),
                                Image.LANCZOS))
     hs = sorted(c.height for c in normed)
