@@ -125,10 +125,23 @@ screen) and `present` aspect-fits with down/upscaling + linear filtering. Art st
 picking accurate + deterministic (4412b797977030e6); `dettest` bit-identical
 (942bc42517b8679f); 10/10 existing tests green.
 
-### R3 — High-res native-RGBA art ⬜
+### R3 — High-res native-RGBA art ✅
 Regenerate all art at high resolution as native RGBA (characters, tiles, props, UI),
 dropping palette-quantize. New atlas format (RGBA pages). The actual "modern" payoff.
-**Exit:** crisp high-res truecolor characters/terrain/UI; no missing-asset fallbacks.
+Landed in three groups: **A** — atlas.bin v3 packs native 32-bit RGBA pages (B,G,R,A
+on disk → uint32 == 0xAARRGGBB), quantize dropped from the pipeline, loader + draw_sprite
+read ARGB directly with a 1-bit alpha key (palette kept only for text/fills). **B** —
+art authored at native on-screen size (make_assets SCALE 2→4 ⇒ 128×64 tiles, 64×128
+chars; genart HEIGHTS + walkgen ×2), regenerated from the committed 1024px masters +
+cached walk grids (zero API calls), and the world blit-scale dropped to 1 (iso
+projection unchanged, so all logic hashes hold). **C** — fixed the "invisible mobs" bug
+(hound/spotter/carryall were a sand subject on a sand backdrop that corner-flood keying
+erased): regenerated those three on a chroma-key green screen with a two-tier green key.
+A magenta placeholder now stands in for any missing key (no crash, visible marker).
+**Exit:** ✅ crisp high-res truecolor characters/terrain/UI (screenshots); a detailed
+desert hound now renders where mobs were invisible; no missing-asset fallbacks in normal
+play. Atlas 16MB, total 27.7MB (<50MB). Presentation-only — `dettest` bit-identical
+(942bc42517b8679f), `clicktest` deterministic, 10/10 tests green.
 
 ### R4 — RGB lighting + effects + upscaling polish ⬜
 RGB per-light shading + fog-of-war dimming (replacing colormap levels), particle/effect
