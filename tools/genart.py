@@ -21,9 +21,11 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RAW = os.path.join(ROOT, "assets_src", "raw")
 CACHE = os.path.join(ROOT, "assets_src", "gen_cache")
 
-STYLE = ("isometric video game asset, Diablo 1 aesthetic, dark gritty 1990s "
-         "retro pixel-art feel, muted desert palette of ochre sand and dusty "
-         "rock, moody, no text, no watermark")
+STYLE = ("isometric video game asset in the style of Diablo II — highly detailed "
+         "90s dark-fantasy pixel art with rich painterly shading, dithered "
+         "gradients and many color shades, deep moody chiaroscuro lighting, "
+         "gritty ornate detail, muted desert palette of ochre sand and dusty "
+         "rock, no text, no watermark")
 
 # Sprites: one generated image fitted into the meta-declared frame box.
 SPRITES = {
@@ -136,15 +138,20 @@ UI = {
 
 # Terrain textures: generated once, then diamonds are cut from random crops.
 TEXTURES = {
-    "tex_sand":  "seamless top-down texture of windswept desert sand with fine "
-                 "ripples and small dunes, ochre and tan",
+    "tex_sand":  "seamless top-down texture of windswept desert sand, finely "
+                 "detailed wind-carved ripples, grains and soft dune ridges, "
+                 "layered ochre, tan and shadowed umber, rich painterly 90s "
+                 "pixel-art shading with dithered gradients",
     "tex_rock":  "seamless top-down texture of cracked desert rock ground, "
-                 "grey-brown stone plates with dust in the cracks",
-    "tex_spice": "seamless top-down texture of desert sand veined with "
-                 "glittering rust-red crystalline cinnamon-colored deposits",
+                 "detailed grey-brown stone plates with deep fissures, pitting "
+                 "and rubble, dust settled in the cracks, rich painterly 90s "
+                 "pixel-art shading",
+    "tex_spice": "seamless top-down texture of desert sand veined with glittering "
+                 "rust-red crystalline cinnamon spice, sparkling flecks and "
+                 "layered deposits, rich detailed 90s pixel-art shading",
     "tex_ripple": "seamless top-down texture of strong concentric sand ripple "
                   "rings radiating across desert sand, deep wave shadows, "
-                  "agitated disturbed sand",
+                  "agitated disturbed sand, detailed 90s pixel-art shading",
 }
 
 # Turnaround sheets: 5 views of the same figure, sliced into direction strips.
