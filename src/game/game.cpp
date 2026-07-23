@@ -2326,12 +2326,12 @@ void worm_visual_tick() {
         int16_t& vx = g.worm_vis[i * 2];
         int16_t& vy = g.worm_vis[i * 2 + 1];
         const int dx = wx - vx, dy = wy - vy;
-        if (dx * dx + dy * dy > 160 * 160) {  // teleport/reset: snap
+        if (dx * dx + dy * dy > 320 * 320) {  // teleport/reset: snap (2x world space)
             vx = int16_t(wx);
             vy = int16_t(wy);
             continue;
         }
-        const int step = i == 0 ? 8 : (6 - (i > 4 ? 2 : i / 2));
+        const int step = (i == 0 ? 8 : (6 - (i > 4 ? 2 : i / 2))) * iso::kView;
         vx = int16_t(vx + (dx > step ? step : dx < -step ? -step : dx));
         vy = int16_t(vy + (dy > step ? step : dy < -step ? -step : dy));
     }
@@ -2344,7 +2344,7 @@ void visual_tick() {
         int wx, wy;
         world_px_of(e.x, e.y, wx, wy);
         int dx = wx - e.vpx, dy = wy - e.vpy;
-        if (dx * dx + dy * dy > 96 * 96) {  // teleport/spawn: snap
+        if (dx * dx + dy * dy > 192 * 192) {  // teleport/spawn: snap (2x world space)
             e.vpx = int16_t(wx);
             e.vpy = int16_t(wy);
             dx = dy = 0;
@@ -2477,29 +2477,29 @@ const char* describe_at(int tx, int ty) {
 int menu_row_under_mouse(const InputState& in) {
     if (in.mouse_x < 0) return -1;
     const int mx = in.mouse_x, my = in.mouse_y;
-    if (g.menu_open >= 1 && g.menu_open <= 4) {           // vendor lists
-        const int x0 = fb::W / 2 - 150, y0 = 140;
-        if (mx < x0 + 8 || mx > x0 + 8 + 284) return -1;
+    if (g.menu_open >= 1 && g.menu_open <= 4) {           // vendor lists (R2: 2x)
+        const int x0 = fb::W / 2 - 300, y0 = 280;
+        if (mx < x0 + 16 || mx > x0 + 16 + 568) return -1;
         const int counts[5] = {0, 5, 3, 5, 4};
         for (int i = 0; i < counts[g.menu_open]; ++i) {
-            const int ry = y0 + 34 + i * 14 - 2;
-            if (my >= ry && my < ry + 14) return i;
+            const int ry = y0 + 80 + i * 32 - 4;
+            if (my >= ry && my < ry + 32) return i;
         }
         return -1;
     }
-    const int x0 = fb::W / 2 - 190, y0 = 60;              // char / pack / vault
-    if (mx < x0 + 8 || mx > x0 + 8 + 364) return -1;
-    auto band = [&](int ry) { return my >= ry - 1 && my < ry + 11; };
+    const int x0 = fb::W / 2 - 380, y0 = 140;             // char / pack / vault (R2: 2x)
+    if (mx < x0 + 16 || mx > x0 + 16 + 728) return -1;
+    auto band = [&](int ry) { return my >= ry - 2 && my < ry + 22; };
     if (g.menu_open == 5) {
-        for (int i = 0; i < 3; ++i) if (band(y0 + 34 + i * 12)) return i;
-        for (int i = 0; i < kTalentCount; ++i) if (band(y0 + 74 + i * 12)) return 3 + i;
-        if (band(y0 + 206)) return 12;
+        for (int i = 0; i < 3; ++i) if (band(y0 + 88 + i * 24)) return i;
+        for (int i = 0; i < kTalentCount; ++i) if (band(y0 + 176 + i * 24)) return 3 + i;
+        if (band(y0 + 460)) return 12;
     } else if (g.menu_open == 6) {
-        for (int i = 0; i < 12; ++i) if (band(y0 + 70 + i * 12)) return i;
-        if (band(y0 + 218)) return 12;
+        for (int i = 0; i < 12; ++i) if (band(y0 + 140 + i * 24)) return i;
+        if (band(y0 + 460)) return 12;
     } else if (g.menu_open == 7) {
-        for (int i = 0; i < 12; ++i) if (band(y0 + 40 + i * 12)) return i;
-        if (band(y0 + 190)) return 12;
+        for (int i = 0; i < 12; ++i) if (band(y0 + 88 + i * 24)) return i;
+        if (band(y0 + 420)) return 12;
     }
     return -1;
 }
@@ -3253,29 +3253,35 @@ void pass_ui(RenderCtx& r) {
     DrawCtx& ctx = r.ctx;
     const map::Zone& z = *r.z;
 
+    // R2: the UI pass draws its 8x8 font at 2x (16px) for 1080p. Text-centering
+    // uses half a glyph = 8px; row spacing and panel sizes are doubled to match.
+    set_text_scale(2);
+    constexpr int kCh = 8;  // half a 16px glyph, for centering: x = cx - strlen*kCh
+
     if (g.choosing) {
         fill_rect(ctx, 0, 0, fb::W, fb::H, 1);
-        draw_text_shadow(ctx, "D U S T F A L L", fb::W / 2 - 64, 60, 230, 1);
-        draw_text_shadow(ctx, "Choose your path", fb::W / 2 - 64, 84, 24, 1);
+        draw_text_shadow(ctx, "D U S T F A L L", fb::W / 2 - 15 * kCh, 120, 230, 1);
+        draw_text_shadow(ctx, "Choose your path", fb::W / 2 - 16 * kCh, 170, 24, 1);
 
         const int n = int(Background::Count);
+        set_draw_scale(2);  // class portraits at the world zoom for this full-screen menu
         for (int i = 0; i < n; ++i) {
-            const int cx = fb::W / 2 + (i - 1) * 170;
+            const int cx = fb::W / 2 + (i - 1) * 320;
             const bool sel = i == g.choose_idx;
             if (const SpriteSheet* spr = r.assets->get(kBackgrounds[i].sprite)) {
-                if (sel)
-                    fill_rect(ctx, cx - 40, 130, 80, 100, 3);
-                draw_sprite(ctx, *spr, (g.anim_tick / 9) % spr->frames, cx, 220,
+                if (sel) fill_rect(ctx, cx - 90, 300, 180, 220, 3);
+                draw_sprite(ctx, *spr, (g.anim_tick / 9) % spr->frames, cx, 500,
                             sel ? 31 : 24);
             }
-            const int name_x = cx - int(std::strlen(kBackgrounds[i].name)) * 4;
-            draw_text_shadow(ctx, kBackgrounds[i].name, name_x, 240,
-                             sel ? 245 : 12, 1);
+            const int name_x = cx - int(std::strlen(kBackgrounds[i].name)) * kCh;
+            draw_text_shadow(ctx, kBackgrounds[i].name, name_x, 540, sel ? 245 : 12, 1);
         }
+        set_draw_scale(1);
         const BackgroundDef& b = kBackgrounds[g.choose_idx];
-        draw_text_shadow(ctx, b.blurb1, fb::W / 2 - int(std::strlen(b.blurb1)) * 4, 290, 28, 1);
-        draw_text_shadow(ctx, b.blurb2, fb::W / 2 - int(std::strlen(b.blurb2)) * 4, 304, 230, 1);
-        draw_text_shadow(ctx, "left/right choose   ENTER begin", fb::W / 2 - 124, 360, 14, 1);
+        draw_text_shadow(ctx, b.blurb1, fb::W / 2 - int(std::strlen(b.blurb1)) * kCh, 640, 28, 1);
+        draw_text_shadow(ctx, b.blurb2, fb::W / 2 - int(std::strlen(b.blurb2)) * kCh, 672, 230, 1);
+        draw_text_shadow(ctx, "left/right choose   ENTER begin",
+                         fb::W / 2 - 31 * kCh, 760, 14, 1);
         if (g_meta.runs > 0) {
             char mbuf[64];
             std::snprintf(mbuf, sizeof mbuf, "seasons ended %u   endings seen:%s%s%s",
@@ -3283,7 +3289,7 @@ void pass_ui(RenderCtx& r) {
                           (g_meta.endings_seen & (1 << campaign::kVictory)) ? " VICTORY" : "",
                           (g_meta.endings_seen & (1 << campaign::kQuotaLoss)) ? " QUOTA" : "",
                           (g_meta.endings_seen & (1 << campaign::kRaidLoss)) ? " RAID" : "");
-            draw_text(ctx, mbuf, fb::W / 2 - int(std::strlen(mbuf)) * 4, 420, 12);
+            draw_text(ctx, mbuf, fb::W / 2 - int(std::strlen(mbuf)) * kCh, 860, 12);
         }
         return;
     }
@@ -3302,8 +3308,6 @@ void pass_ui(RenderCtx& r) {
 
     // Harvest op status line (top of screen while an op is live in this zone).
     if (g.op.zone == g.cur_zone && g.op.state != harvest::OpState::None) {
-        if (const SpriteSheet* plaque = r.assets->get("ui_plaque"))
-            draw_sprite(ctx, *plaque, 0, 2, 1, 31);
         char buf[64];
         switch (g.op.state) {
             case harvest::OpState::Working:
@@ -3323,12 +3327,12 @@ void pass_ui(RenderCtx& r) {
                 break;
             default: buf[0] = 0; break;
         }
-        draw_text_shadow(ctx, buf, 12, 9,
+        draw_text_shadow(ctx, buf, 12, 8,
                          g.op.state == harvest::OpState::Destroyed ? 245 :
                          g.op.state == harvest::OpState::Evac ? 210 : 230, 1);
         if (g.alarm_turns > 0) {
             std::snprintf(buf, sizeof buf, "ALARM %d", g.alarm_turns);
-            draw_text_shadow(ctx, buf, 12, 28, 208, 1);
+            draw_text_shadow(ctx, buf, 12, 32, 208, 1);
         }
     }
 
@@ -3341,17 +3345,17 @@ void pass_ui(RenderCtx& r) {
                       g.pl.eyes_ibad ? "  [EYES OF IBAD]" : "",
                       g.pl.riding ? "  [RIDING]" : "",
                       g.pl.st.statpts + g.pl.st.talentpts > 0 ? "  [P: spend pts]" : "");
-        draw_text_shadow(ctx, buf, 4, ui::kPanelY - 12, uint8_t(g.pl.tox > 60 ? 208 : 136), 1);
+        draw_text_shadow(ctx, buf, 4, ui::kPanelY - 22, uint8_t(g.pl.tox > 60 ? 208 : 136), 1);
         if (g.hover_tx >= 0)
             if (const char* what = describe_at(g.hover_tx, g.hover_ty))
-                draw_text_shadow(ctx, what, fb::W / 2 - int(std::strlen(what)) * 4,
-                                 ui::kPanelY - 24, 24, 1);  // A2: lifted off the level/task row
+                draw_text_shadow(ctx, what, fb::W / 2 - int(std::strlen(what)) * kCh,
+                                 ui::kPanelY - 46, 24, 1);  // lifted off the level/task row
         if (g.sideobj_kind != 0) {
             std::snprintf(buf, sizeof buf, "%s in the %s (%d)",
                           g.sideobj_kind == 1 ? "CARAVAN" : "GUILD ENVOY",
                           g.sideobj_zone == map::kZoneDesert ? "Rimwall" : "Deep Pan",
                           int(g.sideobj_expires - g.pl.turn));
-            draw_text_shadow(ctx, buf, fb::W - 8 - int(std::strlen(buf)) * 8, 34, 170, 1);
+            draw_text_shadow(ctx, buf, fb::W - 8 - int(std::strlen(buf)) * 16, 76, 170, 1);
         }
         if (g.quest_kind != 0) {
             std::snprintf(buf, sizeof buf, "TASK: %s (%d/%d)",
@@ -3360,8 +3364,8 @@ void pass_ui(RenderCtx& r) {
                           g.quest_kind == 2 ? g.quest_progress + g.pl.spice
                                             : g.quest_progress,
                           g.quest_need);
-            draw_text_shadow(ctx, buf, fb::W - 8 - int(std::strlen(buf)) * 8,
-                             ui::kPanelY - 12, 240, 1);
+            draw_text_shadow(ctx, buf, fb::W - 8 - int(std::strlen(buf)) * 16,
+                             ui::kPanelY - 22, 240, 1);
         }
     }
 
@@ -3373,7 +3377,7 @@ void pass_ui(RenderCtx& r) {
         std::snprintf(dbuf, sizeof dbuf, "anim s=%d f=%d face=%d glide=%d,%d",
                       int(p.anim.state), int(p.anim.frame), int(p.anim.facing),
                       wx - p.vpx, wy - p.vpy);
-        draw_text_shadow(ctx, dbuf, 4, 34, 31, 1);
+        draw_text_shadow(ctx, dbuf, 4, 96, 31, 1);
     }
 
     // CHOAM ledger + season gauges, top-right.
@@ -3381,15 +3385,15 @@ void pass_ui(RenderCtx& r) {
         char buf[48];
         std::snprintf(buf, sizeof buf, "SHIPPED %d/%d  DENIED %d", int(g.season.shipped),
                       campaign::kQuotaLossAt, int(g.season.denied));
-        draw_text_shadow(ctx, buf, fb::W - 8 - int(std::strlen(buf)) * 8, 4, 224, 1);
+        draw_text_shadow(ctx, buf, fb::W - 8 - int(std::strlen(buf)) * 16, 8, 224, 1);
         std::snprintf(buf, sizeof buf, "ALERT %d  STANDING %d", int(g.season.alert),
                       int(g.season.standing));
-        draw_text_shadow(ctx, buf, fb::W - 8 - int(std::strlen(buf)) * 8, 14,
+        draw_text_shadow(ctx, buf, fb::W - 8 - int(std::strlen(buf)) * 16, 30,
                          uint8_t(g.season.alert >= campaign::kAlertDiscoveryAt ? 208 : 14), 1);
         if (g.season.alert >= campaign::kAlertDiscoveryAt) {
             std::snprintf(buf, sizeof buf, "DISCOVERY %d%%",
                           g.season.discovery * 100 / campaign::kDiscoveryRaidAt);
-            draw_text_shadow(ctx, buf, fb::W - 8 - int(std::strlen(buf)) * 8, 24, 208, 1);
+            draw_text_shadow(ctx, buf, fb::W - 8 - int(std::strlen(buf)) * 16, 52, 208, 1);
         }
     }
 
@@ -3397,9 +3401,9 @@ void pass_ui(RenderCtx& r) {
     // 2px/tile, coloured by feature. Toggled with M; hidden under menus.
     if (g.show_map && !g.menu_open) {
         const map::Zone& mz = zone();
-        const int scale = 2;
-        const int mw = map::W * scale, mh = map::H * scale;  // 128 x 128
-        const int mx = fb::W - mw - 6, my = 30;
+        const int scale = 3;
+        const int mw = map::W * scale, mh = map::H * scale;  // 192 x 192
+        const int mx = fb::W - mw - 8, my = 90;  // below the CHOAM/sideobj stack
         fill_rect(ctx, mx - 2, my - 2, mw + 4, mh + 4, 230);  // gold frame
         fill_rect(ctx, mx - 1, my - 1, mw + 2, mh + 2, 4);    // dark backdrop
         for (int ty = 0; ty < map::H; ++ty)
@@ -3424,78 +3428,78 @@ void pass_ui(RenderCtx& r) {
 
     // Character sheet / inventory / vault overlays (dynamic content).
     if (g.menu_open >= 5) {
-        const int x0 = fb::W / 2 - 190, y0 = 60;
-        fill_rect(ctx, x0, y0, 380, 300, 2);
-        fill_rect(ctx, x0, y0, 380, 1, 228);
-        fill_rect(ctx, x0, y0 + 299, 380, 1, 228);
+        const int x0 = fb::W / 2 - 380, y0 = 140;
+        fill_rect(ctx, x0, y0, 760, 640, 2);
+        fill_rect(ctx, x0, y0, 760, 2, 228);
+        fill_rect(ctx, x0, y0 + 638, 760, 2, 228);
         char buf[80];
         if (g.menu_open == 5) {
-            draw_text_shadow(ctx, "CHARACTER", x0 + 12, y0 + 8, 230, 1);
+            draw_text_shadow(ctx, "CHARACTER", x0 + 24, y0 + 16, 230, 1);
             std::snprintf(buf, sizeof buf, "level %d   xp %d/%d   stat pts %d   talent pts %d",
                           int(g.pl.st.level), int(g.pl.st.xp), xp_to_level(g.pl.st.level),
                           int(g.pl.st.statpts), int(g.pl.st.talentpts));
-            draw_text(ctx, buf, x0 + 12, y0 + 20, 14);
+            draw_text(ctx, buf, x0 + 24, y0 + 44, 14);
             const char* rows[3] = {"Ferocity", "Weirding", "Endurance"};
             const int vals[3] = {g.pl.st.str, g.pl.st.dex, g.pl.st.vit};
             for (int i = 0; i < 3; ++i) {
                 const bool sel = g.menu_sel == i;
-                if (sel) fill_rect(ctx, x0 + 8, y0 + 34 + i * 12 - 1, 364, 11, 4);
+                if (sel) fill_rect(ctx, x0 + 16, y0 + 88 + i * 24 - 2, 728, 22, 4);
                 std::snprintf(buf, sizeof buf, "%-10s %3d", rows[i], vals[i]);
-                draw_text(ctx, buf, x0 + 16, y0 + 34 + i * 12, uint8_t(sel ? 245 : 20));
+                draw_text(ctx, buf, x0 + 32, y0 + 88 + i * 24, uint8_t(sel ? 245 : 20));
             }
             for (int i = 0; i < kTalentCount; ++i) {
                 const bool sel = g.menu_sel == 3 + i;
-                const int y = y0 + 74 + i * 12;
-                if (sel) fill_rect(ctx, x0 + 8, y - 1, 364, 11, 4);
+                const int y = y0 + 176 + i * 24;
+                if (sel) fill_rect(ctx, x0 + 16, y - 2, 728, 22, 4);
                 std::snprintf(buf, sizeof buf, "%-22s %d/3", kTalentNames[i],
                               int(g.pl.st.talents[i]));
-                draw_text(ctx, buf, x0 + 16, y, uint8_t(sel ? 245 : 20));
+                draw_text(ctx, buf, x0 + 32, y, uint8_t(sel ? 245 : 20));
             }
             std::snprintf(buf, sizeof buf, "dmg+%d  hit+%d  armor %d  dodge %d",
                           g.pl.st.str / 4 + affix_total(items::AK_DMG),
                           affix_total(items::AK_TOHIT), player_armor(), player_dodge());
-            draw_text(ctx, buf, x0 + 12, y0 + 190, 136);
-            draw_text(ctx, g.menu_sel == 12 ? "> Close" : "  Close", x0 + 16, y0 + 206,
+            draw_text(ctx, buf, x0 + 24, y0 + 420, 136);
+            draw_text(ctx, g.menu_sel == 12 ? "> Close" : "  Close", x0 + 32, y0 + 460,
                       uint8_t(g.menu_sel == 12 ? 245 : 20));
         } else if (g.menu_open == 6) {
-            draw_text_shadow(ctx, "PACK  (ENTER equips)", x0 + 12, y0 + 8, 230, 1);
+            draw_text_shadow(ctx, "PACK  (ENTER equips)", x0 + 24, y0 + 16, 230, 1);
             const char* slots[4] = {"wpn", "arm", "sut", "trk"};
             for (int i = 0; i < 4; ++i) {
                 char nm[64];
                 g.pl.equip[i].full_name(nm, sizeof nm);
                 std::snprintf(buf, sizeof buf, "[%s] %s", slots[i], nm);
-                draw_text(ctx, buf, x0 + 12, y0 + 22 + i * 10, 136);
+                draw_text(ctx, buf, x0 + 24, y0 + 44 + i * 22, 136);
             }
             for (int i = 0; i < 12; ++i) {
                 const bool sel = g.menu_sel == i;
-                const int y = y0 + 70 + i * 12;
-                if (sel) fill_rect(ctx, x0 + 8, y - 1, 364, 11, 4);
+                const int y = y0 + 140 + i * 24;
+                if (sel) fill_rect(ctx, x0 + 16, y - 2, 728, 22, 4);
                 char nm[64];
                 g.pl.inv[i].full_name(nm, sizeof nm);
                 const uint8_t col = g.pl.inv[i].empty() ? 8
                                     : g.pl.inv[i].rarity == 2 ? 245
                                     : g.pl.inv[i].rarity == 1 ? 230 : 20;
-                draw_text(ctx, nm, x0 + 16, y, uint8_t(sel ? 245 : col));
+                draw_text(ctx, nm, x0 + 32, y, uint8_t(sel ? 245 : col));
             }
-            draw_text(ctx, g.menu_sel == 12 ? "> Close" : "  Close", x0 + 16, y0 + 218,
+            draw_text(ctx, g.menu_sel == 12 ? "> Close" : "  Close", x0 + 32, y0 + 460,
                       uint8_t(g.menu_sel == 12 ? 245 : 20));
         } else {
             std::snprintf(buf, sizeof buf, "THE TRIBE VAULT - %s (left/right)",
                           g.vault_page == 0 ? "DEPOSIT" : "WITHDRAW");
-            draw_text_shadow(ctx, buf, x0 + 12, y0 + 8, 230, 1);
+            draw_text_shadow(ctx, buf, x0 + 24, y0 + 16, 230, 1);
             std::snprintf(buf, sizeof buf, "banked %d/24 - the vault survives your death",
                           int(g_meta.stash_count));
-            draw_text(ctx, buf, x0 + 12, y0 + 20, 14);
+            draw_text(ctx, buf, x0 + 24, y0 + 44, 14);
             for (int i = 0; i < 12; ++i) {
                 const bool sel = g.menu_sel == i;
-                const int y = y0 + 40 + i * 12;
-                if (sel) fill_rect(ctx, x0 + 8, y - 1, 364, 11, 4);
+                const int y = y0 + 88 + i * 24;
+                if (sel) fill_rect(ctx, x0 + 16, y - 2, 728, 22, 4);
                 char nm[64] = "-";
                 if (g.vault_page == 0) g.pl.inv[i].full_name(nm, sizeof nm);
                 else if (i < g_meta.stash_count) g_meta.stash[i].full_name(nm, sizeof nm);
-                draw_text(ctx, nm, x0 + 16, y, uint8_t(sel ? 245 : 20));
+                draw_text(ctx, nm, x0 + 32, y, uint8_t(sel ? 245 : 20));
             }
-            draw_text(ctx, g.menu_sel == 12 ? "> Close" : "  Close", x0 + 16, y0 + 190,
+            draw_text(ctx, g.menu_sel == 12 ? "> Close" : "  Close", x0 + 32, y0 + 420,
                       uint8_t(g.menu_sel == 12 ? 245 : 20));
         }
     } else
@@ -3513,18 +3517,18 @@ void pass_ui(RenderCtx& r) {
         };
         static const char* kTitles[5] = {"", "THE NAIB", "THE SAYYADINA",
                                          "GREYBEARD THE SMUGGLER", "PRESCIENCE"};
-        const int x0 = fb::W / 2 - 150, y0 = 140;
-        fill_rect(ctx, x0, y0, 300, 110, 2);
-        fill_rect(ctx, x0, y0, 300, 1, 228);
-        fill_rect(ctx, x0, y0 + 109, 300, 1, 228);
-        draw_text_shadow(ctx, kTitles[g.menu_open], x0 + 12, y0 + 8, 230, 1);
+        const int x0 = fb::W / 2 - 300, y0 = 280;
+        fill_rect(ctx, x0, y0, 600, 260, 2);
+        fill_rect(ctx, x0, y0, 600, 2, 228);
+        fill_rect(ctx, x0, y0 + 258, 600, 2, 228);
+        draw_text_shadow(ctx, kTitles[g.menu_open], x0 + 24, y0 + 16, 230, 1);
         char res[48];
         std::snprintf(res, sizeof res, "water %d  spice %d", g.pl.water, g.pl.spice);
-        draw_text(ctx, res, x0 + 12, y0 + 20, 14);
+        draw_text(ctx, res, x0 + 24, y0 + 44, 14);
         for (int i = 0; i < 5 && kMenus[g.menu_open][i]; ++i) {
             const bool sel = i == g.menu_sel;
-            if (sel) fill_rect(ctx, x0 + 8, y0 + 34 + i * 14 - 2, 284, 12, 4);
-            draw_text(ctx, kMenus[g.menu_open][i], x0 + 16, y0 + 34 + i * 14,
+            if (sel) fill_rect(ctx, x0 + 16, y0 + 80 + i * 32 - 4, 568, 28, 4);
+            draw_text(ctx, kMenus[g.menu_open][i], x0 + 24, y0 + 80 + i * 32,
                       uint8_t(sel ? 245 : 20));
         }
     }
@@ -3544,12 +3548,12 @@ void pass_ui(RenderCtx& r) {
             "The desert waits for another.", "No one is left to carry water.",
         };
         const int e = g.season.ending;
-        fill_rect(ctx, fb::W / 2 - 240, 150, 480, 90, 2);
-        draw_text_shadow(ctx, kTitle[e], fb::W / 2 - int(std::strlen(kTitle[e])) * 4, 162,
+        fill_rect(ctx, fb::W / 2 - 480, 400, 960, 200, 2);
+        draw_text_shadow(ctx, kTitle[e], fb::W / 2 - int(std::strlen(kTitle[e])) * kCh, 430,
                          uint8_t(e == campaign::kVictory ? 245 : 210), 1);
-        draw_text_shadow(ctx, kLine1[e], fb::W / 2 - int(std::strlen(kLine1[e])) * 4, 182, 24, 1);
-        draw_text_shadow(ctx, kLine2[e], fb::W / 2 - int(std::strlen(kLine2[e])) * 4, 196, 14, 1);
-        draw_text_shadow(ctx, "ENTER: another season", fb::W / 2 - 84, 216, 230, 1);
+        draw_text_shadow(ctx, kLine1[e], fb::W / 2 - int(std::strlen(kLine1[e])) * kCh, 480, 24, 1);
+        draw_text_shadow(ctx, kLine2[e], fb::W / 2 - int(std::strlen(kLine2[e])) * kCh, 520, 14, 1);
+        draw_text_shadow(ctx, "ENTER: another season", fb::W / 2 - 21 * kCh, 570, 230, 1);
     } else if (g.pl.dead) {
         // count what the desert takes
         int lost = 0;
@@ -3557,13 +3561,13 @@ void pass_ui(RenderCtx& r) {
             if (!it.empty()) ++lost;
         for (const items::Inst& it : g.pl.equip)
             if (!it.empty()) ++lost;
-        const int box_h = 84 + (lost < 6 ? lost : 6) * 10;
-        fill_rect(ctx, fb::W / 2 - 170, 110, 340, box_h, 2);
-        draw_text_shadow(ctx, "You are one with the sand now.", fb::W / 2 - 120, 120, 210, 1);
-        draw_text_shadow(ctx, "Fear is the mind-killer.", fb::W / 2 - 96, 134, 24, 1);
+        const int box_h = 200 + (lost < 6 ? lost : 6) * 24;
+        fill_rect(ctx, fb::W / 2 - 340, 260, 680, box_h, 2);
+        draw_text_shadow(ctx, "You are one with the sand now.", fb::W / 2 - 30 * kCh, 280, 210, 1);
+        draw_text_shadow(ctx, "Fear is the mind-killer.", fb::W / 2 - 24 * kCh, 320, 24, 1);
         char buf[80];
         std::snprintf(buf, sizeof buf, "the sand keeps %d pieces of gear:", lost);
-        draw_text_shadow(ctx, buf, fb::W / 2 - int(std::strlen(buf)) * 4, 150,
+        draw_text_shadow(ctx, buf, fb::W / 2 - int(std::strlen(buf)) * kCh, 360,
                          uint8_t(lost ? 208 : 14), 1);
         int row = 0;
         for (int pass_ = 0; pass_ < 2 && row < 6; ++pass_) {
@@ -3573,15 +3577,15 @@ void pass_ui(RenderCtx& r) {
                 if (!list[i].empty()) {
                     char nm[64];
                     list[i].full_name(nm, sizeof nm);
-                    draw_text(ctx, nm, fb::W / 2 - int(std::strlen(nm)) * 4,
-                              162 + row * 10, uint8_t(list[i].rarity == 2 ? 245 : 20));
+                    draw_text(ctx, nm, fb::W / 2 - int(std::strlen(nm)) * kCh,
+                              400 + row * 24, uint8_t(list[i].rarity == 2 ? 245 : 20));
                     ++row;
                 }
         }
         std::snprintf(buf, sizeof buf, "seed %llu   ENTER: rise again",
                       (unsigned long long)g.seed);
-        draw_text_shadow(ctx, buf, fb::W / 2 - int(std::strlen(buf)) * 4,
-                         166 + row * 10, 230, 1);
+        draw_text_shadow(ctx, buf, fb::W / 2 - int(std::strlen(buf)) * kCh,
+                         410 + row * 24, 230, 1);
     }
 }
 
@@ -3589,6 +3593,7 @@ void pass_ui(RenderCtx& r) {
 
 void game_render(Framebuffer& frame) {
     frame.clear(0xff000000u | g.services.pal->color[1]);  // near-black background
+    set_draw_scale(iso::kView);  // world sprites blit at the 2x D2 zoom
 
     RenderCtx r{DrawCtx{&frame, g.services.cmaps, g.services.pal}, &zone(), is_night(),
                 is_night() ? 18 : 31, g.services.assets};
@@ -3621,6 +3626,7 @@ void game_render(Framebuffer& frame) {
     pass_cursor(r);  // A4: aim reticle, over the lit world, under the HUD
 
     g.cam = saved_cam;
+    set_draw_scale(1);  // UI draws at native 1080p (world scale doesn't apply)
     pass_ui(r);
 }
 

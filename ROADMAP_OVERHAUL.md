@@ -105,17 +105,25 @@ so the sim + all 10 headless tests stay green throughout — Phase R is verified
 This supersedes the original "640×480 indexed" guardrail. Runs before the art-dependent
 game work; gameplay logic (B/C) is resolution-independent and follows.
 
-### R1 — RGBA truecolor pipeline ⬜
+### R1 — RGBA truecolor pipeline ✅
 Framebuffer → 32-bit RGBA; sprites converted to RGBA at load (via palette); `draw_sprite`
 alpha-blends RGBA with an RGB light multiply (replaces colormap remap); `fill_rect`/
 `draw_text` map palette index → RGB; present uploads RGBA directly (fade becomes an RGBA
 blend). Stays 640×480 — truecolor foundation, ~same look.
-**Exit:** game renders identically in truecolor; 10/10 tests green (sim untouched).
+**Exit:** ✅ game renders identically in truecolor; tests green (sim untouched).
 
-### R2 — 1080p internal + coordinate rework ⬜
-Framebuffer → 1920×1080; iso tile scale, camera, world-pixel + `screen_to_tile` picking
-rescaled; every HUD/UI coordinate reworked for 1080p. Art still low-res (upscaled) here.
-**Exit:** the game runs at 1080p; HUD/menus/minimap laid out correctly; picking accurate.
+### R2 — 1080p internal + coordinate rework ✅
+Framebuffer → 1920×1080; iso tiles render at 2× (128×64 on-screen) for a Diablo-II zoom
+via a global `set_draw_scale`; camera/glide/snap feel constants doubled to match the 2×
+world-pixel space; `screen_to_tile` picking follows `iso::kHalfW/kHalfH`. UI drawn at a 2×
+(16px) font via a global `set_text_scale`; taller HUD panel, bigger orbs, and every
+HUD/menu/minimap coordinate + the `menu_row_under_mouse` hit-test reworked for 1080p. The
+window now opens at ≤90% of the usable desktop (was `fb*2` = 3840×2160, overflowing the
+screen) and `present` aspect-fits with down/upscaling + linear filtering. Art still low-res
+(upscaled) here — crisp native art is R3.
+**Exit:** ✅ runs at 1080p (screenshots); HUD/menus/minimap laid out correctly; `clicktest`
+picking accurate + deterministic (4412b797977030e6); `dettest` bit-identical
+(942bc42517b8679f); 10/10 existing tests green.
 
 ### R3 — High-res native-RGBA art ⬜
 Regenerate all art at high resolution as native RGBA (characters, tiles, props, UI),

@@ -11,8 +11,11 @@
 
 namespace iso {
 
-inline constexpr int kHalfW = 32;  // half diamond width  (64x32 tiles, Diablo 1 scale)
-inline constexpr int kHalfH = 16;  // half diamond height
+// R2: the logical grid is 64x32 diamonds, rendered at 2x (128x64 on screen) for
+// a Diablo-II zoom at 1080p. kHalfW/kHalfH are the ON-SCREEN half-tile pixels.
+inline constexpr int kView = 2;                 // world render scale
+inline constexpr int kHalfW = 32 * kView;       // 64
+inline constexpr int kHalfH = 16 * kView;       // 32
 
 struct Camera {
     int x = 0, y = 0;  // world pixels at screen center

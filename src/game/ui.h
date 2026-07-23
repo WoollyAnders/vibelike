@@ -7,7 +7,8 @@
 
 namespace ui {
 
-inline constexpr int kPanelH = 44;
+// R2: 1080p HUD. The bottom panel is ~2x taller so the orbs/log/font (16px) fit.
+inline constexpr int kPanelH = 100;
 inline constexpr int kPanelY = fb::H - kPanelH;
 
 struct Log {

@@ -116,8 +116,21 @@ bool platform_init(Platform& p, audio::Mixer* mixer) {
         std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
         return false;
     }
+    // Linear filtering so the aspect-fit down/upscale of the 1080p frame to the
+    // window is smooth rather than shimmery on non-integer ratios.
+    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");
+    // R2: the framebuffer is already 1080p, so open the window at a size that fits
+    // the monitor (was fb*2 = 3840x2160, which overflowed every screen). Pick the
+    // largest 16:9 that fits ~90% of the usable desktop, clamped to the native size.
+    int win_w = fb::W, win_h = fb::H;
+    SDL_Rect usable{};
+    if (SDL_GetDisplayUsableBounds(0, &usable) == 0 && usable.w > 0 && usable.h > 0) {
+        const int max_w = usable.w * 9 / 10, max_h = usable.h * 9 / 10;
+        if (win_w > max_w) { win_w = max_w; win_h = win_w * fb::H / fb::W; }
+        if (win_h > max_h) { win_h = max_h; win_w = win_h * fb::W / fb::H; }
+    }
     p.window = SDL_CreateWindow("DUSTFALL", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
-                                fb::W * 2, fb::H * 2, SDL_WINDOW_RESIZABLE);
+                                win_w, win_h, SDL_WINDOW_RESIZABLE);
     if (!p.window) return false;
     p.renderer = SDL_CreateRenderer(p.window, -1,
                                     SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
@@ -198,9 +211,12 @@ void map_scancode(InputState& in, SDL_Scancode sc, bool is_down) {
 }
 
 void update_mouse(const Platform& p, InputState& in, int wx, int wy) {
-    const int fx = (wx - p.present_dst.x) / p.present_scale;
-    const int fy = (wy - p.present_dst.y) / p.present_scale;
-    const bool inside = wx >= p.present_dst.x && wy >= p.present_dst.y &&
+    // Map window pixel -> framebuffer pixel through the (possibly non-integer)
+    // aspect-fit present rect.
+    const SDL_Rect& d = p.present_dst;
+    const int fx = d.w > 0 ? (wx - d.x) * fb::W / d.w : -1;
+    const int fy = d.h > 0 ? (wy - d.y) * fb::H / d.h : -1;
+    const bool inside = wx >= d.x && wy >= d.y && fx >= 0 && fy >= 0 &&
                         fx < fb::W && fy < fb::H;
     in.mouse_x = inside ? fx : -1;
     in.mouse_y = inside ? fy : -1;
@@ -231,12 +247,16 @@ void present(Platform& p, const Framebuffer& frame, PaletteFade fade) {
         SDL_UnlockTexture(p.texture);
     }
 
+    // Aspect-preserving fit that can DOWNSCALE (the frame is native 1080p; the
+    // window may be smaller). Letterbox the remainder; SDL scales the texture.
     int ww = 0, wh = 0;
     SDL_GetRendererOutputSize(p.renderer, &ww, &wh);
-    p.present_scale = SDL_max(1, SDL_min(ww / fb::W, wh / fb::H));
-    p.present_dst = SDL_Rect{(ww - fb::W * p.present_scale) / 2,
-                             (wh - fb::H * p.present_scale) / 2,
-                             fb::W * p.present_scale, fb::H * p.present_scale};
+    int dw = ww, dh = ww * fb::H / fb::W;   // fit to width...
+    if (dh > wh) { dh = wh; dw = wh * fb::W / fb::H; }  // ...unless height is the limit
+    if (dw < 1) dw = 1;
+    if (dh < 1) dh = 1;
+    p.present_scale = SDL_max(1, dw / fb::W);  // (kept for any integer-scale callers)
+    p.present_dst = SDL_Rect{(ww - dw) / 2, (wh - dh) / 2, dw, dh};
 
     SDL_SetRenderDrawColor(p.renderer, 0, 0, 0, 255);
     SDL_RenderClear(p.renderer);
@@ -853,7 +873,7 @@ int main(int argc, char** argv) {
     }
     int demo_step = 0, demo_left = autodemo ? demo_script[0].count : 0, demo_cooldown = 0;
 
-    Framebuffer frame{};
+    static Framebuffer frame{};  // ~8MB at 1080p — keep off the stack
     InputState input;
 
     uint64_t prev = SDL_GetPerformanceCounter();

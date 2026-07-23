@@ -33,9 +33,10 @@ inline constexpr int kExposureCollapse = 90;      // damage per turn
 inline constexpr int kExposureDamage = 2;
 
 // --- movement feel (presentation/cadence only; must NOT affect the sim) ---
-inline constexpr int kStepBufferPx = 18;      // held walking re-steps this close to touchdown
-inline constexpr int kGlideStep = 4;          // px/tick the sprite slides toward its tile
-inline constexpr int kGlideStepSandwalk = 2;  // sandwalk stays deliberate + slow
+// R2: world-pixel space is 2x (iso::kView), so these are doubled to keep the feel.
+inline constexpr int kStepBufferPx = 36;      // held walking re-steps this close to touchdown
+inline constexpr int kGlideStep = 8;          // px/tick the sprite slides toward its tile
+inline constexpr int kGlideStepSandwalk = 4;  // sandwalk stays deliberate + slow
 inline constexpr int kHeldStepFloor = 3;      // min ticks a key is held before auto-repeat
 
 // --- fov ---
