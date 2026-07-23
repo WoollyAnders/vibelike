@@ -43,18 +43,25 @@ def synth_use(base_frame, fw, fh):
     return sheet
 
 def synth_walk(base_frame, fw, fh):
-    """4 frames: lean-left, upright+bob, lean-right, upright+bob."""
+    """4-frame grounded gait. The feet stay planted (bottom-anchored) while the
+    upper body leans and settles slightly on each footfall — a walk, not an
+    airborne hop. No positional bob (the old up-bob read as hopping)."""
+    shears = (-3, 0, 3, 0)          # upper body swings; feet stay on the ground
+    squash = (0.94, 1.0, 0.94, 1.0)  # settle onto each planted foot; never rises
+    sway = (-1, 0, 1, 0)            # slight whole-body weight shift, side to side
     frames = []
     for i in range(4):
+        nh = max(1, int(round(fh * squash[i])))
+        body = base_frame.resize((fw, nh), Image.LANCZOS)  # vertical settle only
+        planted = Image.new("RGBA", (fw, fh), (0, 0, 0, 0))
+        planted.paste(body, (0, fh - nh), body)            # bottom-anchor = feet down
         img = Image.new("RGBA", (fw, fh), (0, 0, 0, 0))
-        shear = (-2, 0, 2, 0)[i]
-        bob = (0, -1, 0, -1)[i]
-        # shear: shift rows progressively toward the feet
+        shear = shears[i]
         for y in range(fh):
             t = y / max(1, fh - 1)
-            dx = int(shear * (1.0 - t))  # top leans, feet stay planted
-            row = base_frame.crop((0, y, fw, y + 1))
-            img.paste(row, (dx, y + bob), row)
+            dx = sway[i] + int(round(shear * (1.0 - t)))   # top leans, feet planted
+            row = planted.crop((0, y, fw, y + 1))
+            img.paste(row, (dx, y), row)
         frames.append(img)
     sheet = Image.new("RGBA", (fw * 4, fh), (0, 0, 0, 0))
     for i, f in enumerate(frames):

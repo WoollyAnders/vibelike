@@ -79,6 +79,23 @@ still `942bc42517b8679f`, 10/10 tests green.
 *(Deferred to the art pass: OpenAI-generated walk animations and detailed/varied
 terrain — the remaining "hopping animation" and "flat world" feedback.)*
 
+### A7 — Real walk animation (OpenAI) + crisp base art ✅ *(second-playtest feedback)*
+- **Real walk cycles, not a nudged pose.** New `tools/walkgen.py` generates one
+  side-profile walk-cycle sheet per class via gpt-image-1 (the model stays
+  consistent within a single image), slices frames by transparent gaps, and — to
+  kill the model's per-frame size drift — normalizes every frame to constant
+  opaque **pixel-mass**, centres by centroid, and bottom-anchors the feet. Wired
+  as a `dirs=1` Walk state (mirrored L/R at draw time). Fedaykin 5 / Saboteur 4 /
+  Sayyadina 3 frames; legs genuinely stride, character stays one size.
+- **Crisper characters.** Regenerated all three class turnarounds (idle) via
+  gpt-image-1 with a sharpened prompt (bold silhouette, rim light, clean edges).
+- **Grounded gait** for the remaining synth-walk mobs (trooper/hound/hermit) in
+  `animsynth.py`: feet planted, lean + settle, no airborne bob.
+- **Terrain** folded into B1 per decision.
+**Exit:** ✅ in-game filmstrip shows real striding legs at a constant size; new
+class art renders; 10/10 tests green. (AI frames aren't perfectly frame-coherent —
+honest ceiling of image-gen animation at this sprite scale.)
+
 ---
 
 ## PHASE B — Run / World / Extraction Architecture
