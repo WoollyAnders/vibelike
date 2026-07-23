@@ -3264,7 +3264,7 @@ void pass_ui(RenderCtx& r) {
         draw_text_shadow(ctx, "Choose your path", fb::W / 2 - 16 * kCh, 170, 24, 1);
 
         const int n = int(Background::Count);
-        set_draw_scale(2);  // class portraits at the world zoom for this full-screen menu
+        set_draw_scale(1);  // R3: class portraits authored at native size, blit 1:1
         for (int i = 0; i < n; ++i) {
             const int cx = fb::W / 2 + (i - 1) * 320;
             const bool sel = i == g.choose_idx;
@@ -3593,7 +3593,8 @@ void pass_ui(RenderCtx& r) {
 
 void game_render(Framebuffer& frame) {
     frame.clear(0xff000000u | g.services.pal->color[1]);  // near-black background
-    set_draw_scale(iso::kView);  // world sprites blit at the 2x D2 zoom
+    set_draw_scale(1);  // R3: art is authored at native on-screen size, blit 1:1
+                        // (iso projection still uses kView; only the blit scale is 1)
 
     RenderCtx r{DrawCtx{&frame, g.services.cmaps, g.services.pal}, &zone(), is_night(),
                 is_night() ? 18 : 31, g.services.assets};

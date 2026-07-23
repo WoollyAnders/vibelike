@@ -12,7 +12,9 @@ from PIL import Image
 
 OUT = os.path.join(os.path.dirname(__file__), "..", "assets")
 OUT_RAW = os.path.join(os.path.dirname(__file__), "..", "assets_src", "raw")
-SCALE = 2  # stand-ins are authored at half scale and upsampled
+SCALE = 4  # R3: native on-screen size. Base art is authored small then scaled up
+           # so meta frame boxes are base*SCALE (128x64 tiles, 64x128 chars); the
+           # world now blits 1:1 (no 2x nearest upscale) for crisp high-res art.
 random.seed(1965)  # deterministic art
 
 # ---- palette (mirrors the ramps designed in E1) ------------------------------

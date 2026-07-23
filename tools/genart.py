@@ -289,7 +289,10 @@ def read_meta():
 
 # Canonical on-screen figure heights (px). fit_sprite scales to these instead
 # of filling the frame, so a hound no longer looms as large as a man.
-HEIGHTS = {
+# R3: heights scale with make_assets SCALE (2->4, i.e. x2) to stay proportional
+# inside the doubled native frame boxes.
+FIG_SCALE = 2
+HEIGHTS = {k: v * FIG_SCALE for k, v in {
     "player": 52, "player_fedaykin": 52, "player_saboteur": 52,
     "player_sayyadina": 52, "trooper": 54, "spotter": 52, "naib": 52,
     "smuggler": 52, "hermit": 48, "hound": 22, "panadder": 12,
@@ -297,7 +300,7 @@ HEIGHTS = {
     "glowglobe": 20, "rock": 52, "wall": 76, "cistern": 40,
     "wormhead": 104, "wormseg": 60, "crawler": 88,
     "champion": 58, "baron": 60, "guildsman": 54,
-}
+}.items()}
 
 def strip_background(img):
     """If the model painted a backdrop despite background=transparent, remove

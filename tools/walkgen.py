@@ -38,8 +38,10 @@ CHARS = {
         "EMPTY HANDS holding no weapon at all",
 }
 
-HEIGHT = 52   # canonical on-screen figure height (matches genart HEIGHTS)
-FW, FH, AX, AY = 32, 64, 16, 60
+# R3: native on-screen size — doubled to match make_assets SCALE=4 and genart's
+# HEIGHTS*FIG_SCALE, so walk frames are the same size/anchor as the idle base sprite.
+HEIGHT = 104   # canonical on-screen figure height (matches genart HEIGHTS)
+FW, FH, AX, AY = 64, 128, 32, 120
 
 def api_key():
     for line in open(os.path.join(ROOT, ".env")):
