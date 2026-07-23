@@ -154,7 +154,10 @@ TURN_STYLE = ("video game character turnaround sheet, exactly five full-body "
               "view, three-quarter back-right view, back view. identical "
               "costume, colors and proportions in every view, evenly spaced, "
               "feet on one baseline, isolated on a fully transparent "
-              "background, no labels, no grid, no frame")
+              "background, no labels, no grid, no frame. "
+              "Bold high-contrast readable silhouette, strong single-source rim "
+              "lighting, clean crisp edges, chunky clear forms, low visual noise "
+              "so the figure stays legible when scaled down to a tiny sprite")
 
 TURNAROUNDS = {
     "player_fedaykin": "a fierce desert commando warrior in a fitted dark "
