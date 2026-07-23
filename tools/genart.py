@@ -381,7 +381,10 @@ def fit_sprite(img, fw, fh, target_h=None):
     if bbox:
         img = img.crop(bbox)
     if target_h:
-        scale = target_h / img.height  # stature wins; wide poses get cropped
+        # Scale to the canonical stature, but cap so a wide pose (weapon/cape/arms)
+        # also fits the frame width — wide figures render a touch shorter rather
+        # than getting guillotined at the frame edge.
+        scale = min(target_h / img.height, (fw - 2) / img.width)
     else:
         scale = min((fw - 2) / img.width, (fh - 2) / img.height)
     img = img.resize((max(1, int(img.width * scale)), max(1, int(img.height * scale))),
@@ -429,7 +432,12 @@ def cut_diamond(tex, w, h, rng, brightness=1.0, anchor=None):
         y = rng.randint(0, tex.height - h - 1)
     crop = tex.crop((x, y, x + w, y + h)).convert("RGBA")
     if brightness != 1.0:
-        crop = Image.eval(crop, lambda v: min(255, int(v * brightness)))
+        # Dim RGB only — NOT alpha. (Image.eval dimmed all bands, dropping alpha
+        # below draw_sprite's 128 key so dark tiles like the sietch floor became
+        # fully transparent -> black.) Preserve the alpha channel.
+        r, g, b, a = crop.split()
+        lut = lambda v: min(255, int(v * brightness))
+        crop = Image.merge("RGBA", (r.point(lut), g.point(lut), b.point(lut), a))
     out = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     out.paste(crop, (0, 0), diamond_mask(w, h))
     return out
@@ -449,8 +457,8 @@ def build_tiles(textures, fw, fh, frames):
         cut_diamond(spice, fw, fh, rng),                # 5 spice-flecked
         cut_diamond(sand, fw, fh, rng, 0.9, sand_a),    # 6 drum sand (ringed below)
         None,                                            # 7 highlight (procedural)
-        cut_diamond(rock, fw, fh, rng, 0.55, rock_a),   # 8 sietch floor
-        cut_diamond(rock, fw, fh, rng, 0.7, rock_a),    # 9 door pad (gold rim below)
+        cut_diamond(rock, fw, fh, rng, 0.85, rock_a),   # 8 sietch floor (lit cavern stone)
+        cut_diamond(rock, fw, fh, rng, 0.95, rock_a),   # 9 door pad (gold rim below)
     ]
     # drum sand rings
     d = ImageDraw.Draw(tiles[6])

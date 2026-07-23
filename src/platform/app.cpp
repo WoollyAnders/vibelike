@@ -343,7 +343,7 @@ int run_slicetest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cm
         in.end_tick();
     };
 
-    for (int i = 0; i < 12; ++i) tick_with(Key::Down);  // corridor -> door -> desert
+    game_debug_use_door();  // leave the sietch (doors are click-only now)
     int waits = 0;
     while (!game_is_dead() && waits < 6000) {
         tick_with(Key::Wait);
@@ -403,7 +403,7 @@ int run_wormtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cma
         in.end_tick();
     };
 
-    for (int i = 0; i < 12; ++i) tick_with(Key::Down);   // out of the sietch
+    game_debug_use_door();                               // out of the sietch (click-only doors)
     for (int i = 0; i < 8; ++i) tick_with(Key::Right);   // onto open sand
     tick_with(Key::Thumper);
     for (int i = 0; i < 7; ++i) tick_with(Key::Left);    // fall back
@@ -659,10 +659,10 @@ int run_ridetest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cma
         in.end_tick();
     };
 
-    for (int i = 0; i < 12; ++i) tick_with(Key::Down);
-    for (int i = 0; i < 8; ++i) tick_with(Key::Right);
+    game_debug_use_door();                               // out of the sietch (click-only doors)
+    for (int i = 0; i < 8; ++i) tick_with(Key::Right);   // onto open sand
     tick_with(Key::Thumper);
-    for (int i = 0; i < 7; ++i) tick_with(Key::Left);
+    for (int i = 0; i < 7; ++i) tick_with(Key::Left);    // fall back
     int turns = 0;
     while (turns++ < 120 && game_worm_state() != 4 && !game_is_dead()) {
         if (turns % 12 == 0) game_debug_refill();
@@ -675,15 +675,28 @@ int run_ridetest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cma
     tick_with(Key::Ride);
     if (!game_debug_riding()) { std::printf("ridetest FAIL (mount)\n"); return 1; }
 
+    // Ride until the worm moves. The worm only swims onto sand ("shies from
+    // rock"), so try each cardinal and keep the first that actually advances it
+    // (direction-agnostic — robust to whichever sand lies open at the surface).
     int wx0 = 0, wy0 = 0, wx1 = 0, wy1 = 0;
     game_debug_worm_pos(&wx0, &wy0);
-    for (int i = 0; i < 5; ++i) tick_with(Key::Right);
+    const Key dirs[4] = {Key::Right, Key::Left, Key::Down, Key::Up};
+    bool moved = false;
+    for (Key k : dirs) {
+        int bx, by; game_debug_worm_pos(&bx, &by);
+        for (int i = 0; i < 4 && !moved; ++i) {
+            tick_with(k);
+            int ax, ay; game_debug_worm_pos(&ax, &ay);
+            if (ax != bx || ay != by) moved = true;
+        }
+        if (moved) break;
+    }
     game_debug_worm_pos(&wx1, &wy1);
     tick_with(Key::Ride);  // dismount
 
     std::printf("worm rode from %d,%d to %d,%d (riding now %d, dead %d)\n",
                 wx0, wy0, wx1, wy1, game_debug_riding() ? 1 : 0, game_is_dead() ? 1 : 0);
-    const bool pass = wx1 > wx0 && !game_debug_riding() && !game_is_dead();
+    const bool pass = moved && !game_debug_riding() && !game_is_dead();
     std::printf("ridetest %s\n", pass ? "PASS" : "FAIL");
     return pass ? 0 : 1;
 }

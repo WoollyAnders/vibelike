@@ -206,6 +206,9 @@ struct GameState {
     int current_song = -1;
     int16_t hover_tx = -1, hover_ty = -1;
     int16_t move_goal_x = -1, move_goal_y = -1;  // A4: click-to-move destination (-1 = none)
+    // Click-only interaction: what the current move-goal is heading to interact with
+    // once adjacent. 0 none, 1 Naib, 2 Sayyadina, 3 Smuggler, 4 door (zone exit).
+    uint8_t interact_kind = 0;
     bool show_map = false;   // A5: minimap toggle (M)
     uint8_t map_scope = 0;   // A5: 0 = local zone; reserved for Phase-B world/section overview
     int anim_tick = 0;
@@ -1888,9 +1891,12 @@ void try_move(int dx, int dy) {
         advance_world();
         return;
     }
-    if (entity_at(nx, ny, g.cur_zone, EType::Naib)) { g.menu_open = 1; g.menu_sel = 0; return; }
-    if (entity_at(nx, ny, g.cur_zone, EType::Sayyadina)) { g.menu_open = 2; g.menu_sel = 0; return; }
-    if (entity_at(nx, ny, g.cur_zone, EType::Smuggler)) { g.menu_open = 3; g.menu_sel = 0; return; }
+    // NPCs are click-to-talk now: a bump just blocks (no menu). Interaction is
+    // driven from game_update when the player clicks the NPC (see interact_kind).
+    if (entity_at(nx, ny, g.cur_zone, EType::Naib) ||
+        entity_at(nx, ny, g.cur_zone, EType::Sayyadina) ||
+        entity_at(nx, ny, g.cur_zone, EType::Smuggler))
+        return;
 
     Entity* victim = entity_at(nx, ny, g.cur_zone, EType::Hound);
     if (!victim) victim = entity_at(nx, ny, g.cur_zone, EType::Trooper);
@@ -2017,21 +2023,13 @@ void try_move(int dx, int dy) {
     }
 
     if (tf & map::TF_BLOCK) return;  // bump silently
+    // Doors are click-to-use now (water seals the sietch): a bump just blocks, so
+    // you never leave by walking onto the pad. The exit fires from game_update when
+    // the door is clicked and the player is adjacent (see use_door / interact_kind).
+    if (tf & map::TF_DOOR) return;
 
     p.x = int16_t(nx);
     p.y = int16_t(ny);
-
-    if (tf & map::TF_DOOR) {
-        if (g.cur_zone == map::kZoneSietch) {
-            g.log.push("You step out into the Tanzerouft.");
-            enter_zone(map::kZoneDesert, true);
-        } else {
-            g.log.push("You slip back into the sietch's cool dark.");
-            enter_zone(map::kZoneSietch, true);
-        }
-        advance_world();
-        return;
-    }
 
     const uint8_t floor = z.floor[ny * map::W + nx];
     const int noise = step_noise(floor);
@@ -2312,6 +2310,19 @@ bool click_step_toward(int gx, int gy) {
     if (best == kNone) return false;
     try_move(bdx, bdy);
     return true;
+}
+
+// Click-only sietch exit: fired from game_update when the player has walked
+// adjacent to a door they clicked (water seals the sietch — you leave by the door).
+void use_door() {
+    if (g.cur_zone == map::kZoneSietch) {
+        g.log.push("You step out into the Tanzerouft.");
+        enter_zone(map::kZoneDesert, true);
+    } else {
+        g.log.push("You slip back into the sietch's cool dark.");
+        enter_zone(map::kZoneSietch, true);
+    }
+    advance_world();
 }
 
 // Per render tick (60Hz): every visible entity glides toward its logical
@@ -2817,17 +2828,32 @@ bool game_update(const InputState& in) {
     }
 
     // Left-click aims: set a move goal at the cursor tile (hold-drag re-steers).
-    // Right-click or Cancel aborts it; any keyboard move overrides it below.
-    if (in.mouse_pressed[1] || in.was_pressed(Key::Cancel)) { g.move_goal_x = -1; }
+    // A FRESH click also classifies what to interact with on arrival (click-only
+    // NPCs/doors). Right-click or Cancel aborts it; any keyboard move overrides it.
+    if (in.mouse_pressed[1] || in.was_pressed(Key::Cancel)) {
+        g.move_goal_x = -1;
+        g.interact_kind = 0;
+    }
     const bool cursor_in_world = in.mouse_x >= 0 && in.mouse_y >= 30 &&
                                  in.mouse_y < ui::kPanelY && g.hover_tx >= 0 && !g.pl.riding;
-    if (cursor_in_world && (in.mouse_pressed[0] || in.mouse_down[0])) {
+    if (cursor_in_world && in.mouse_pressed[0]) {  // fresh press: aim + classify target
         g.move_goal_x = g.hover_tx;
         g.move_goal_y = g.hover_ty;
+        if (entity_at(g.hover_tx, g.hover_ty, g.cur_zone, EType::Naib)) g.interact_kind = 1;
+        else if (entity_at(g.hover_tx, g.hover_ty, g.cur_zone, EType::Sayyadina)) g.interact_kind = 2;
+        else if (entity_at(g.hover_tx, g.hover_ty, g.cur_zone, EType::Smuggler)) g.interact_kind = 3;
+        else if (zone().at(g.hover_tx, g.hover_ty) & map::TF_DOOR) g.interact_kind = 4;
+        else g.interact_kind = 0;
+    } else if (cursor_in_world && in.mouse_down[0] &&
+               (g.hover_tx != g.move_goal_x || g.hover_ty != g.move_goal_y)) {
+        g.move_goal_x = g.hover_tx;  // hold-drag to a new tile = pure movement
+        g.move_goal_y = g.hover_ty;
+        g.interact_kind = 0;
     }
 
     if (dx || dy) {
         g.move_goal_x = -1;  // keyboard movement overrides click-to-move
+        g.interact_kind = 0;
         if (g.pl.riding) ride_move(dx, dy);
         else try_move(dx, dy);
     }
@@ -2837,7 +2863,21 @@ bool game_update(const InputState& in) {
             if ((p.x == g.move_goal_x && p.y == g.move_goal_y) ||
                 !click_step_toward(g.move_goal_x, g.move_goal_y))
                 g.move_goal_x = -1;  // arrived or stuck
-            if (g.menu_open) g.move_goal_x = -1;  // clicked into an NPC/vault: stop here
+        }
+    }
+    // Click-only interaction: once adjacent to the clicked NPC/door, act on it.
+    if (g.interact_kind) {
+        if (g.move_goal_x < 0) {
+            g.interact_kind = 0;  // path was lost/cleared; drop the pending interaction
+        } else {
+            const Entity& p = player_ent();
+            const int adx = p.x - g.move_goal_x, ady = p.y - g.move_goal_y;
+            if (adx >= -1 && adx <= 1 && ady >= -1 && ady <= 1) {
+                if (g.interact_kind == 4) use_door();
+                else { g.menu_open = g.interact_kind; g.menu_sel = 0; }
+                g.move_goal_x = -1;
+                g.interact_kind = 0;
+            }
         }
     }
     else if (in.pressed_or_repeat(Key::Wait)) advance_world();
@@ -3891,6 +3931,8 @@ void game_debug_click(int tx, int ty) {  // A4: set a click-to-move goal (headle
     g.move_goal_x = int16_t(tx);
     g.move_goal_y = int16_t(ty);
 }
+
+void game_debug_use_door() { use_door(); }  // headless: leave the sietch (doors are click-only)
 
 void game_debug_rpg(int* level, int* inv_count, int* stash_count) {
     if (level) *level = g.pl.st.level;
