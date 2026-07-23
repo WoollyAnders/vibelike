@@ -98,6 +98,37 @@ honest ceiling of image-gen animation at this sprite scale.)
 
 ---
 
+## PHASE R — High-resolution RGBA render rework *(post-playtest pivot)*
+The 640×480 8-bit indexed engine read as "budget 80s". Decision: rebuild the render
+layer for a modern **1080p, RGBA truecolor, GPU** look. Rendering is presentation-only,
+so the sim + all 10 headless tests stay green throughout — Phase R is verified visually.
+This supersedes the original "640×480 indexed" guardrail. Runs before the art-dependent
+game work; gameplay logic (B/C) is resolution-independent and follows.
+
+### R1 — RGBA truecolor pipeline ⬜
+Framebuffer → 32-bit RGBA; sprites converted to RGBA at load (via palette); `draw_sprite`
+alpha-blends RGBA with an RGB light multiply (replaces colormap remap); `fill_rect`/
+`draw_text` map palette index → RGB; present uploads RGBA directly (fade becomes an RGBA
+blend). Stays 640×480 — truecolor foundation, ~same look.
+**Exit:** game renders identically in truecolor; 10/10 tests green (sim untouched).
+
+### R2 — 1080p internal + coordinate rework ⬜
+Framebuffer → 1920×1080; iso tile scale, camera, world-pixel + `screen_to_tile` picking
+rescaled; every HUD/UI coordinate reworked for 1080p. Art still low-res (upscaled) here.
+**Exit:** the game runs at 1080p; HUD/menus/minimap laid out correctly; picking accurate.
+
+### R3 — High-res native-RGBA art ⬜
+Regenerate all art at high resolution as native RGBA (characters, tiles, props, UI),
+dropping palette-quantize. New atlas format (RGBA pages). The actual "modern" payoff.
+**Exit:** crisp high-res truecolor characters/terrain/UI; no missing-asset fallbacks.
+
+### R4 — RGB lighting + effects + upscaling polish ⬜
+RGB per-light shading + fog-of-war dimming (replacing colormap levels), particle/effect
+recolor, and a good window-scaling filter.
+**Exit:** lighting reads well; effects intact; scales cleanly to any window.
+
+---
+
 ## PHASE B — Run / World / Extraction Architecture
 
 ### B1 — World graph + single resident zone ⬜

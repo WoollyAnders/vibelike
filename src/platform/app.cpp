@@ -206,15 +206,27 @@ void update_mouse(const Platform& p, InputState& in, int wx, int wy) {
     in.mouse_y = inside ? fy : -1;
 }
 
-void present(Platform& p, const Framebuffer& frame, const uint32_t lut[256]) {
+void present(Platform& p, const Framebuffer& frame, PaletteFade fade) {
     void* pixels = nullptr;
     int pitch = 0;
+    const int a = fade.amount > 256 ? 256 : int(fade.amount);
     if (SDL_LockTexture(p.texture, nullptr, &pixels, &pitch) == 0) {
         for (int y = 0; y < fb::H; ++y) {
-            const uint8_t* src = frame.px + y * fb::W;
+            const uint32_t* src = frame.px + y * fb::W;
             uint32_t* dst = reinterpret_cast<uint32_t*>(
                 static_cast<uint8_t*>(pixels) + y * pitch);
-            for (int x = 0; x < fb::W; ++x) dst[x] = lut[src[x]];
+            if (a <= 0) {
+                for (int x = 0; x < fb::W; ++x) dst[x] = src[x];
+            } else {  // R1: global fade toward fade.rgb replaces the old palette LUT fade
+                for (int x = 0; x < fb::W; ++x) {
+                    const uint32_t c = src[x];
+                    int r = int((c >> 16) & 0xff), g = int((c >> 8) & 0xff), b = int(c & 0xff);
+                    r += (int(fade.r) - r) * a / 256;
+                    g += (int(fade.g) - g) * a / 256;
+                    b += (int(fade.b) - b) * a / 256;
+                    dst[x] = 0xff000000u | (uint32_t(r) << 16) | (uint32_t(g) << 8) | uint32_t(b);
+                }
+            }
         }
         SDL_UnlockTexture(p.texture);
     }
@@ -320,8 +332,8 @@ int run_slicetest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cm
     return pass ? 0 : 1;
 }
 
-// Writes the indexed framebuffer through a LUT as a 24-bit BMP (debug/demo).
-bool bmp_save(const char* path, const Framebuffer& frame, const uint32_t lut[256]) {
+// Writes the RGBA framebuffer as a 24-bit BMP (debug/demo).
+bool bmp_save(const char* path, const Framebuffer& frame) {
     FILE* f = std::fopen(path, "wb");
     if (!f) return false;
     const int w = fb::W, h = fb::H;
@@ -344,7 +356,7 @@ bool bmp_save(const char* path, const Framebuffer& frame, const uint32_t lut[256
     std::vector<uint8_t> line(row, 0);
     for (int y = h - 1; y >= 0; --y) {
         for (int x = 0; x < w; ++x) {
-            const uint32_t c = lut[frame.px[y * w + x]];
+            const uint32_t c = frame.px[y * w + x];
             line[x * 3] = c & 255;
             line[x * 3 + 1] = (c >> 8) & 255;
             line[x * 3 + 2] = (c >> 16) & 255;
@@ -797,7 +809,7 @@ int main(int argc, char** argv) {
     }
 
     GameServices services{&mixer, &assets, &cmaps, anims_ok ? &anims : nullptr,
-                          /*interactive=*/!autodemo || uishot, animdebug};
+                          /*interactive=*/!autodemo || uishot, animdebug, &master};
     game_init(autodemo ? (opdemo ? 9001 : 4242) : uint64_t(SDL_GetPerformanceCounter()),
               services);
     mixer.push({audio::Cmd::PlaySong, uint8_t(g_song_ambient), 0, 0});
@@ -906,26 +918,23 @@ int main(int argc, char** argv) {
         }
 
         game_render(frame);
-
-        uint32_t lut[256];
-        palette_build_lut(master, game_fade(), 0, 0, 0, lut);
-        present(platform, frame, lut);
+        present(platform, frame, game_fade());
 
         if (autodemo) {
             static int demo_ticks = 0, shot = 0;
             if (++demo_ticks % (fightdemo ? 6 : 24) == 0 && shot < 24) {
                 char name[32];
                 std::snprintf(name, sizeof name, "demo_%02d.bmp", shot++);
-                bmp_save(name, frame, lut);
+                bmp_save(name, frame);
             }
         }
         if (uishot) {
             static int ui_ticks = 0;
             ++ui_ticks;
             if (ui_ticks == 90 || ui_ticks == 150) input.pressed[int(Key::Right)] = true;
-            if (ui_ticks == 60) bmp_save("uishot_0.bmp", frame, lut);
-            if (ui_ticks == 120) bmp_save("uishot_1.bmp", frame, lut);
-            if (ui_ticks == 180) bmp_save("uishot_2.bmp", frame, lut);
+            if (ui_ticks == 60) bmp_save("uishot_0.bmp", frame);
+            if (ui_ticks == 120) bmp_save("uishot_1.bmp", frame);
+            if (ui_ticks == 180) bmp_save("uishot_2.bmp", frame);
             if (ui_ticks > 200) running = false;
         }
 

@@ -12,7 +12,8 @@
 
 struct DrawCtx {
     Framebuffer* frame;
-    const Colormaps* cmaps;
+    const Colormaps* cmaps;      // (unused since R1's RGB lighting; kept for now)
+    const Palette* pal = nullptr;  // index -> RGB source for the RGBA primitives
 };
 
 void draw_sprite(DrawCtx& ctx, const SpriteSheet& sheet, int frame_index,
