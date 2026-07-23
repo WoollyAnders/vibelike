@@ -231,11 +231,15 @@ def build_strip(img):
     hs = sorted(c.height for c in normed)
     g = HEIGHT / hs[len(hs) // 2]
     def render(c):                                   # scale + centre + bottom-anchor into one cell
-        nw, nh = max(1, round(c.width * g)), max(1, round(c.height * g))
+        gg = g
+        if round(c.width * g) > FW:                  # a wide stride would overflow -> shrink to fit
+            gg = min(g, (FW - 2) / c.width)
+        nw, nh = max(1, round(c.width * gg)), max(1, round(c.height * gg))
         c = c.resize((nw, nh), Image.LANCZOS)
         cell = Image.new("RGBA", (FW, FH), (0, 0, 0, 0))
         cx = _centroid_x(c)
         ox, oy = FW // 2 - int(round(cx)), FH - nh - 1
+        ox = max(FW - nw, min(0, ox))                # clamp so no limb clips the cell edge
         if nh > FH: c = c.crop((0, nh - FH, nw, FH)); oy = 0
         cell.paste(c, (ox, oy), c)
         return cell

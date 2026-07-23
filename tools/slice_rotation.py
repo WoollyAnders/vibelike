@@ -81,9 +81,11 @@ def slice_turnaround(img, fw, fh, views=5, target_h=None):
 
     # normalize to the tallest view so heads line up across directions
     tallest = max(c.height for c in crops)
+    widest = max(c.width for c in crops)
     for i, c in enumerate(crops):
         if target_h:
-            scale = target_h / tallest
+            # cap by the widest view so no direction overflows the frame width
+            scale = min(target_h / tallest, (fw - 2) / widest)
         else:
             scale = min((fw - 2) / c.width, (fh - 2) / tallest)
         nw, nh = max(1, int(c.width * scale)), max(1, int(c.height * scale))

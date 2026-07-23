@@ -67,3 +67,4 @@ void game_debug_warp_to_worm();
 void game_debug_worm_pos(int* x, int* y);
 void game_debug_player_pos(int* x, int* y);
 void game_debug_click(int tx, int ty);  // A4: headless click-to-move goal
+void game_debug_use_door();  // headless: leave the sietch (doors are click-only now)
