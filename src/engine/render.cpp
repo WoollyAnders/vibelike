@@ -29,23 +29,22 @@ void draw_sprite(DrawCtx& ctx, const SpriteSheet& sheet, int frame_index,
                  int x, int y, int light, bool flip_x) {
     if (frame_index < 0 || frame_index >= sheet.frames) return;
     light = light < 0 ? 0 : (light > 31 ? 31 : light);
-    const Palette* pal = ctx.pal;
     const int s = g_scale;
     // (x, y) is the anchor point; the sprite scales about it by s (nearest).
     const int x0 = x - sheet.ax * s;
     const int y0 = y - sheet.ay * s;
-    const uint8_t* base = sheet.frame_ptr(frame_index);
+    const uint32_t* base = sheet.frame_ptr(frame_index);  // R3: native ARGB8888
     const int pitch = sheet.pitch;
     Framebuffer* fbuf = ctx.frame;
 
     for (int sy = 0; sy < sheet.fh; ++sy) {
-        const uint8_t* row = base + sy * pitch;
+        const uint32_t* row = base + sy * pitch;
         const int py0 = y0 + sy * s;
         if (py0 + s <= 0 || py0 >= fb::H) continue;
         for (int sx = 0; sx < sheet.fw; ++sx) {
-            const uint8_t p = row[flip_x ? sheet.fw - 1 - sx : sx];
-            if (!p) continue;
-            const uint32_t c = shade(pal->color[p], light);
+            const uint32_t argb = row[flip_x ? sheet.fw - 1 - sx : sx];
+            if ((argb >> 24) < 128) continue;  // 1-bit alpha key (transparent)
+            const uint32_t c = shade(argb, light);
             const int px0 = x0 + sx * s;
             for (int dy = 0; dy < s; ++dy)
                 for (int dx = 0; dx < s; ++dx) plot(fbuf, px0 + dx, py0 + dy, c);

@@ -2,10 +2,13 @@
 """Asset pipeline orchestrator.
 
   (OpenAI genart.py | make_assets.py stand-ins)
-        -> assets_src/raw/*.png + meta.txt      generated art
-        -> quantize.py -> assets_src/indexed/   palette-conformed
-        -> atlas.py    -> <out>/atlas.bin       packed for the game
+        -> assets_src/raw/*.png + meta.txt      generated RGBA art
+        -> atlas.py    -> <out>/atlas.bin       packed RGBA (v3) for the game
   plus palette.pal and sfx/ copied into <out>.
+
+R3: palette-quantization (quantize.py) was removed from the pipeline; the atlas
+now packs the raw RGBA straight (transparency via the alpha channel). palette.pal
+is still shipped because text/fills (draw_glyph/fill_rect) draw palette indices.
 
 Usage: build_assets.py <out_data_dir>
 """
@@ -31,12 +34,9 @@ def main(out_dir):
     # 1b. derive walk-cycle strips from the base sprites
     run("animsynth.py")
 
-    # 2. quantize to the master palette
-    run("quantize.py", RAW, INDEXED, os.path.join(ASSETS, "palette.pal"))
-
-    # 3. pack the atlas straight into the game's data dir
+    # 2. pack the RGBA atlas straight into the game's data dir (no quantize step)
     os.makedirs(out_dir, exist_ok=True)
-    run("atlas.py", INDEXED, os.path.join(RAW, "meta.txt"),
+    run("atlas.py", RAW, os.path.join(RAW, "meta.txt"),
         os.path.join(out_dir, "atlas.bin"))
 
     # 4. non-image data ships as-is
