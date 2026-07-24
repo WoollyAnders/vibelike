@@ -28,7 +28,7 @@ constexpr int kMaxDeltas = 192;
 enum class EType : uint8_t { None = 0, Player, Hound, Corpse, Thumper, Trooper, Spotter,
                              Glowglobe, ShieldTrooper, Naib, Sayyadina, Smuggler,
                              PanAdder, Hermit, HunterSeeker, SpiceCache, Loot, Boss,
-                             Caravan, Envoy };
+                             Caravan, Envoy, Fremen };
 enum class Ai : uint8_t { Idle = 0, Wander, Hunt, Guard };
 
 struct Entity {
@@ -44,6 +44,45 @@ struct Entity {
     int16_t vpx = 0, vpy = 0;   // visual world-pixel position (glides)
     anim::Animator anim;
     uint8_t hurt_flash = 0;     // G3: bright flinch frames remaining
+};
+
+// Sietch furniture/decor: static props placed in the hub chambers. Regenerated
+// deterministically on sietch entry (not serialized).
+struct Decor {
+    int16_t x, y;
+    uint8_t prop;  // index into kDecorProps
+};
+struct DecorDef {
+    const char* key;  // atlas sprite
+    int8_t seat;      // vertical seating offset (screen px)
+    uint8_t layer;    // draw-list layer bias (0 = floor rug, 1 = standing prop)
+    bool block;       // occupies the tile (TF_BLOCK)
+    bool opaque;      // also blocks sight (TF_OPAQUE) — tall racks/banners
+};
+constexpr DecorDef kDecorProps[] = {
+    {"prop_rug", 2, 0, false, false},        // 0
+    {"prop_brazier", 6, 1, true, false},     // 1
+    {"prop_weaponrack", 8, 1, true, true},   // 2
+    {"prop_suitrack", 8, 1, true, true},     // 3
+    {"prop_urn", 6, 1, true, false},         // 4
+    {"prop_banner", 6, 1, true, true},       // 5
+    {"prop_baskets", 6, 1, true, false},     // 6
+    {"prop_table", 6, 1, true, false},       // 7
+    {"prop_spicesacks", 6, 1, true, false},  // 8
+};
+
+// Dialog-only Fremen: clicking one shows a flavor bark (full dialog deferred).
+// Rendered with a varied existing NPC sprite; e.data indexes the bark/sprite.
+constexpr const char* kFremenSprites[] = {"fremen", "fremen2", "naib"};
+constexpr const char* kFremenBarks[] = {
+    "\"The desert gives, and the desert takes. Walk without rhythm, water-brother.\"",
+    "\"Bless the Maker and His water. Bless the coming and going of Him.\"",
+    "\"My stillsuit's reclaimed near a litre today. A good day.\"",
+    "\"They say Muad'Dib will come from the outworld. I only pray for rain that never falls.\"",
+    "\"Keep your knife hand loose. The Harkonnen scouts range far this season.\"",
+    "\"I lost a son to the sand. The tribe drank his water. It is our way.\"",
+    "\"Careful by the cistern, little one. A tribe's wealth is measured in water.\"",
+    "\"Shai-Hulud stirs in the deep bled. Best you not wake Him.\"",
 };
 
 enum class Background : uint8_t { Fedaykin = 0, Saboteur, Sayyadina, Count };
@@ -207,8 +246,9 @@ struct GameState {
     int16_t hover_tx = -1, hover_ty = -1;
     int16_t move_goal_x = -1, move_goal_y = -1;  // A4: click-to-move destination (-1 = none)
     // Click-only interaction: what the current move-goal is heading to interact with
-    // once adjacent. 0 none, 1 Naib, 2 Sayyadina, 3 Smuggler, 4 door (zone exit).
+    // once adjacent. 0 none, 1 Naib, 2 Sayyadina, 3 Smuggler, 4 door, 5 Fremen (bark).
     uint8_t interact_kind = 0;
+    std::vector<Decor> decor;  // sietch hub furniture (regenerated on entry)
     bool show_map = false;   // A5: minimap toggle (M)
     uint8_t map_scope = 0;   // A5: 0 = local zone; reserved for Phase-B world/section overview
     int anim_tick = 0;
@@ -370,7 +410,7 @@ Entity* alloc_entity() {
     return nullptr;
 }
 
-void place_npc_near(EType type, uint8_t zone_id, int px, int py) {
+void place_npc_near(EType type, uint8_t zone_id, int px, int py, int16_t data = 0) {
     map::Zone& z = g.zones[zone_id];
     for (int r = 0; r < 8; ++r)
         for (int dy = -r; dy <= r; ++dy)
@@ -379,18 +419,72 @@ void place_npc_near(EType type, uint8_t zone_id, int px, int py) {
                 if (x < 1 || x >= map::W - 1 || y < 1 || y >= map::H - 1) continue;
                 if (!z.walkable(x, y) || entity_at(x, y, zone_id)) continue;
                 if (Entity* e = alloc_entity()) {
-                    *e = Entity{type, Ai::Idle, zone_id, int16_t(x), int16_t(y), 10, 0, 0};
+                    *e = Entity{type, Ai::Idle, zone_id, int16_t(x), int16_t(y), 10, 0, data};
                     return;
                 }
             }
+}
+
+// Drop a decor prop on a sietch floor tile (skips solid rock), tagging the tile
+// blocking/opaque per its DecorDef so props are solid and racks/banners occlude.
+void add_decor(uint8_t prop, int x, int y) {
+    map::Zone& z = g.zones[map::kZoneSietch];
+    if (x < 1 || x >= map::W - 1 || y < 1 || y >= map::H - 1) return;
+    const int idx = y * map::W + x;
+    if (!(z.flags[idx] & map::TF_INDOOR) || (z.flags[idx] & map::TF_BLOCK)) return;
+    g.decor.push_back(Decor{int16_t(x), int16_t(y), prop});
+    const DecorDef& d = kDecorProps[prop];
+    if (d.block) z.flags[idx] |= map::TF_BLOCK;
+    if (d.opaque) z.flags[idx] |= map::TF_OPAQUE;
+}
+
+// Furnish the sietch warren chambers. Deterministic (same layout every run).
+void place_sietch_decor() {
+    g.decor.clear();
+    // great hall: a central rug you can walk on + framing braziers + banners + table
+    add_decor(0, 32, 31);  add_decor(0, 32, 34);          // rugs (non-blocking)
+    add_decor(1, 24, 24);  add_decor(1, 40, 24);          // braziers
+    add_decor(5, 23, 27);  add_decor(5, 41, 27);          // wall banners
+    add_decor(7, 28, 25);                                  // table
+    // cistern chamber: water urns flanking the basin
+    add_decor(4, 29, 12);  add_decor(4, 35, 12);
+    add_decor(0, 32, 18);
+    // living quarters (west): sleeping rugs, baskets, a brazier
+    add_decor(0, 10, 30);  add_decor(0, 16, 34);
+    add_decor(6, 8, 26);   add_decor(6, 18, 26);
+    add_decor(1, 13, 37);
+    // storeroom (east): baskets, spice sacks, urns, a work table
+    add_decor(6, 46, 24);  add_decor(6, 55, 24);
+    add_decor(8, 46, 34);  add_decor(8, 55, 34);  add_decor(8, 50, 23);
+    add_decor(4, 48, 30);  add_decor(7, 53, 31);
+    // armory (south-west): weapon + stillsuit racks along the walls
+    add_decor(2, 15, 42);  add_decor(2, 26, 42);
+    add_decor(3, 15, 52);  add_decor(3, 26, 52);
+    add_decor(0, 20, 47);
+    // sleeping chamber (south-east): rugs, baskets, brazier
+    add_decor(0, 44, 44);  add_decor(0, 48, 49);
+    add_decor(6, 41, 41);  add_decor(6, 51, 51);
+    add_decor(1, 50, 42);
 }
 
 void spawn_zone_wildlife(uint8_t zone_id) {
     if (g.spawned_mask & (1 << zone_id)) return;
     g.spawned_mask |= uint8_t(1 << zone_id);
     if (zone_id == map::kZoneSietch) {
-        place_npc_near(EType::Naib, zone_id, 30, 27);
-        place_npc_near(EType::Sayyadina, zone_id, 36, 25);
+        place_sietch_decor();
+        // vendors, spread across the warren
+        place_npc_near(EType::Naib, zone_id, 30, 30);       // great hall
+        place_npc_near(EType::Sayyadina, zone_id, 32, 16);  // cistern chamber
+        place_npc_near(EType::Smuggler, zone_id, 50, 28);   // storeroom
+        // dialog-only Fremen (each tagged with a flavor-bark index)
+        place_npc_near(EType::Fremen, zone_id, 12, 32, 0);  // quarters
+        place_npc_near(EType::Fremen, zone_id, 16, 28, 5);  // quarters
+        place_npc_near(EType::Fremen, zone_id, 20, 48, 4);  // armory
+        place_npc_near(EType::Fremen, zone_id, 38, 34, 2);  // great hall
+        place_npc_near(EType::Fremen, zone_id, 46, 46, 3);  // sleeping chamber
+        place_npc_near(EType::Fremen, zone_id, 30, 17, 1);  // cistern chamber
+        place_npc_near(EType::Fremen, zone_id, 52, 32, 6);  // storeroom
+        place_npc_near(EType::Fremen, zone_id, 26, 34, 7);  // great hall
         return;
     }
     if (zone_id == map::kZoneDesert)
@@ -1895,7 +1989,8 @@ void try_move(int dx, int dy) {
     // driven from game_update when the player clicks the NPC (see interact_kind).
     if (entity_at(nx, ny, g.cur_zone, EType::Naib) ||
         entity_at(nx, ny, g.cur_zone, EType::Sayyadina) ||
-        entity_at(nx, ny, g.cur_zone, EType::Smuggler))
+        entity_at(nx, ny, g.cur_zone, EType::Smuggler) ||
+        entity_at(nx, ny, g.cur_zone, EType::Fremen))
         return;
 
     Entity* victim = entity_at(nx, ny, g.cur_zone, EType::Hound);
@@ -2843,6 +2938,7 @@ bool game_update(const InputState& in) {
         else if (entity_at(g.hover_tx, g.hover_ty, g.cur_zone, EType::Sayyadina)) g.interact_kind = 2;
         else if (entity_at(g.hover_tx, g.hover_ty, g.cur_zone, EType::Smuggler)) g.interact_kind = 3;
         else if (zone().at(g.hover_tx, g.hover_ty) & map::TF_DOOR) g.interact_kind = 4;
+        else if (entity_at(g.hover_tx, g.hover_ty, g.cur_zone, EType::Fremen)) g.interact_kind = 5;
         else g.interact_kind = 0;
     } else if (cursor_in_world && in.mouse_down[0] &&
                (g.hover_tx != g.move_goal_x || g.hover_ty != g.move_goal_y)) {
@@ -2873,8 +2969,18 @@ bool game_update(const InputState& in) {
             const Entity& p = player_ent();
             const int adx = p.x - g.move_goal_x, ady = p.y - g.move_goal_y;
             if (adx >= -1 && adx <= 1 && ady >= -1 && ady <= 1) {
-                if (g.interact_kind == 4) use_door();
-                else { g.menu_open = g.interact_kind; g.menu_sel = 0; }
+                if (g.interact_kind == 4) {
+                    use_door();
+                } else if (g.interact_kind == 5) {  // Fremen flavor bark
+                    if (Entity* f = entity_at(g.move_goal_x, g.move_goal_y,
+                                              g.cur_zone, EType::Fremen)) {
+                        constexpr int kN = int(sizeof kFremenBarks / sizeof *kFremenBarks);
+                        g.log.push("%s", kFremenBarks[(f->data % kN + kN) % kN]);
+                    }
+                } else {
+                    g.menu_open = g.interact_kind;
+                    g.menu_sel = 0;
+                }
                 g.move_goal_x = -1;
                 g.interact_kind = 0;
             }
@@ -3055,6 +3161,30 @@ void pass_objects(RenderCtx& r) {
     }
 }
 
+// Sietch furniture/decor + the exit door, into the y-sorted scene list.
+void pass_decor(RenderCtx& r) {
+    if (g.cur_zone == map::kZoneSietch) {
+        for (const Decor& d : g.decor) {
+            const int idx = d.y * map::W + d.x;
+            if (!(r.z->vis[idx] & (map::V_VISIBLE | map::V_REMEMBERED))) continue;
+            int sx, sy;
+            iso::tile_to_screen(d.x, d.y, g.cam, sx, sy);
+            if (sx < -96 || sx > fb::W + 96 || sy < -128 || sy > fb::H + 128) continue;
+            const DecorDef& def = kDecorProps[d.prop];
+            g.draw_list.add(&sheet_or_ph(r, def.key), 0, sx, sy + def.seat,
+                            tile_light(r, idx), def.layer);
+        }
+    }
+    // exit door as a real prop, wherever a TF_DOOR pad sits
+    for (int i = 0; i < map::N; ++i) {
+        if (!(r.z->flags[i] & map::TF_DOOR)) continue;
+        if (!(r.z->vis[i] & (map::V_VISIBLE | map::V_REMEMBERED))) continue;
+        int sx, sy;
+        iso::tile_to_screen(i % map::W, i / map::W, g.cam, sx, sy);
+        g.draw_list.add(&sheet_or_ph(r, "door_seal"), 0, sx, sy + 4, tile_light(r, i), 1);
+    }
+}
+
 // Entities: actors (and the surfaced worm), into the scene list.
 void pass_entities(RenderCtx& r) {
     const SpriteSheet* player_spr =
@@ -3145,6 +3275,12 @@ void pass_entities(RenderCtx& r) {
             case EType::Smuggler:
                 g.draw_list.add(r.assets->get("smuggler"), 0, sx, sy + 12, light, 1);
                 break;
+            case EType::Fremen: {  // dialog-only tribesfolk; varied sprite
+                constexpr int kNS = int(sizeof kFremenSprites / sizeof *kFremenSprites);
+                const char* spr = kFremenSprites[(e.data % kNS + kNS) % kNS];
+                g.draw_list.add(&sheet_or_ph(r, spr), 0, sx, sy + 12, light, 1);
+                break;
+            }
             case EType::PanAdder:
                 g.draw_list.add(r.assets->get("panadder"), (g.anim_tick / 12) % 2, sx,
                                 sy + 12, light, 1);
@@ -3665,6 +3801,7 @@ void game_render(Framebuffer& frame) {
     pass_ground_decals(r);
     pass_walls(r);      // \
     pass_objects(r);    //  > populate the y-sorted scene list
+    pass_decor(r);      //  > sietch furniture + exit door
     pass_entities(r);   // /
     g.draw_list.flush(r.ctx);
     pass_effects(r);
