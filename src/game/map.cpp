@@ -19,31 +19,43 @@ void carve_room(Zone& z, int x0, int y0, int x1, int y1) {
             // interior with a worn rock rim and the odd spice-fleck underfoot.
             const bool rim = (x == x0 || x == x1 || y == y0 || y == y1);
             const uint32_t h = hash_combine(x, y) & 255u;
-            // Stone cavern floor only — no spice-fleck (frame 5) here; the reddish
-            // spice tile belongs in the desert, not the carved sietch interior.
-            uint8_t frame = 8;                          // sietch stone
-            if (rim)          frame = uint8_t(3 + (h & 1));  // rock ground rim
-            else if (h < 48)  frame = uint8_t(3 + (h & 1));  // scattered worn rock
+            // Warm sandstone cavern floor: frames 8 and 10/11 are three different
+            // crops of the sietch texture (no grey desert rock, no spice here), so
+            // the floor has variety without cold tones.
+            (void)rim;
+            uint8_t frame = 8;
+            if (h < 40)      frame = 10;
+            else if (h < 80) frame = 11;
             z.floor[y * W + x] = frame;
         }
 }
 
 void generate_sietch(Zone& z, int& spawn_x, int& spawn_y) {
-    // Solid rock, carved rooms.
+    // A sprawling carved warren: chambers connected by corridors, filling most of
+    // the 64x64 map. Everything starts solid rock; carve_room hollows each space.
     for (int i = 0; i < N; ++i) {
         z.floor[i] = 8;
         z.flags[i] = TF_BLOCK | TF_WALL | TF_OPAQUE | TF_INDOOR;
     }
-    carve_room(z, 28, 24, 38, 34);   // main hall
-    carve_room(z, 30, 20, 34, 24);   // cistern alcove
-    carve_room(z, 32, 34, 34, 40);   // entry corridor
+    carve_room(z, 22, 22, 42, 38);   // great hall (central)
+    carve_room(z, 27, 10, 37, 20);   // cistern chamber (north)
+    carve_room(z, 31, 19, 33, 23);   //   corridor -> hall
+    carve_room(z, 6, 24, 20, 38);    // living quarters (west)
+    carve_room(z, 19, 29, 23, 32);   //   corridor -> hall
+    carve_room(z, 44, 22, 57, 36);   // storeroom (east)
+    carve_room(z, 41, 28, 45, 31);   //   corridor -> hall
+    carve_room(z, 14, 41, 27, 53);   // armory (south-west)
+    carve_room(z, 22, 37, 25, 42);   //   corridor -> hall
+    carve_room(z, 40, 40, 52, 52);   // sleeping chamber (south-east)
+    carve_room(z, 43, 37, 46, 41);   //   corridor -> hall
+    carve_room(z, 31, 37, 34, 56);   // entry corridor -> door (south)
 
-    z.flags[21 * W + 32] |= TF_CISTERN | TF_BLOCK;  // cistern (bump target)
-    z.flags[40 * W + 33] |= TF_DOOR;                 // exit to the desert
-    z.floor[40 * W + 33] = 9;
+    z.flags[13 * W + 32] |= TF_CISTERN | TF_BLOCK;  // cistern basin
+    z.flags[56 * W + 32] |= TF_DOOR;                 // sietch exit (click the door)
+    z.floor[56 * W + 32] = 9;
 
-    spawn_x = 33;
-    spawn_y = 30;
+    spawn_x = 32;
+    spawn_y = 36;  // great hall, by the entry corridor
 }
 
 void generate_desert(Zone& z, uint64_t seed, ZoneId id, int& spawn_x, int& spawn_y) {
@@ -186,10 +198,12 @@ void reveal_room(Zone& z, int cx, int cy) {
     while (head < count) {
         const int idx = queue[head++];
         const int x = idx % W, y = idx / W;
-        // Reveal this interior tile and its 8 neighbours, so the enclosing walls
-        // draw too (an unremembered wall renders as black).
-        for (int ny = y - 1; ny <= y + 1; ++ny)
-            for (int nx = x - 1; nx <= x + 1; ++nx)
+        // Reveal this interior tile and a thick band of surrounding rock, so the
+        // carved chambers sit in a solid drawn sandstone mass with no black voids
+        // between them (the sietch is a known, lit home, not fog-of-war).
+        constexpr int kBand = 3;
+        for (int ny = y - kBand; ny <= y + kBand; ++ny)
+            for (int nx = x - kBand; nx <= x + kBand; ++nx)
                 if (nx >= 0 && nx < W && ny >= 0 && ny < H)
                     z.vis[ny * W + nx] |= V_VISIBLE | V_REMEMBERED;
         // Flood 4-connected through open (non-opaque) indoor tiles only, so the

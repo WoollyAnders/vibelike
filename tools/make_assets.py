@@ -128,6 +128,8 @@ def make_tiles():
         make_highlight(),                        # 7 selection highlight
         make_floor(100, 3, edge_dark=2),        # 8 sietch stone floor
         make_floor(103, 2, edge_dark=2),        # 9 sietch door pad
+        make_floor(98, 3, edge_dark=2),         # 10 sietch floor variant b
+        make_floor(104, 3, edge_dark=2),        # 11 sietch floor variant c
     ]
     # drum sand: concentric arcs
     px = tiles[6].load()
@@ -543,14 +545,30 @@ def make_ui_plaque():
                 px[x, y] = 3
     return img
 
+def make_box(w, h, frames=1, base=100):
+    """Generic placeholder box for props/decor — genart.py overwrites it with the
+    real generated art; it only needs to match the declared frame size."""
+    img = new_indexed(w * frames, h)
+    px = img.load()
+    for fi in range(frames):
+        for y in range(h):
+            for x in range(w):
+                edge = x == 0 or x == w - 1 or y == 0 or y == h - 1
+                px[fi * w + x, y] = 3 if edge else uint8_box(base, x, y)
+    return img
+
+def uint8_box(base, x, y):
+    v = base + ((x * 5 + y * 3) % 7)
+    return max(1, min(255, v))
+
 # name -> (builder, fw, fh, frames, ax, ay) at authoring (half) scale
 SHEETS = {
-    "tiles":    (lambda: make_tiles(), 32, 16, 10, 16, 8),
+    "tiles":    (lambda: make_tiles(), 32, 16, 12, 16, 8),
     "player":   (lambda: make_player(), 16, 32, 4, 8, 30),
     "rock":     (lambda: make_rock_prop(), 32, 32, 1, 16, 26),
     "hound":    (lambda: make_hound(), 16, 16, 2, 8, 13),
     "corpse":   (lambda: make_corpse(), 16, 10, 1, 8, 7),
-    "wall":     (lambda: make_wall(), 32, 40, 1, 16, 32),
+    "wall":     (lambda: make_box(32, 24), 32, 24, 1, 16, 20),  # procedural iso block (low rim)
     "cistern":  (lambda: make_cistern(), 24, 24, 1, 12, 20),
     "ripple":   (lambda: make_ripple(), 32, 16, 2, 16, 8),
     "mound":    (lambda: make_mound(), 32, 24, 3, 16, 16),
@@ -577,6 +595,21 @@ SHEETS = {
     "ui_panel": (lambda: make_ui_panel(), 320, 22, 1, 0, 0),
     "ui_socket": (lambda: make_ui_socket(), 22, 22, 1, 11, 11),
     "ui_plaque": (lambda: make_ui_plaque(), 120, 12, 1, 0, 0),
+    # --- sietch hub decor / furniture (genart replaces the placeholder boxes) ---
+    # Sized up so props read at the iso scale (tiles are 128x64, chars 64x128).
+    "prop_rug":        (lambda: make_box(26, 15), 26, 15, 1, 13, 13),
+    "prop_brazier":    (lambda: make_box(16, 22), 16, 22, 1, 8, 20),
+    "prop_weaponrack": (lambda: make_box(18, 26), 18, 26, 1, 9, 24),
+    "prop_suitrack":   (lambda: make_box(18, 26), 18, 26, 1, 9, 24),
+    "prop_urn":        (lambda: make_box(12, 18), 12, 18, 1, 6, 16),
+    "prop_banner":     (lambda: make_box(14, 28), 14, 28, 1, 7, 26),
+    "prop_baskets":    (lambda: make_box(16, 14), 16, 14, 1, 8, 12),
+    "prop_table":      (lambda: make_box(22, 16), 22, 16, 1, 11, 14),
+    "prop_spicesacks": (lambda: make_box(18, 14), 18, 14, 1, 9, 12),
+    "door_seal":       (lambda: make_box(22, 28), 22, 28, 1, 11, 26),
+    # --- dialog-only Fremen tribesfolk ---
+    "fremen":          (lambda: make_box(16, 32), 16, 32, 1, 8, 30),
+    "fremen2":         (lambda: make_box(16, 32), 16, 32, 1, 8, 30),
 }
 
 def main():

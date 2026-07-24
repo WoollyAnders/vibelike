@@ -118,6 +118,51 @@ SPRITES = {
                   "granules heaped on the ground, faintly luminous cinnamon "
                   "crystals, isolated on a fully transparent background, "
                   "no scene",
+    "fremen": "a Fremen desert tribesman in a worn hooded ochre-brown stillsuit "
+              "and dust robe with a face veil, calm posture, empty hands, full "
+              "body, isolated figure on a fully transparent background, no scene",
+    "fremen2": "a Fremen desert tribeswoman in layered dust-tan robes over a "
+               "stillsuit with a wrapped headscarf and bright blue-within-blue "
+               "eyes, empty hands, full body, isolated figure on a fully "
+               "transparent background, no scene",
+    # --- sietch hub decor / furniture (fill their declared boxes) ---
+    "prop_rug": "an ornate hand-woven Fremen floor rug lying FLAT on the ground "
+                "seen from a high three-quarter isometric angle, geometric desert "
+                "weave in ochre rust and deep indigo, frayed tassels, isolated on "
+                "a fully transparent background, no scene, no floor",
+    "prop_brazier": "a low bronze desert brazier bowl on three legs heaped with "
+                    "glowing orange embers and a small flame, thin smoke wisps, "
+                    "three-quarter view, isolated on a fully transparent "
+                    "background, no scene, no floor, no shadow",
+    "prop_weaponrack": "a wooden and bone weapon rack holding crysknives and slim "
+                       "maula pistols, desert tribal craftsmanship, three-quarter "
+                       "view, isolated on a fully transparent background, no scene, "
+                       "no floor, no shadow",
+    "prop_suitrack": "a wooden rack of hanging Fremen stillsuits, dark ribbed "
+                     "desert survival bodysuits on pegs, three-quarter view, "
+                     "isolated on a fully transparent background, no scene, no "
+                     "floor, no shadow",
+    "prop_urn": "a sealed rounded ceramic desert water urn with a fitted lid and "
+                "painted tribal markings, weathered clay, three-quarter view, "
+                "isolated on a fully transparent background, no scene, no shadow",
+    "prop_banner": "a Fremen tribal banner tapestry of woven cloth hanging "
+                   "vertically, a stylized sandworm emblem, frayed weighted hem, "
+                   "isolated on a fully transparent background, no scene, no floor",
+    "prop_baskets": "a cluster of woven desert storage baskets of different sizes "
+                    "made of dried reeds, some lidded, three-quarter view, "
+                    "isolated on a fully transparent background, no scene, no shadow",
+    "prop_table": "a low carved stone desert table set with a few clay bowls and "
+                  "a scatter of rust-red spice, three-quarter view, isolated on a "
+                  "fully transparent background, no scene, no shadow",
+    "prop_spicesacks": "a small stack of bulging burlap sacks tied with cord, "
+                       "spilling faint rust-red spice dust, three-quarter view, "
+                       "isolated on a fully transparent background, no scene, "
+                       "no shadow",
+    "door_seal": "a heavy moisture-sealed sietch doorway carved into rock: a "
+                 "rounded stone arch fitted with a thick layered fabric water-seal "
+                 "curtain weighted at the bottom, a dark gap down the middle, "
+                 "tribal carved frame, three-quarter isometric view, isolated on a "
+                 "fully transparent background, no scene, no floor",
 }
 
 # UI elements: stretched to fill their exact frame (no aspect-fit).
@@ -150,6 +195,11 @@ TEXTURES = {
     "tex_ripple": "seamless top-down texture of strong concentric sand ripple "
                   "rings radiating across desert sand, deep wave shadows, "
                   "agitated disturbed sand, detailed 90s pixel-art shading",
+    "tex_sietch": "seamless texture of warm hand-carved sandstone cavern rock, "
+                  "smooth wind-worn ochre tan and amber sandstone with soft strata "
+                  "lines, chisel marks and settled dust, WARM desert tones (no grey, "
+                  "no cold stone), rich painterly 90s pixel-art shading with "
+                  "dithered gradients",
 }
 
 # Turnaround sheets: 5 views of the same figure, sliced into direction strips.
@@ -467,8 +517,9 @@ def build_wall(rock, fw, fh):
             if 0 <= y < fh:
                 r, g, b, a = spx[x, (ytop + k) % fh]
                 opx[x, y] = (int(r * sh), int(g * sh), int(b * sh), 255)
-    # rock cap on top (lit), drawn last so it caps the faces cleanly
-    cap = cut_diamond(rock, fw, 64, rng, 1.08, (rock.width // 2, rock.height // 2))
+    # sandy cap on top, slightly shadowed vs the bright floor so raised walls read
+    # distinct; the darker shaded faces below give the wall its height.
+    cap = cut_diamond(rock, fw, 64, rng, 0.88, (rock.width // 2, rock.height // 2))
     out.paste(cap, (0, 0), cap)
     return out
 
@@ -476,8 +527,10 @@ def build_tiles(textures, fw, fh, frames):
     """Compose the 10-frame floor sheet from generated textures."""
     rng = random.Random(7)
     sand, rock, spice = textures["tex_sand"], textures["tex_rock"], textures["tex_spice"]
+    sietch = textures.get("tex_sietch", rock)  # warm sandstone for the carved hub
     sand_a = (sand.width // 2, sand.height // 2)
     rock_a = (rock.width // 2, rock.height // 2)
+    sietch_a = (sietch.width // 2, sietch.height // 2)
     tiles = [
         cut_diamond(sand, fw, fh, rng, 1.0, sand_a),    # 0 sand a
         cut_diamond(sand, fw, fh, rng, 0.985, sand_a),  # 1 sand b (near-identical)
@@ -487,8 +540,11 @@ def build_tiles(textures, fw, fh, frames):
         cut_diamond(spice, fw, fh, rng),                # 5 spice-flecked
         cut_diamond(sand, fw, fh, rng, 0.9, sand_a),    # 6 drum sand (ringed below)
         None,                                            # 7 highlight (procedural)
-        cut_diamond(rock, fw, fh, rng, 0.85, rock_a),   # 8 sietch floor (lit cavern stone)
-        cut_diamond(rock, fw, fh, rng, 0.95, rock_a),   # 9 door pad (gold rim below)
+        # sietch FLOOR: bright warm sand, clearly lighter than the shadowed walls.
+        cut_diamond(sand, fw, fh, rng, 1.45, sand_a),   # 8 sietch floor
+        cut_diamond(sand, fw, fh, rng, 1.50, sand_a),   # 9 door pad (gold rim below)
+        cut_diamond(sand, fw, fh, rng, 1.35, sand_a),   # 10 sietch floor variant b
+        cut_diamond(sand, fw, fh, rng, 1.55, sand_a),   # 11 sietch floor variant c
     ]
     # drum sand rings
     d = ImageDraw.Draw(tiles[6])
@@ -538,8 +594,8 @@ def main():
 
     if "wall" in meta:
         _, fw, fh, _, _, _ = meta["wall"]
-        build_wall(textures["tex_rock"], fw, fh).save(os.path.join(RAW, "wall.png"))
-        print(f"  wall: procedural iso block {fw}x{fh}")
+        build_wall(textures["tex_sand"], fw, fh).save(os.path.join(RAW, "wall.png"))
+        print(f"  wall: procedural iso block {fw}x{fh} (warm sand)")
 
     for name, builder in (("mound", build_mound), ("carryall", build_carryall)):
         if name not in meta:

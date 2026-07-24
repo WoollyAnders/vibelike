@@ -1,10 +1,10 @@
 # name  file  frame_w frame_h frames  anchor_x anchor_y
-tiles tiles.png 128 64 10 64 32
+tiles tiles.png 128 64 12 64 32
 player player.png 64 128 4 32 120
 rock rock.png 128 128 1 64 104
 hound hound.png 64 64 2 32 52
 corpse corpse.png 64 40 1 32 28
-wall wall.png 128 160 1 64 128
+wall wall.png 128 96 1 64 80
 cistern cistern.png 96 96 1 48 80
 ripple ripple.png 128 64 2 64 32
 mound mound.png 128 96 3 64 64
@@ -31,6 +31,18 @@ spicecache spicecache.png 64 40 1 32 28
 ui_panel ui_panel.png 1280 88 1 0 0
 ui_socket ui_socket.png 88 88 1 44 44
 ui_plaque ui_plaque.png 480 48 1 0 0
+prop_rug prop_rug.png 104 60 1 52 52
+prop_brazier prop_brazier.png 64 88 1 32 80
+prop_weaponrack prop_weaponrack.png 72 104 1 36 96
+prop_suitrack prop_suitrack.png 72 104 1 36 96
+prop_urn prop_urn.png 48 72 1 24 64
+prop_banner prop_banner.png 56 112 1 28 104
+prop_baskets prop_baskets.png 64 56 1 32 48
+prop_table prop_table.png 88 64 1 44 56
+prop_spicesacks prop_spicesacks.png 72 56 1 36 48
+door_seal door_seal.png 88 112 1 44 104
+fremen fremen.png 64 128 1 32 120
+fremen2 fremen2.png 64 128 1 32 120
 player_fedaykin_dir player_fedaykin_dir.png 64 128 5 32 120
 player_saboteur_dir player_saboteur_dir.png 64 128 5 32 120
 player_sayyadina_dir player_sayyadina_dir.png 64 128 5 32 120
