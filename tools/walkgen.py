@@ -51,19 +51,35 @@ def api_key():
 
 GRID_ROWS, GRID_COLS = 2, 4   # 8 keyframes, read left-to-right then top-to-bottom
 
-def prompt_for(desc):
+# Three real views generated per character; the engine's 5-view strip is built as
+# [front, front, side, back, back] (S, SE, E, NE, N — west half mirrors east), so
+# on-screen: move right/left -> side, move up -> back, move down -> front.
+VIEWS = ["side", "front", "back"]
+
+def _facing_clause(view):
+    if view == "side":
+        return ("In EVERY cell the character faces RIGHT (moving toward the right "
+                "edge) in strict side profile — NEVER mirror or flip; the face, "
+                "chest and leading knee point right in all cells. ")
+    if view == "front":
+        return ("In EVERY cell the character faces the VIEWER directly (a front "
+                "three-quarter view, walking straight toward the camera / toward "
+                "the bottom): we see the face and the front of the chest; the legs "
+                "step alternately toward the viewer and the arms swing at the sides. ")
+    return ("In EVERY cell the character faces directly AWAY from the viewer (a "
+            "back view, walking away / toward the top): we see the back of the "
+            "hood/head and the back of the body; the legs step alternately away "
+            "and the arms swing at the sides. ")
+
+def prompt_for(desc, view):
     return (
         f"A {GRID_ROWS}-row by {GRID_COLS}-column grid of {GRID_ROWS*GRID_COLS} "
         "animation keyframes on a fully transparent background, exactly ONE figure "
         "centered in each grid cell, read left-to-right then top-to-bottom as the "
-        "frames of one smooth walk cycle. In EVERY cell the character faces RIGHT "
-        "(moving toward the right edge) — NEVER mirror or flip the character; the "
-        "face, chest and leading knee point right in all cells without exception. "
-        "Every cell shows the SAME character in "
-        "strict right-facing side profile at the next point of the stride: contact "
-        "with the left foot forward, passing, contact with the right foot forward, "
-        "passing, and so on — legs swing (one forward, one back) and arms swing "
-        "opposite the legs, so the cells in order animate a walking loop. "
+        "frames of one smooth walk cycle. " + _facing_clause(view) +
+        "Consecutive cells show the SAME character at the next point of the stride: "
+        "contact with one foot forward, passing, contact with the other foot "
+        "forward, passing, and so on, so the cells in order animate a walking loop. "
         f"Character: {desc}. CRITICAL: keep the character's costume, colors, "
         "proportions and overall SIZE IDENTICAL in every cell; only the limb pose "
         "changes between cells. Center each figure in its cell with generous "
@@ -115,18 +131,20 @@ def correct_facing(key, img):
         img.paste(img.crop(box).transpose(Image.FLIP_LEFT_RIGHT), box)
     return img, len(lefts)
 
-def generate(key, name, desc):
-    cache = os.path.join(CACHE, f"{name}_walkcycle.png")
+def generate(key, name, desc, view):
+    # side keeps its original cache name so the existing (good) side sheet is reused
+    suffix = "walkcycle" if view == "side" else f"walk_{view}"
+    cache = os.path.join(CACHE, f"{name}_{suffix}.png")
     if os.path.isfile(cache):
-        print(f"  {name}: cached")
+        print(f"  {name} [{view}]: cached")
         return Image.open(cache).convert("RGBA")
-    body = {"model": "gpt-image-1", "prompt": prompt_for(desc), "size": "1024x1024",
+    body = {"model": "gpt-image-1", "prompt": prompt_for(desc, view), "size": "1024x1024",
             "quality": "high", "output_format": "png", "background": "transparent", "n": 1}
     req = urllib.request.Request(
         "https://api.openai.com/v1/images/generations",
         data=json.dumps(body).encode(),
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
-    print(f"  {name}: generating walk cycle...")
+    print(f"  {name} [{view}]: generating walk cycle...")
     with urllib.request.urlopen(req, timeout=300) as r:
         data = json.load(r)
     png = base64.b64decode(data["data"][0]["b64_json"])
@@ -206,10 +224,13 @@ def _centroid_x(c):
                 sx += x; n += 1
     return sx / n if n else w / 2
 
-def build_strip(img):
+def build_frames(img):
+    """Slice + size-normalize a walk grid into a list of FW x FH frames (+ the
+    idle frame). Normalization pins every frame to HEIGHT so all directions end
+    up the same on-screen size even though they come from separate generations."""
     crops = grid_cells(img)
     if not crops:
-        return None, 0, None
+        return [], None
     # Drop mis-sliced fragments (a detached blade/box that crossed a cell edge):
     # they carry far less opaque mass than a real figure.
     a_all = [_alpha_area(c) for c in crops]
@@ -244,13 +265,36 @@ def build_strip(img):
         cell.paste(c, (ox, oy), c)
         return cell
     frames = [render(c) for c in normed]
-    strip = Image.new("RGBA", (FW * n, FH), (0, 0, 0, 0))
-    for i, f in enumerate(frames):
-        strip.paste(f, (i * FW, 0), f)
     # idle = the narrowest (legs-together) frame — the most standing-like pose, so
     # idle and walk share one art source (same size, aspect and style).
     idle = frames[min(range(n), key=lambda i: normed[i].width)]
-    return strip, n, idle
+    return frames, idle
+
+def _concat(frames):
+    strip = Image.new("RGBA", (FW * len(frames), FH), (0, 0, 0, 0))
+    for i, f in enumerate(frames):
+        strip.paste(f, (i * FW, 0), f)
+    return strip
+
+K_DIR = 6  # frames per direction in the 5-view walk strip
+
+def _resample(frames, k):
+    """Pick k frames evenly across a walk loop of n frames (preserves phase order)."""
+    n = len(frames)
+    return [frames[i * n // k] for i in range(k)] if n else []
+
+# 5 engine views (S, SE, E, NE, N) built from the 3 real views. West-half facings
+# mirror the east views at draw time (facing_to_view5), so this covers all 8 dirs.
+VIEW_ORDER = ["front", "front", "side", "back", "back"]
+
+def assemble_walk5(frames_by_view):
+    seq = []
+    for v in VIEW_ORDER:
+        seq += _resample(frames_by_view[v], K_DIR)
+    return _concat(seq), len(seq)
+
+def assemble_idle5(idle_by_view):
+    return _concat([idle_by_view[v] for v in VIEW_ORDER])
 
 def update_meta(entry, frames):
     """Insert/replace a meta.txt line for atlas entry `entry` (frames wide)."""
@@ -264,6 +308,17 @@ def update_meta(entry, frames):
         lines.append(row)
     open(path, "w").write("\n".join(lines) + "\n")
 
+def _side_fixed(key, name, raw):
+    """The side view is normalized to one facing (right) via a cached gpt-4o check;
+    front/back have no left/right ambiguity so they're used as generated."""
+    fixed_path = os.path.join(CACHE, f"{name}_walkcycle_fixed.png")
+    if os.path.isfile(fixed_path):
+        return Image.open(fixed_path).convert("RGBA")
+    fixed, flipped = correct_facing(key, raw.copy())
+    fixed.save(fixed_path)
+    print(f"  {name}: side facing normalized ({flipped} cell(s) flipped)")
+    return fixed
+
 def main():
     key = api_key()
     if not key:
@@ -271,23 +326,30 @@ def main():
     want = [a for a in sys.argv[1:]] or list(CHARS)
     for name in want:
         if name not in CHARS: continue
-        raw = generate(key, name, CHARS[name])
-        # Normalize facing so every cell faces the same way (cached once).
-        fixed_path = os.path.join(CACHE, f"{name}_walkcycle_fixed.png")
-        if os.path.isfile(fixed_path):
-            fixed = Image.open(fixed_path).convert("RGBA")
-        else:
-            fixed, flipped = correct_facing(key, raw.copy())
-            fixed.save(fixed_path)
-            print(f"  {name}: facing normalized ({flipped} cell(s) flipped)")
-        strip, n, idle = build_strip(fixed)
-        if not strip:
-            print(f"  {name}: NO FRAMES sliced"); continue
-        strip.save(os.path.join(RAW, f"{name}_walkcycle.png"))
-        idle.save(os.path.join(RAW, f"{name}_idle.png"))
-        update_meta(f"{name}_walkcycle", n)
+        frames_by_view, idle_by_view = {}, {}
+        ok = True
+        for view in VIEWS:
+            raw = generate(key, name, CHARS[name], view)
+            img = _side_fixed(key, name, raw) if view == "side" else raw
+            frames, idle = build_frames(img)
+            if not frames:
+                print(f"  {name} [{view}]: NO FRAMES sliced"); ok = False; break
+            frames_by_view[view], idle_by_view[view] = frames, idle
+            print(f"  {name} [{view}]: {len(frames)} frames")
+        if not ok:
+            continue
+        # keep the side-only dirs=1 strip for reference/fallback
+        _concat(frames_by_view["side"]).save(os.path.join(RAW, f"{name}_walkcycle.png"))
+        idle_by_view["side"].save(os.path.join(RAW, f"{name}_idle.png"))
+        update_meta(f"{name}_walkcycle", len(frames_by_view["side"]))
         update_meta(f"{name}_idle", 1)
-        print(f"  {name}: walk {n} frames + idle")
+        # the directional 5-view strips the game actually uses (dirs=5)
+        walk5, total = assemble_walk5(frames_by_view)
+        walk5.save(os.path.join(RAW, f"{name}_walk5.png"))
+        update_meta(f"{name}_walk5", total)
+        assemble_idle5(idle_by_view).save(os.path.join(RAW, f"{name}_idle5.png"))
+        update_meta(f"{name}_idle5", 5)
+        print(f"  {name}: walk5 {total} frames ({K_DIR}/dir) + directional idle")
     return 0
 
 if __name__ == "__main__":

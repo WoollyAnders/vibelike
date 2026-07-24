@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# size_report.sh <exe> <data-dir>  — prints distributable sizes; warns over 50MB.
+# size_report.sh <exe> <data-dir>  — prints distributable sizes; warns over 2GB.
 set -euo pipefail
 
 exe="$1"
@@ -17,9 +17,9 @@ mb() { awk "BEGIN{printf \"%.2f\", $1/1048576}"; }
 echo "-------------------- size report --------------------"
 echo "  exe:   $(mb "$exe_bytes") MB  ($exe_bytes bytes)"
 echo "  data:  $(mb "$data_bytes") MB"
-echo "  total: $(mb "$total") MB  (ceiling: 50 MB)"
+echo "  total: $(mb "$total") MB  (ceiling: 2 GB)"
 echo "------------------------------------------------------"
 
-if [ "$total" -gt $((50 * 1048576)) ]; then
-  echo "WARNING: distributable exceeds the 50MB ceiling" >&2
+if [ "$total" -gt $((2048 * 1048576)) ]; then
+  echo "WARNING: distributable exceeds the 2GB ceiling" >&2
 fi

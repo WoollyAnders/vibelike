@@ -64,3 +64,9 @@ hound_dirwalk hound_dirwalk.png 64 64 20 32 52
 hound_dirattack hound_dirattack.png 64 64 15 32 52
 hound_diruse hound_diruse.png 64 64 10 32 52
 hound_attack hound_attack.png 64 64 3 32 52
+player_fedaykin_walk5 player_fedaykin_walk5.png 64 128 30 32 120
+player_fedaykin_idle5 player_fedaykin_idle5.png 64 128 5 32 120
+player_saboteur_walk5 player_saboteur_walk5.png 64 128 30 32 120
+player_saboteur_idle5 player_saboteur_idle5.png 64 128 5 32 120
+player_sayyadina_walk5 player_sayyadina_walk5.png 64 128 30 32 120
+player_sayyadina_idle5 player_sayyadina_idle5.png 64 128 5 32 120
