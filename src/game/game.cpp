@@ -73,7 +73,8 @@ constexpr DecorDef kDecorProps[] = {
 
 // Dialog-only Fremen: clicking one shows a flavor bark (full dialog deferred).
 // Rendered with a varied existing NPC sprite; e.data indexes the bark/sprite.
-constexpr const char* kFremenSprites[] = {"fremen", "fremen2", "naib"};
+constexpr const char* kFremenSprites[] = {"fremen",  "fremen2", "fremen3", "fremen4",
+                                          "fremen5", "fremen6", "fremen7", "naib"};
 constexpr const char* kFremenBarks[] = {
     "\"The desert gives, and the desert takes. Walk without rhythm, water-brother.\"",
     "\"Bless the Maker and His water. Bless the coming and going of Him.\"",
@@ -438,33 +439,30 @@ void add_decor(uint8_t prop, int x, int y) {
     if (d.opaque) z.flags[idx] |= map::TF_OPAQUE;
 }
 
-// Furnish the sietch warren chambers. Deterministic (same layout every run).
+// Furnish the sietch warren chambers. Deterministic. Props sit against the back
+// (north) and side walls of each chamber — where furniture actually goes — so the
+// hub reads as furnished rather than props scattered mid-floor. Rugs lie flat in
+// the open. (Chamber-relative: north = low y = the far wall the camera sees behind.)
 void place_sietch_decor() {
     g.decor.clear();
-    // great hall: a central rug you can walk on + framing braziers + banners + table
-    add_decor(0, 32, 31);  add_decor(0, 32, 34);          // rugs (non-blocking)
-    add_decor(1, 24, 24);  add_decor(1, 40, 24);          // braziers
-    add_decor(5, 23, 27);  add_decor(5, 41, 27);          // wall banners
-    add_decor(7, 28, 25);                                  // table
-    // cistern chamber: water urns flanking the basin
-    add_decor(4, 29, 12);  add_decor(4, 35, 12);
-    add_decor(0, 32, 18);
-    // living quarters (west): sleeping rugs, baskets, a brazier
-    add_decor(0, 10, 30);  add_decor(0, 16, 34);
-    add_decor(6, 8, 26);   add_decor(6, 18, 26);
-    add_decor(1, 13, 37);
-    // storeroom (east): baskets, spice sacks, urns, a work table
-    add_decor(6, 46, 24);  add_decor(6, 55, 24);
-    add_decor(8, 46, 34);  add_decor(8, 55, 34);  add_decor(8, 50, 23);
-    add_decor(4, 48, 30);  add_decor(7, 53, 31);
-    // armory (south-west): weapon + stillsuit racks along the walls
-    add_decor(2, 15, 42);  add_decor(2, 26, 42);
-    add_decor(3, 15, 52);  add_decor(3, 26, 52);
-    add_decor(0, 20, 47);
-    // sleeping chamber (south-east): rugs, baskets, brazier
-    add_decor(0, 44, 44);  add_decor(0, 48, 49);
-    add_decor(6, 41, 41);  add_decor(6, 51, 51);
-    add_decor(1, 50, 42);
+    // Only clearly-NON-human props (rug 0, brazier 1, urn 4, baskets 6, table 7,
+    // spice sacks 8). The weapon/stillsuit racks and banners were figure-height and
+    // read as extra standing people (the "copy-paste NPC" clusters), so they're out.
+    // great hall: a big central rug, braziers by the north wall, a table
+    add_decor(0, 32, 31);                                  // central rug
+    add_decor(1, 24, 23);  add_decor(1, 40, 23);          // braziers (north corners)
+    add_decor(7, 25, 24);                                  // table (against NW wall)
+    // cistern chamber: urns flanking the basin
+    add_decor(4, 30, 12);  add_decor(4, 34, 12);
+    // living quarters: a sleeping rug + baskets + a warm brazier
+    add_decor(0, 12, 32);  add_decor(6, 8, 25);  add_decor(1, 18, 26);
+    // storeroom: spice sacks + baskets + an urn along the back walls
+    add_decor(8, 46, 23);  add_decor(8, 55, 23);  add_decor(6, 46, 34);
+    add_decor(4, 55, 30);
+    // armory: a low rug + baskets (no figure-like racks)
+    add_decor(0, 20, 47);  add_decor(6, 16, 43);  add_decor(6, 25, 51);
+    // sleeping chamber: a rug + baskets
+    add_decor(0, 46, 46);  add_decor(6, 42, 42);  add_decor(6, 50, 50);
 }
 
 void spawn_zone_wildlife(uint8_t zone_id) {
@@ -476,15 +474,15 @@ void spawn_zone_wildlife(uint8_t zone_id) {
         place_npc_near(EType::Naib, zone_id, 30, 30);       // great hall
         place_npc_near(EType::Sayyadina, zone_id, 32, 16);  // cistern chamber
         place_npc_near(EType::Smuggler, zone_id, 50, 28);   // storeroom
-        // dialog-only Fremen (each tagged with a flavor-bark index)
-        place_npc_near(EType::Fremen, zone_id, 12, 32, 0);  // quarters
-        place_npc_near(EType::Fremen, zone_id, 16, 28, 5);  // quarters
-        place_npc_near(EType::Fremen, zone_id, 20, 48, 4);  // armory
-        place_npc_near(EType::Fremen, zone_id, 38, 34, 2);  // great hall
-        place_npc_near(EType::Fremen, zone_id, 46, 46, 3);  // sleeping chamber
-        place_npc_near(EType::Fremen, zone_id, 30, 17, 1);  // cistern chamber
-        place_npc_near(EType::Fremen, zone_id, 52, 32, 6);  // storeroom
-        place_npc_near(EType::Fremen, zone_id, 26, 34, 7);  // great hall
+        // dialog-only Fremen — one per chamber, each in open floor well away from
+        // the vendors and the wall-hugging props (so no NPC+prop "huddle" reads as
+        // a cluster), each a distinct tribesperson (data = sprite/bark index).
+        place_npc_near(EType::Fremen, zone_id, 13, 30, 0);  // living quarters
+        place_npc_near(EType::Fremen, zone_id, 20, 47, 1);  // armory
+        place_npc_near(EType::Fremen, zone_id, 46, 47, 2);  // sleeping chamber
+        place_npc_near(EType::Fremen, zone_id, 53, 32, 3);  // storeroom
+        place_npc_near(EType::Fremen, zone_id, 36, 28, 4);  // great hall (east)
+        place_npc_near(EType::Fremen, zone_id, 26, 32, 5);  // great hall (west)
         return;
     }
     if (zone_id == map::kZoneDesert)

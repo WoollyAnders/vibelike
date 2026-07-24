@@ -607,9 +607,14 @@ SHEETS = {
     "prop_table":      (lambda: make_box(22, 16), 22, 16, 1, 11, 14),
     "prop_spicesacks": (lambda: make_box(18, 14), 18, 14, 1, 9, 12),
     "door_seal":       (lambda: make_box(22, 28), 22, 28, 1, 11, 26),
-    # --- dialog-only Fremen tribesfolk ---
+    # --- dialog-only Fremen tribesfolk (7 distinct) ---
     "fremen":          (lambda: make_box(16, 32), 16, 32, 1, 8, 30),
     "fremen2":         (lambda: make_box(16, 32), 16, 32, 1, 8, 30),
+    "fremen3":         (lambda: make_box(16, 32), 16, 32, 1, 8, 30),
+    "fremen4":         (lambda: make_box(16, 32), 16, 32, 1, 8, 30),
+    "fremen5":         (lambda: make_box(16, 32), 16, 32, 1, 8, 30),
+    "fremen6":         (lambda: make_box(16, 32), 16, 32, 1, 8, 30),
+    "fremen7":         (lambda: make_box(16, 32), 16, 32, 1, 8, 30),
 }
 
 def main():
