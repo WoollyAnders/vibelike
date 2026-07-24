@@ -334,6 +334,12 @@ def main():
             frames, idle = build_frames(img)
             if not frames:
                 print(f"  {name} [{view}]: NO FRAMES sliced"); ok = False; break
+            if view == "side":
+                # The generated side art faces LEFT; the engine's E view (view 2,
+                # flip=false in facing_to_view5) must face RIGHT, so mirror it —
+                # then move-right shows right-facing and move-left mirrors to left.
+                frames = [f.transpose(Image.FLIP_LEFT_RIGHT) for f in frames]
+                idle = idle.transpose(Image.FLIP_LEFT_RIGHT)
             frames_by_view[view], idle_by_view[view] = frames, idle
             print(f"  {name} [{view}]: {len(frames)} frames")
         if not ok:

@@ -38,10 +38,16 @@ trooper_dir trooper_dir.png 64 128 5 32 120
 hound_dir hound_dir.png 64 64 5 32 52
 player_fedaykin_walkcycle player_fedaykin_walkcycle.png 64 128 8 32 120
 player_fedaykin_idle player_fedaykin_idle.png 64 128 1 32 120
+player_fedaykin_walk5 player_fedaykin_walk5.png 64 128 30 32 120
+player_fedaykin_idle5 player_fedaykin_idle5.png 64 128 5 32 120
 player_saboteur_walkcycle player_saboteur_walkcycle.png 64 128 8 32 120
 player_saboteur_idle player_saboteur_idle.png 64 128 1 32 120
+player_saboteur_walk5 player_saboteur_walk5.png 64 128 30 32 120
+player_saboteur_idle5 player_saboteur_idle5.png 64 128 5 32 120
 player_sayyadina_walkcycle player_sayyadina_walkcycle.png 64 128 8 32 120
 player_sayyadina_idle player_sayyadina_idle.png 64 128 1 32 120
+player_sayyadina_walk5 player_sayyadina_walk5.png 64 128 30 32 120
+player_sayyadina_idle5 player_sayyadina_idle5.png 64 128 5 32 120
 player_fedaykin_walk player_fedaykin_walk.png 64 128 4 32 120
 player_saboteur_walk player_saboteur_walk.png 64 128 4 32 120
 player_sayyadina_walk player_sayyadina_walk.png 64 128 4 32 120
@@ -64,9 +70,3 @@ hound_dirwalk hound_dirwalk.png 64 64 20 32 52
 hound_dirattack hound_dirattack.png 64 64 15 32 52
 hound_diruse hound_diruse.png 64 64 10 32 52
 hound_attack hound_attack.png 64 64 3 32 52
-player_fedaykin_walk5 player_fedaykin_walk5.png 64 128 30 32 120
-player_fedaykin_idle5 player_fedaykin_idle5.png 64 128 5 32 120
-player_saboteur_walk5 player_saboteur_walk5.png 64 128 30 32 120
-player_saboteur_idle5 player_saboteur_idle5.png 64 128 5 32 120
-player_sayyadina_walk5 player_sayyadina_walk5.png 64 128 30 32 120
-player_sayyadina_idle5 player_sayyadina_idle5.png 64 128 5 32 120

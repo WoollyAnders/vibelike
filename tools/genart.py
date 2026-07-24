@@ -55,8 +55,13 @@ SPRITES = {
                "tattered dark robes, viewed from above at an isometric angle, "
                "isolated figure on a fully transparent background, no ground, "
                "no sand, no scene",
-    "wall":    "a tall carved sandstone cave wall block segment, rectangular "
-               "monolithic slab, hewn stone texture with chisel marks",
+    "wall":    "a seamless section of a TALL CONTINUOUS rough-hewn rock cavern "
+               "wall face seen straight on, jagged natural sandstone that clearly "
+               "CONTINUES past every edge of the frame (left, right and top), NO "
+               "flat top surface, NO free-standing edges or corners, NO ground or "
+               "floor, NO cast shadow beneath it — just a solid vertical slab of "
+               "living rock filling the entire frame edge to edge so copies placed "
+               "side by side merge into one unbroken wall",
     "cistern": "an ancient stone water cistern basin, round carved rock rim, "
                "still dark water surface glinting inside, small pipes",
     "rock":    "a weathered desert rock outcrop boulder cluster, wind-carved "

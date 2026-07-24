@@ -19,10 +19,11 @@ void carve_room(Zone& z, int x0, int y0, int x1, int y1) {
             // interior with a worn rock rim and the odd spice-fleck underfoot.
             const bool rim = (x == x0 || x == x1 || y == y0 || y == y1);
             const uint32_t h = hash_combine(x, y) & 255u;
+            // Stone cavern floor only — no spice-fleck (frame 5) here; the reddish
+            // spice tile belongs in the desert, not the carved sietch interior.
             uint8_t frame = 8;                          // sietch stone
             if (rim)          frame = uint8_t(3 + (h & 1));  // rock ground rim
-            else if (h < 36)  frame = uint8_t(3 + (h & 1));  // scattered rock
-            else if (h < 48)  frame = 5;                     // spice-fleck
+            else if (h < 48)  frame = uint8_t(3 + (h & 1));  // scattered worn rock
             z.floor[y * W + x] = frame;
         }
 }
