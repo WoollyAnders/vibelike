@@ -568,7 +568,7 @@ SHEETS = {
     "rock":     (lambda: make_rock_prop(), 32, 32, 1, 16, 26),
     "hound":    (lambda: make_hound(), 16, 16, 2, 8, 13),
     "corpse":   (lambda: make_corpse(), 16, 10, 1, 8, 7),
-    "wall":     (lambda: make_box(32, 24), 32, 24, 1, 16, 20),  # procedural iso block (low rim)
+    "wall":     (lambda: make_box(32, 38), 32, 38, 1, 16, 34),  # procedural iso block (enclosing)
     "cistern":  (lambda: make_cistern(), 24, 24, 1, 12, 20),
     "ripple":   (lambda: make_ripple(), 32, 16, 2, 16, 8),
     "mound":    (lambda: make_mound(), 32, 24, 3, 16, 16),

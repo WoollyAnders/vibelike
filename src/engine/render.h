@@ -35,3 +35,8 @@ void draw_text_shadow(DrawCtx& ctx, const char* text, int x, int y,
                       uint8_t color, uint8_t shadow, int scale = 0);
 
 void fill_rect(DrawCtx& ctx, int x, int y, int w, int h, uint8_t color);
+
+// Soft elliptical contact shadow: darkens the framebuffer (the floor already
+// drawn) under an actor/prop so billboards read as grounded, not stickers.
+// Call before the sprite is drawn over it. (cx,cy) is the ground-contact point.
+void ground_shadow(Framebuffer* f, int cx, int cy, int rx, int ry);

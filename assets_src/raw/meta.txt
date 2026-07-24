@@ -4,7 +4,7 @@ player player.png 64 128 4 32 120
 rock rock.png 128 128 1 64 104
 hound hound.png 64 64 2 32 52
 corpse corpse.png 64 40 1 32 28
-wall wall.png 128 96 1 64 80
+wall wall.png 128 152 1 64 136
 cistern cistern.png 96 96 1 48 80
 ripple ripple.png 128 64 2 64 32
 mound mound.png 128 96 3 64 64
