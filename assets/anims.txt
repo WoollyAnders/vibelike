@@ -1,12 +1,12 @@
 # sprite_key      state  atlas_entry               tpf  loop  dirs  events
 # dirs: 1 = single view, 5 = S/SE/E/NE/N direction strip (west mirrors east)
 # events: frame:name pairs or - for none
-player_fedaykin   idle   player_fedaykin_idle       10  loop  1  -
-player_fedaykin   walk   player_fedaykin_walkcycle   5   loop  1  1:footstep,4:footstep
-player_saboteur   idle   player_saboteur_idle       10  loop  1  -
-player_saboteur   walk   player_saboteur_walkcycle   5   loop  1  1:footstep,4:footstep
-player_sayyadina  idle   player_sayyadina_idle      10  loop  1  -
-player_sayyadina  walk   player_sayyadina_walkcycle  5   loop  1  1:footstep,4:footstep
+player_fedaykin   idle   player_fedaykin_idle5      10  loop  5  -
+player_fedaykin   walk   player_fedaykin_walk5       5   loop  5  1:footstep,4:footstep
+player_saboteur   idle   player_saboteur_idle5      10  loop  5  -
+player_saboteur   walk   player_saboteur_walk5       5   loop  5  1:footstep,4:footstep
+player_sayyadina  idle   player_sayyadina_idle5     10  loop  5  -
+player_sayyadina  walk   player_sayyadina_walk5      5   loop  5  1:footstep,4:footstep
 trooper           idle   trooper_dir               16  loop  5  -
 trooper           walk   trooper_dirwalk           6   loop  5  1:footstep,3:footstep
 hound             idle   hound                     14  loop  1  -
