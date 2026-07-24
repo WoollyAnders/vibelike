@@ -357,6 +357,7 @@ HEIGHTS = {k: v * FIG_SCALE for k, v in {
     "glowglobe": 20, "rock": 52, "wall": 76, "cistern": 40,
     "wormhead": 104, "wormseg": 60, "crawler": 88,
     "champion": 58, "baron": 60, "guildsman": 54,
+    "fremen": 52, "fremen2": 52,  # match the player's on-screen stature
 }.items()}
 
 def _green_dominant(c):
@@ -519,7 +520,7 @@ def build_wall(rock, fw, fh):
                 opx[x, y] = (int(r * sh), int(g * sh), int(b * sh), 255)
     # sandy cap on top, slightly shadowed vs the bright floor so raised walls read
     # distinct; the darker shaded faces below give the wall its height.
-    cap = cut_diamond(rock, fw, 64, rng, 0.88, (rock.width // 2, rock.height // 2))
+    cap = cut_diamond(rock, fw, 64, rng, 0.75, (rock.width // 2, rock.height // 2))
     out.paste(cap, (0, 0), cap)
     return out
 
@@ -540,11 +541,12 @@ def build_tiles(textures, fw, fh, frames):
         cut_diamond(spice, fw, fh, rng),                # 5 spice-flecked
         cut_diamond(sand, fw, fh, rng, 0.9, sand_a),    # 6 drum sand (ringed below)
         None,                                            # 7 highlight (procedural)
-        # sietch FLOOR: bright warm sand, clearly lighter than the shadowed walls.
-        cut_diamond(sand, fw, fh, rng, 1.45, sand_a),   # 8 sietch floor
-        cut_diamond(sand, fw, fh, rng, 1.50, sand_a),   # 9 door pad (gold rim below)
-        cut_diamond(sand, fw, fh, rng, 1.35, sand_a),   # 10 sietch floor variant b
-        cut_diamond(sand, fw, fh, rng, 1.55, sand_a),   # 11 sietch floor variant c
+        # sietch FLOOR: natural warm sand, a touch lighter than the shadowed walls
+        # (not blinding — earlier it was over-brightened).
+        cut_diamond(sand, fw, fh, rng, 0.98, sand_a),   # 8 sietch floor
+        cut_diamond(sand, fw, fh, rng, 1.02, sand_a),   # 9 door pad (gold rim below)
+        cut_diamond(sand, fw, fh, rng, 0.92, sand_a),   # 10 sietch floor variant b
+        cut_diamond(sand, fw, fh, rng, 1.06, sand_a),   # 11 sietch floor variant c
     ]
     # drum sand rings
     d = ImageDraw.Draw(tiles[6])

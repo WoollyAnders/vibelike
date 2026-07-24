@@ -3171,8 +3171,10 @@ void pass_decor(RenderCtx& r) {
             iso::tile_to_screen(d.x, d.y, g.cam, sx, sy);
             if (sx < -96 || sx > fb::W + 96 || sy < -128 || sy > fb::H + 128) continue;
             const DecorDef& def = kDecorProps[d.prop];
-            g.draw_list.add(&sheet_or_ph(r, def.key), 0, sx, sy + def.seat,
-                            tile_light(r, idx), def.layer);
+            const SpriteSheet& psh = sheet_or_ph(r, def.key);
+            if (d.prop != 0)  // ground standing props (the rug is already flat)
+                ground_shadow(r.ctx.frame, sx, sy + 14, psh.fw / 4 + 6, psh.fw / 8 + 3);
+            g.draw_list.add(&psh, 0, sx, sy + def.seat, tile_light(r, idx), def.layer);
         }
     }
     // exit door as a real prop, wherever a TF_DOOR pad sits
@@ -3218,6 +3220,7 @@ void pass_entities(RenderCtx& r) {
                     sx += int(g.rng.fx.below(3)) - 1;
                 }
                 const bool riding = e.type == EType::Player && g.pl.riding;
+                if (!riding) ground_shadow(r.ctx.frame, sx, sy + 16, 18, 8);
                 g.draw_list.add(sheet, frame, sx, sy + (riding ? -20 : 12),
                                 light2, riding ? 3 : 1, flip);
                 if (e.type == EType::ShieldTrooper && g.anim_tick % 5 == 0)
@@ -3232,6 +3235,14 @@ void pass_entities(RenderCtx& r) {
         iso::tile_to_screen(e.x, e.y, g.cam, sx, sy);
         int light = g.lightmap[idx];
         if (light < light::kEntityMinLight) light = light::kEntityMinLight;  // mobs stay visible
+        // contact shadow to ground standing actors (skip flat/flying/pickup types)
+        switch (e.type) {
+            case EType::Glowglobe: case EType::HunterSeeker: case EType::Corpse:
+            case EType::SpiceCache: case EType::Loot: case EType::Thumper: break;
+            default:
+                if (!(e.type == EType::Player && g.pl.riding))
+                    ground_shadow(r.ctx.frame, sx, sy + 16, 18, 8);
+        }
         switch (e.type) {
             case EType::Player:
                 g.draw_list.add(player_spr, (g.anim_tick / 9) % 4, sx,

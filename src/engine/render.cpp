@@ -76,6 +76,28 @@ void draw_text_shadow(DrawCtx& ctx, const char* text, int x, int y,
     draw_text(ctx, text, x, y, color, s);
 }
 
+void ground_shadow(Framebuffer* f, int cx, int cy, int rx, int ry) {
+    if (rx < 1 || ry < 1) return;
+    const int rx2 = rx * rx, ry2 = ry * ry;
+    for (int y = -ry; y <= ry; ++y) {
+        const int py = cy + y;
+        if (py < 0 || py >= fb::H) continue;
+        for (int x = -rx; x <= rx; ++x) {
+            const int px = cx + x;
+            if (px < 0 || px >= fb::W) continue;
+            // normalized squared ellipse distance, 0 at centre .. 256 at the rim
+            const int e = (x * x * 256) / rx2 + (y * y * 256) / ry2;
+            if (e > 256) continue;
+            const int sh = 52 + e * 44 / 256;  // multiply floor by 52%(centre)..96%(rim)
+            const uint32_t c = f->px[py * fb::W + px];
+            const uint32_t r = (((c >> 16) & 0xff) * sh) / 100;
+            const uint32_t g = (((c >> 8) & 0xff) * sh) / 100;
+            const uint32_t b = ((c & 0xff) * sh) / 100;
+            f->px[py * fb::W + px] = 0xff000000u | (r << 16) | (g << 8) | b;
+        }
+    }
+}
+
 void fill_rect(DrawCtx& ctx, int x, int y, int w, int h, uint8_t color) {
     const uint32_t rgb = 0xff000000u | ctx.pal->color[color];
     int x0 = x < 0 ? 0 : x, y0 = y < 0 ? 0 : y;
