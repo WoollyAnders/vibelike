@@ -55,13 +55,6 @@ SPRITES = {
                "tattered dark robes, viewed from above at an isometric angle, "
                "isolated figure on a fully transparent background, no ground, "
                "no sand, no scene",
-    "wall":    "a seamless section of a TALL CONTINUOUS rough-hewn rock cavern "
-               "wall face seen straight on, jagged natural sandstone that clearly "
-               "CONTINUES past every edge of the frame (left, right and top), NO "
-               "flat top surface, NO free-standing edges or corners, NO ground or "
-               "floor, NO cast shadow beneath it — just a solid vertical slab of "
-               "living rock filling the entire frame edge to edge so copies placed "
-               "side by side merge into one unbroken wall",
     "cistern": "an ancient stone water cistern basin, round carved rock rim, "
                "still dark water surface glinting inside, small pipes",
     "rock":    "a weathered desert rock outcrop boulder cluster, wind-carved "
@@ -447,6 +440,38 @@ def cut_diamond(tex, w, h, rng, brightness=1.0, anchor=None):
     out.paste(crop, (0, 0), diamond_mask(w, h))
     return out
 
+def build_wall(rock, fw, fh):
+    """A proper ISOMETRIC wall block, not a billboard: a rock cap that is a
+    128x64 tessellating diamond (so adjacent wall tops merge into one continuous
+    rock surface, exactly like the floor diamonds) plus two shaded side faces
+    dropping to the base. Placed per wall tile with anchor (fw/2, fh-32), the caps
+    tile seamlessly and front tiles occlude the faces behind — reads as a solid
+    carved-rock wall, not stacked stickers."""
+    rng = random.Random(11)
+    out = Image.new("RGBA", (fw, fh), (0, 0, 0, 0))
+    half = fw // 2
+    face_h = fh - 64                       # faces run from the cap down to the base
+    src = rock.resize((fw, fh)).convert("RGBA")
+    spx = src.load()
+    opx = out.load()
+    # left + right front faces, sloped to the cap's front edges, texture-shaded
+    for x in range(fw):
+        if x < half:
+            ytop = 32 + x * 32 // half     # follows the cap's lower-left edge
+            sh = 0.5                        # left face in deeper shadow
+        else:
+            ytop = 32 + (fw - 1 - x) * 32 // half  # lower-right edge
+            sh = 0.72                       # right face, half-lit
+        for k in range(face_h):
+            y = ytop + k
+            if 0 <= y < fh:
+                r, g, b, a = spx[x, (ytop + k) % fh]
+                opx[x, y] = (int(r * sh), int(g * sh), int(b * sh), 255)
+    # rock cap on top (lit), drawn last so it caps the faces cleanly
+    cap = cut_diamond(rock, fw, 64, rng, 1.08, (rock.width // 2, rock.height // 2))
+    out.paste(cap, (0, 0), cap)
+    return out
+
 def build_tiles(textures, fw, fh, frames):
     """Compose the 10-frame floor sheet from generated textures."""
     rng = random.Random(7)
@@ -510,6 +535,11 @@ def main():
     _, fw, fh, frames, _, _ = meta["ripple"]
     build_ripple(textures["tex_ripple"], fw, fh, frames).save(os.path.join(RAW, "ripple.png"))
     print(f"  ripple: {frames} rolled frames at {fw}x{fh}")
+
+    if "wall" in meta:
+        _, fw, fh, _, _, _ = meta["wall"]
+        build_wall(textures["tex_rock"], fw, fh).save(os.path.join(RAW, "wall.png"))
+        print(f"  wall: procedural iso block {fw}x{fh}")
 
     for name, builder in (("mound", build_mound), ("carryall", build_carryall)):
         if name not in meta:
