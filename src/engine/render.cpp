@@ -88,7 +88,7 @@ void ground_shadow(Framebuffer* f, int cx, int cy, int rx, int ry) {
             // normalized squared ellipse distance, 0 at centre .. 256 at the rim
             const int e = (x * x * 256) / rx2 + (y * y * 256) / ry2;
             if (e > 256) continue;
-            const int sh = 52 + e * 44 / 256;  // multiply floor by 52%(centre)..96%(rim)
+            const int sh = 42 + e * 52 / 256;  // multiply floor by 42%(centre)..94%(rim)
             const uint32_t c = f->px[py * fb::W + px];
             const uint32_t r = (((c >> 16) & 0xff) * sh) / 100;
             const uint32_t g = (((c >> 8) & 0xff) * sh) / 100;

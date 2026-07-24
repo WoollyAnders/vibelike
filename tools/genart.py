@@ -118,13 +118,37 @@ SPRITES = {
                   "granules heaped on the ground, faintly luminous cinnamon "
                   "crystals, isolated on a fully transparent background, "
                   "no scene",
-    "fremen": "a Fremen desert tribesman in a worn hooded ochre-brown stillsuit "
-              "and dust robe with a face veil, calm posture, empty hands, full "
-              "body, isolated figure on a fully transparent background, no scene",
-    "fremen2": "a Fremen desert tribeswoman in layered dust-tan robes over a "
-               "stillsuit with a wrapped headscarf and bright blue-within-blue "
-               "eyes, empty hands, full body, isolated figure on a fully "
+    # dialog-only Fremen tribesfolk — each visually distinct, all framed the SAME
+    # way (whole body head-to-feet, standing upright and straight, arms at sides,
+    # narrow silhouette) so they render at one consistent stature.
+    "fremen": "a lean Fremen desert tribesman in a worn hooded ochre stillsuit and "
+              "dust robe with a face veil, standing straight, arms at sides, whole "
+              "body head to feet, narrow silhouette, isolated figure on a fully "
+              "transparent background, no scene",
+    "fremen2": "a Fremen desert tribeswoman in layered dust-tan robes and a wrapped "
+               "headscarf, glowing blue eyes, standing straight, arms at sides, "
+               "whole body head to feet, narrow silhouette, isolated figure on a "
+               "fully transparent background, no scene",
+    "fremen3": "an old grey-bearded Fremen elder in a heavy dark hooded robe "
+               "leaning on a worn walking staff, standing straight, whole body "
+               "head to feet, narrow silhouette, isolated figure on a fully "
                "transparent background, no scene",
+    "fremen4": "a young Fremen woman in a rust-brown stillsuit and short cloak, a "
+               "water-jar strapped at her hip, standing straight, arms at sides, "
+               "whole body head to feet, narrow silhouette, isolated figure on a "
+               "fully transparent background, no scene",
+    "fremen5": "a Fremen warder in a dark hooded stillsuit with crossed straps and "
+               "a slung maula pistol, alert upright stance, arms at sides, whole "
+               "body head to feet, narrow silhouette, isolated figure on a fully "
+               "transparent background, no scene",
+    "fremen6": "a weathered Fremen water-bearer in a pale sun-bleached robe with "
+               "coiled tubing and satchels, standing straight, whole body head to "
+               "feet, narrow silhouette, isolated figure on a fully transparent "
+               "background, no scene",
+    "fremen7": "a Fremen artisan in a leather apron over a tan stillsuit, sleeves "
+               "wrapped, standing straight, arms at sides, whole body head to "
+               "feet, narrow silhouette, isolated figure on a fully transparent "
+               "background, no scene",
     # --- sietch hub decor / furniture (fill their declared boxes) ---
     "prop_rug": "an ornate hand-woven Fremen floor rug lying FLAT on the ground "
                 "seen from a high three-quarter isometric angle, geometric desert "
@@ -357,7 +381,9 @@ HEIGHTS = {k: v * FIG_SCALE for k, v in {
     "glowglobe": 20, "rock": 52, "wall": 76, "cistern": 40,
     "wormhead": 104, "wormseg": 60, "crawler": 88,
     "champion": 58, "baron": 60, "guildsman": 54,
-    "fremen": 52, "fremen2": 52,  # match the player's on-screen stature
+    # Fremen tribesfolk — all at the player's stature (52 -> 104 on screen)
+    "fremen": 52, "fremen2": 52, "fremen3": 52, "fremen4": 52,
+    "fremen5": 52, "fremen6": 52, "fremen7": 52,
 }.items()}
 
 def _green_dominant(c):
@@ -430,10 +456,10 @@ def fit_sprite(img, fw, fh, target_h=None):
     if bbox:
         img = img.crop(bbox)
     if target_h:
-        # Scale to the canonical stature, but cap so a wide pose (weapon/cape/arms)
-        # also fits the frame width — wide figures render a touch shorter rather
-        # than getting guillotined at the frame edge.
-        scale = min(target_h / img.height, (fw - 2) / img.width)
+        # Stature-first: scale to the canonical figure height so every character
+        # reads at a consistent size. A rare over-wide crop is center-cropped to
+        # the frame width below rather than shrinking the whole figure.
+        scale = target_h / img.height
     else:
         scale = min((fw - 2) / img.width, (fh - 2) / img.height)
     img = img.resize((max(1, int(img.width * scale)), max(1, int(img.height * scale))),

@@ -43,6 +43,11 @@ prop_spicesacks prop_spicesacks.png 72 56 1 36 48
 door_seal door_seal.png 88 112 1 44 104
 fremen fremen.png 64 128 1 32 120
 fremen2 fremen2.png 64 128 1 32 120
+fremen3 fremen3.png 64 128 1 32 120
+fremen4 fremen4.png 64 128 1 32 120
+fremen5 fremen5.png 64 128 1 32 120
+fremen6 fremen6.png 64 128 1 32 120
+fremen7 fremen7.png 64 128 1 32 120
 player_fedaykin_dir player_fedaykin_dir.png 64 128 5 32 120
 player_saboteur_dir player_saboteur_dir.png 64 128 5 32 120
 player_sayyadina_dir player_sayyadina_dir.png 64 128 5 32 120
