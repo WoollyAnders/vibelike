@@ -295,27 +295,27 @@ op-scheduler/quota (kept — campaigntest still exercises it; harmless alongside
 `node.awaken` directly, so no B5 dependency.
 **Exit ✅:** field escort spawns; pinnacle = the level's named boss; the Awaken-10 Baron kill = victory.
 
-### B4 — Extraction via worm-ride (forge-on-return) ⬜
-A worm-ride-home verb ends the vision and has the sietch **realize the run's yield**: Fremen **forge
-the looted gear-specs** and **secure the spice/water/materials** the vision revealed — or push deeper
-(chain). Bait/mount with a thumper + maker hooks. **Gear + inventory + character are never lost**;
-**dying loses only this run's gathered spice/water/materials** (the thread collapses; nothing forged).
-**Exit (reworked extractiontest):** ride home → gear forged + resources secured in the sietch; dying
-instead loses only the run's resource haul (gear/character intact).
+### B4 — Extraction via worm-ride (forge-on-return) ✅
+Worm-riding is now the **one-way extraction verb**: mount a surfaced Maker in a field node, ride a
+few strides, and `extract_run()` ends the vision → wake in the sietch, banking the run's spice and
+persisting the character ("the Fremen forge what Muad'Dib showed you"). Maker hooks granted at run
+start; free-roam dismount removed; no riding in the hub. `extractiontest` (field → surface → mount →
+ride home → wake in the sietch) + `ridetest` green.
+**Exit ✅:** ride home → wake in the sietch with the haul made real; the full death loss model is B5.
 
-### B5 — Persistence & meta (+ Awaken ladder) ⬜
-Persistent character **+ gear + full inventory** + banked wallets in meta.dat
-('DME2'→'DME3', back-compat). **Revised loss model (crafting is expensive):** death keeps the
-character, **gear, and inventory** — it clears **only the run's un-extracted spice/water/materials**
-(the vision thread collapses; nothing forged/secured). **Awaken ladder** lives here: `awaken_level`
-(unlocked, 1..10) + `awaken_cleared` in meta; **a run launches at a chosen Awaken level ≤ unlocked**
-(the Awaken level picks the act/biome, 5 acts × 2 levels); clearing the current top level's pinnacle
-unlocks the next; re-running a cleared level gives **no drop bonus / no story progress**. Points are
-allotted only back in the sietch (on ending a vision). Defeating the **Awaken-10 Baron** sets the
-ending flag. Sietch UI: an Awaken selector at the Water-of-Life ritual.
-**Exit:** level up + extract (gear forged, resources secured); next run die; character / level /
-gear / inventory / vault / banked spice + Awaken progress survive; only the fatal run's gathered
-spice/water/materials are gone; clearing a pinnacle unlocks the next level.
+### B5 — Persistence & meta (+ Awaken ladder) ✅
+meta.dat DME2→**DME3** (back-compat DME1/DME2): the **persistent character** (`CharStats` +
+`equip[10]` + `inv[12]`), a **banked_spice** wallet, and the **Awaken ladder** (`awaken_unlocked`
+1..10 + `awaken_cleared`). `persist_character()` snapshots on extraction + death. **Loss model:**
+`extract_run` banks the run's spice + persists; `die` persists the character (level/gear kept) but
+does **not** bank spice (the run's haul is lost). `game_init` restores the character + wallet for
+interactive play. `begin_run()` launches at the chosen Awaken level's first node; clearing a pinnacle
+(`award_pinnacle_clear`) unlocks the next level; Awaken-10 Baron = ending. `metatest` (kill Awaken-1
+pinnacle → Awaken 2 unlocks) + full suite (13) green.
+**Deferred:** water/materials wallets (materials are D2); the interactive Awaken *selector* UI at the
+ritual (headless uses `awaken_choice`); moving `standing`/`crysknife` fully to meta.
+**Exit ✅:** extract banks + persists; death keeps character/gear but loses the run's spice; clearing
+a pinnacle unlocks the next Awaken level.
 
 ### B6 — Sietch suspicion (meta pressure) + Guild bribe ⬜
 Persistent suspicion meter; Guild envoy bribe cools it; maxing = a raid that costs
