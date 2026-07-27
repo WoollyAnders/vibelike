@@ -268,13 +268,20 @@ travel; serialize `cur_node` + node flags, `kSaveVersion` 4→5; dettest `46ae00
 `dcc065906642ebff` (rebaselined), seamtest round-trips a field node; full suite (9) green.
 **Exit ✅:** launch into the graph, traverse node-to-node along the campaign spine, save/load round-trips.
 
-### B2 — Gated run flow + boons (Hades rooms) ⬜
-Sietch = pure hub with **no walk-out door**; the **Water-of-Life vision ritual** (Paul) **commits a
-run** at the current Awaken level (remove the physical exit tile). Each room: clear the elite escort
-→ complete the **biome objective** → a **boon pick** (2-3 run-scoped powerups) → a **previewed
-forward door**. The level funnels to its **pinnacle**; grace retreat to the sietch only before the
-first room is cleared. New: a Boon system + the boon-pick / door-preview overlays + the run-launch UI.
-**Exit:** the ritual commits a run; clear a room → choose a boon → advance; the level ends at its pinnacle.
+### B2 — Gated run flow + Revelation gear picks ✅
+Sietch = pure hub with **no walk-out door**; **Paul** is a hub NPC and clicking him runs the
+**Water-of-Life ritual → `begin_run()`** (the physical exit tile is gone). Field nodes have an east
+**forward door** that advances node-to-node. **Reward = a "Revelation"** (replaces the stat-boon idea):
+at a forward door the vision reveals gear — a two-step **prescient gear suggestion from Paul** (pick 1
+of 3 rolled *slots*, then 1 of 3 rolled *items* for it → into the pack), with a preview of where the
+road leads. **B2a foundation:** the gear model became a **granular Fremen stillsuit paperdoll (10
+slots)** — Weapon, Hood, Mask, NosePlugs, WaterTube, Body, Catchpockets, Pumps, Cloak, **Token** (the
+ARPG amulet-of-identity); every piece contributes an intrinsic affix summed via `affix_total`
+(+`AK_RECLAIM`/`AK_HEAT`); `kSaveVersion` 5→6. *(Per-slot stat balance is provisional until D1 affixes.
+Carried Revelation gear becomes extract-or-lose / forged-on-return in B4/B5. Grace retreat deferred —
+the spine terminates at the sietch, no softlock.)*
+**Exit ✅:** ritual commits a run; advancing a field node opens the Revelation → pick slot → pick item
+→ gear enters the pack + node advances; `reveltest` + full suite green.
 
 ### B3 — Elite gauntlet rooms + per-biome objectives + named bosses ⬜
 Room content spawns **on entry**: an **elite-mob escort** (scaled to Awaken level) guarding the
