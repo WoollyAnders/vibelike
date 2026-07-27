@@ -48,9 +48,11 @@ if(MINGW)
   target_link_options(dustfall PRIVATE -static -static-libgcc -static-libstdc++)
 endif()
 
-# Release builds are GUI-subsystem (no console window); Debug keeps the console
-# for stdout logging.
-set_target_properties(dustfall PROPERTIES WIN32_EXECUTABLE $<CONFIG:Release>)
+# GUI-subsystem (no cmd window pops up on launch) for BOTH debug and release — a
+# console app spawns a console window on Windows, which is noise during playtests.
+# Headless tests (--dettest etc.) still print: their stdout is captured via redirection,
+# and a GUI-subsystem exe writes fine to an inherited/redirected stdout handle.
+set_target_properties(dustfall PROPERTIES WIN32_EXECUTABLE TRUE)
 
 # ---- Asset pipeline + size report ---------------------------------------------
 # raw art (genart/make_assets) -> palette quantizer -> atlas builder -> data/
