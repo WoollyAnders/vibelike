@@ -1,0 +1,5 @@
+godot/godot-cpp/
+godot/build/
+godot/*.so
+godot/*.dll
+godot/.godot/
