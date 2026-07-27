@@ -258,6 +258,15 @@ struct GameState {
 
     bool choosing = false;      // background chooser (interactive new runs)
     int choose_idx = 0;
+    // Front-end screens shown before/around gameplay (the title "login" screen,
+    // an options panel, and a paged field manual). Play == in the world.
+    enum class Screen : uint8_t { Menu, Options, Manual, Play };
+    Screen screen = Screen::Play;
+    int menu_idx = 0;       // main-menu selection
+    int options_idx = 0;    // options selection
+    int manual_page = 0;    // field-manual page
+    bool opt_muted = false;         // options: sound on/off (read by the platform)
+    bool fullscreen_req = false;    // options: one-shot fullscreen-toggle request
 };
 GameState g;
 
@@ -2318,6 +2327,8 @@ void game_init(uint64_t seed, const GameServices& services) {
     g.pl.equip[int(items::Slot::Suit)].def = 9;    // Stillsuit Mk I
     g.pl.hp = player_max_hp();
     g.choosing = services.interactive;
+    // Interactive launches open on the title menu; headless tests jump into play.
+    g.screen = services.interactive ? GameState::Screen::Menu : GameState::Screen::Play;
     if (!g.choosing) apply_background(g.pl, Background::Fedaykin);
 
     g.log.push("The Naib's word: deny them the spice. Go.");
@@ -2610,12 +2621,23 @@ int menu_row_under_mouse(const InputState& in) {
 
 }  // namespace
 
+// Front-end handlers (defined below with the other UI passes).
+namespace {
+bool update_menu(const InputState&);
+void update_options(const InputState&);
+void update_manual(const InputState&);
+}  // namespace
+
 bool game_update(const InputState& in) {
     if (g.hitstop > 0) {  // killing-blow freeze: presentation only
         --g.hitstop;
         return true;
     }
     ++g.anim_tick;
+    // Front-end screens: the world is paused; they run their own input + render.
+    if (g.screen == GameState::Screen::Menu) return update_menu(in);
+    if (g.screen == GameState::Screen::Options) { update_options(in); return true; }
+    if (g.screen == GameState::Screen::Manual) { update_manual(in); return true; }
     if (g.microshake > 0) --g.microshake;
     if (!g.choosing) visual_tick();
     g.hover_tx = -1;
@@ -3440,6 +3462,216 @@ void pass_weather(RenderCtx& r) {
     }
 }
 
+// ---- front-end: title menu, options, field manual -----------------------------
+
+struct ManualPage { const char* title; const char* lines[13]; };
+const ManualPage kManual[] = {
+    {"THE FREMEN REBEL", {
+        "You are a Fremen of the deep desert, waging a water-war on House",
+        "Harkonnen. From your hidden sietch you strike out across the",
+        "Tanzerouft to deny the Baron his spice, then vanish into the sand.",
+        "",
+        "A run is a raid: leave the sietch, sabotage spice harvesters, and",
+        "ride a sandworm home to BANK what you carried. Die in the field and",
+        "the desert keeps your spice and gear -- only banked loot is safe.",
+        "",
+        "'The spice must NOT flow.'",
+        nullptr}},
+    {"CONTROLS", {
+        "WASD ........ move (screen-relative; the cursor aims)",
+        "Left mouse .. primary action / attack toward the cursor",
+        "R/Q/E, RMB .. skills (aimed at the cursor); 1-4 use flasks",
+        "Click NPC ... talk / trade   |   Click the door ... leave the sietch",
+        "G ........... work a harvester    T ... drop a thumper (worm bait)",
+        "C ........... sandwalk (slow, quiet)   R ... mount a surfaced worm",
+        "M ........... map   I ... pack   P/Character ... sheet",
+        "Alt+Enter ... fullscreen   Esc ... back / quit",
+        nullptr}},
+    {"WATER & HEAT", {
+        "Water is life. Every step spends water -- more on open sand and",
+        "under the midday sun, less on rock or at night. At zero water you",
+        "dehydrate and lose blood (life) each turn.",
+        "",
+        "Direct sun at scorching hours builds EXPOSURE; too much and you",
+        "collapse. Move to shade, travel at night, or duck indoors to recover.",
+        "A better stillsuit reclaims more of your water. Drink at the sietch",
+        "cistern, and harvest the water from the fallen.",
+        nullptr}},
+    {"COMBAT & CLASSES", {
+        "Strike a foe by moving into it or clicking it; ranged classes fire",
+        "at the cursor down a clear line. Abilities cost WILL (a shared pool).",
+        "",
+        "Fedaykin ... Conditioning: a tanky melee bruiser (crysknife, sandwalk)",
+        "Saboteur ... Versatility: ranged maula + deployable tech, evasive",
+        "Sayyadina .. Awareness: a Focus shield + spice/poison mysticism",
+        "",
+        "Firing and fighting are LOUD -- noise draws Harkonnen... and worms.",
+        nullptr}},
+    {"HARVESTERS & THE WORM", {
+        "Each field section holds a Harkonnen spice harvester. Deny it --",
+        "spoil or destroy its load -- to earn loot and raise the heat (more",
+        "escorts, richer rewards). Denials commit you to the run.",
+        "",
+        "The seismograph reads WORMSIGN. Shai-Hulud comes for rhythmic noise:",
+        "a planted thumper calls him; sandwalk to stay silent. A worm is death",
+        "on open sand -- but a Fremen can mount and ride the Maker.",
+        nullptr}},
+    {"EXTRACTION (RIDE HOME)", {
+        "You leave a run one of two ways:",
+        "",
+        "  1. Ride the worm home. After a denial, bait a worm with a thumper,",
+        "     mount it with your maker hooks (R), and steer for the sietch.",
+        "     Everything you carried is BANKED -- safe forever.",
+        "",
+        "  2. Die. The sand takes all carried spice, gear, and materials.",
+        "",
+        "Only what you extract and bank funds your growth. Greed kills.",
+        nullptr}},
+    {"THE SIETCH (YOUR HUB)", {
+        "Between raids you rest in the sietch. It is safe: no worms, no death.",
+        "",
+        "The Naib ...... tribe tasks, and the vault (banked gear survives death)",
+        "The Sayyadina . spice-rites and healing",
+        "The Smuggler .. gear, water, and consumables for spice",
+        "",
+        "Spend banked SPICE on the Sietch tree (permanent tribe upgrades). Level",
+        "up to earn attribute points and passive-tree points. Leave by the door.",
+        nullptr}},
+    {"GEAR, FLASKS & CRAFTING", {
+        "Loot drops with affixes and rarities (normal / magic / rare). Equip it",
+        "from your pack; better gear rolls higher tiers in deeper runs.",
+        "",
+        "Flasks -- Life, Will, Utility -- ride a belt and are used on the number",
+        "keys, recharging from kills and time.",
+        "",
+        "Crafting: materials found in runs are spent at the sietch bench to",
+        "reroll, add, remove, or upgrade an item's affixes (PoE-style).",
+        "  (Note: affixes, flasks, and the crafting bench are in active",
+        "   development -- some are still coming online.)",
+        nullptr}},
+};
+constexpr int kManualPages = int(sizeof kManual / sizeof *kManual);
+
+const char* const kMenuItems[]   = {"Enter the Sietch", "Field Manual", "Options",
+                                     "Leave the Desert"};
+constexpr int kMenuCount = 4;
+const char* const kOptionItems[] = {"Sound", "Toggle Fullscreen",
+                                    "Wipe Character + Vault", "Back"};
+constexpr int kOptionCount = 4;
+
+// hit-test a vertically-stacked, horizontally-centered menu; row under the mouse or -1
+int frontend_row_at(const InputState& in, int start_y, int row_h, int count) {
+    if (in.mouse_x < 0 || in.mouse_x < fb::W / 2 - 360 || in.mouse_x > fb::W / 2 + 360)
+        return -1;
+    for (int i = 0; i < count; ++i)
+        if (in.mouse_y >= start_y + i * row_h - 20 && in.mouse_y < start_y + i * row_h + 34)
+            return i;
+    return -1;
+}
+
+void pass_frontend(RenderCtx& r) {
+    DrawCtx& ctx = r.ctx;
+    set_text_scale(2);
+    constexpr int kCh = 8;   // half a 16px glyph (centering); scale-4 title uses 16
+    fill_rect(ctx, 0, 0, fb::W, fb::H, 1);
+    // a warm horizon band so the title screen isn't flat black
+    for (int y = 0; y < 360; ++y)
+        fill_rect(ctx, 0, y, fb::W, 1, uint8_t(32 + (360 - y) * 30 / 360));
+
+    if (g.screen == GameState::Screen::Menu) {
+        draw_text_shadow(ctx, "D U S T F A L L", fb::W / 2 - 15 * 16, 150, 230, 1, 4);
+        draw_text_shadow(ctx, "a Fremen extraction roguelike",
+                         fb::W / 2 - 29 * kCh, 250, 24, 1);
+        for (int i = 0; i < kMenuCount; ++i) {
+            const bool sel = i == g.menu_idx;
+            const int y = 430 + i * 80;
+            if (sel) draw_text_shadow(ctx, ">", fb::W / 2 - 260, y, 245, 1);
+            draw_text_shadow(ctx, kMenuItems[i],
+                             fb::W / 2 - int(std::strlen(kMenuItems[i])) * kCh, y,
+                             uint8_t(sel ? 245 : 20), 1);
+        }
+        draw_text_shadow(ctx, "up / down + ENTER   (mouse works too)",
+                         fb::W / 2 - 37 * kCh, 860, 12, 1);
+        return;
+    }
+    if (g.screen == GameState::Screen::Options) {
+        draw_text_shadow(ctx, "OPTIONS", fb::W / 2 - 7 * kCh, 220, 230, 1);
+        for (int i = 0; i < kOptionCount; ++i) {
+            const bool sel = i == g.options_idx;
+            const int y = 380 + i * 80;
+            char buf[48];
+            if (i == 0) std::snprintf(buf, sizeof buf, "Sound: %s", g.opt_muted ? "OFF" : "ON");
+            else std::snprintf(buf, sizeof buf, "%s", kOptionItems[i]);
+            if (sel) draw_text_shadow(ctx, ">", fb::W / 2 - 260, y, 245, 1);
+            draw_text_shadow(ctx, buf, fb::W / 2 - int(std::strlen(buf)) * kCh, y,
+                             uint8_t(sel ? 245 : 20), 1);
+        }
+        draw_text_shadow(ctx, "ENTER select    ESC back", fb::W / 2 - 24 * kCh, 860, 12, 1);
+        return;
+    }
+    // Manual
+    const ManualPage& p = kManual[g.manual_page];
+    fill_rect(ctx, fb::W / 2 - 580, 80, 1160, 880, 2);
+    fill_rect(ctx, fb::W / 2 - 580, 80, 1160, 3, 228);
+    fill_rect(ctx, fb::W / 2 - 580, 957, 1160, 3, 228);
+    draw_text_shadow(ctx, p.title, fb::W / 2 - int(std::strlen(p.title)) * kCh, 110, 230, 1);
+    int y = 190;
+    for (const char* line : p.lines) {
+        if (!line) break;
+        if (line[0]) draw_text(ctx, line, fb::W / 2 - 550, y, 20);
+        y += 34;
+    }
+    char pg[40];
+    std::snprintf(pg, sizeof pg, "page %d / %d", g.manual_page + 1, kManualPages);
+    draw_text_shadow(ctx, pg, fb::W / 2 - int(std::strlen(pg)) * kCh, 900, 14, 1);
+    draw_text_shadow(ctx, "<- / -> pages     ESC back", fb::W / 2 - 26 * kCh, 930, 12, 1);
+}
+
+// Returns false only when the player picks "Leave the Desert" (quits the game).
+bool update_menu(const InputState& in) {
+    const int hov = frontend_row_at(in, 430, 80, kMenuCount);
+    if (hov >= 0) g.menu_idx = hov;
+    if (in.was_pressed(Key::Up)) g.menu_idx = (g.menu_idx + kMenuCount - 1) % kMenuCount;
+    if (in.was_pressed(Key::Down)) g.menu_idx = (g.menu_idx + 1) % kMenuCount;
+    const bool go = in.was_pressed(Key::Confirm) || (hov >= 0 && in.mouse_pressed[0]);
+    if (!go) return true;
+    switch (g.menu_idx) {
+        case 0: g.screen = GameState::Screen::Play; break;     // enter the sietch
+        case 1: g.screen = GameState::Screen::Manual; g.manual_page = 0; break;
+        case 2: g.screen = GameState::Screen::Options; g.options_idx = 0; break;
+        case 3: return false;                                   // leave the desert (quit)
+    }
+    return true;
+}
+
+void update_options(const InputState& in) {
+    if (in.was_pressed(Key::Cancel)) { g.screen = GameState::Screen::Menu; return; }
+    const int hov = frontend_row_at(in, 380, 80, kOptionCount);
+    if (hov >= 0) g.options_idx = hov;
+    if (in.was_pressed(Key::Up)) g.options_idx = (g.options_idx + kOptionCount - 1) % kOptionCount;
+    if (in.was_pressed(Key::Down)) g.options_idx = (g.options_idx + 1) % kOptionCount;
+    if (!(in.was_pressed(Key::Confirm) || (hov >= 0 && in.mouse_pressed[0]))) return;
+    switch (g.options_idx) {
+        case 0: g.opt_muted = !g.opt_muted; break;
+        case 1: g.fullscreen_req = true; break;
+        case 2:  // wipe the persistent save + vault (a fresh start next launch)
+            std::remove("meta.dat");
+            g_meta = Meta{};
+            break;
+        case 3: g.screen = GameState::Screen::Menu; break;
+    }
+}
+
+void update_manual(const InputState& in) {
+    if (in.was_pressed(Key::Cancel)) { g.screen = GameState::Screen::Menu; return; }
+    const bool clickL = in.mouse_pressed[0] && in.mouse_x >= 0 && in.mouse_x < fb::W / 2;
+    const bool clickR = in.mouse_pressed[0] && in.mouse_x >= fb::W / 2;
+    if (in.was_pressed(Key::Right) || in.was_pressed(Key::Down) || clickR)
+        if (g.manual_page < kManualPages - 1) ++g.manual_page;
+    if (in.was_pressed(Key::Left) || in.was_pressed(Key::Up) || clickL)
+        if (g.manual_page > 0) --g.manual_page;
+}
+
 // UI: HUD panel, banners, death screen.
 void pass_ui(RenderCtx& r) {
     DrawCtx& ctx = r.ctx;
@@ -3791,6 +4023,9 @@ void game_render(Framebuffer& frame) {
     RenderCtx r{DrawCtx{&frame, g.services.cmaps, g.services.pal}, &zone(), is_night(),
                 is_night() ? 18 : 31, g.services.assets};
 
+    // Front-end screens (title menu / options / manual) replace the world view.
+    if (g.screen != GameState::Screen::Play) { pass_frontend(r); return; }
+
     // screen shake (visual only; fx stream never touches gameplay)
     const iso::Camera saved_cam = g.cam;
     int shake = 0;
@@ -3827,6 +4062,13 @@ void game_render(Framebuffer& frame) {
 PaletteFade game_fade() {
     if (g.fade <= 0) return PaletteFade{};
     return PaletteFade{g.fade_r, g.fade_g, g.fade_b, uint16_t(g.fade)};
+}
+
+bool game_muted() { return g.opt_muted; }
+bool game_consume_fullscreen_request() {
+    const bool req = g.fullscreen_req;
+    g.fullscreen_req = false;
+    return req;
 }
 
 void game_serialize(SaveWriter& w) {

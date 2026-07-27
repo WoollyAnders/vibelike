@@ -951,6 +951,10 @@ int main(int argc, char** argv) {
             if (!game_update(input)) running = false;
             input.end_tick();
             accum -= tick_period;
+            // Options screen: apply the game's fullscreen/sound requests.
+            if (game_consume_fullscreen_request()) toggle_fullscreen(platform);
+            if (platform.audio_dev)
+                SDL_PauseAudioDevice(platform.audio_dev, game_muted() ? 1 : 0);
         }
 
         game_render(frame);
