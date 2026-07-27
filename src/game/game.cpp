@@ -131,7 +131,7 @@ struct CharStats {
 struct Player {
     CharStats st;
     items::Inst inv[12];
-    items::Inst equip[4];  // by items::Slot
+    items::Inst equip[int(items::Slot::Count)];  // by items::Slot (B2a: 10-slot Fremen paperdoll)
     int hp = tune::kPlayerHpMax;
     int water = tune::kStartWater;
     int exposure = 0;
@@ -346,13 +346,14 @@ int player_max_hp() {
 }
 int player_max_water() { return tune::kWaterMax + affix_total(items::AK_WATER); }
 int player_armor() {
-    const items::Inst& a = g.pl.equip[int(items::Slot::Armor)];
-    return (a.empty() ? 0 : a.d().a) + affix_total(items::AK_ARMOR);
+    return affix_total(items::AK_ARMOR);  // Body's intrinsic armor + any Guarded affixes
 }
+// B2a: thirst multiplier (x/4) derived from summed stillsuit reclamation (AK_RECLAIM),
+// replacing the old single Suit slot. 4 = no reclaim ... 1 = a full, sealed stillsuit.
 int player_suit_mul4() {
-    const items::Inst& su = g.pl.equip[int(items::Slot::Suit)];
-    int m = su.empty() ? 4 : su.d().a;
-    return m;
+    int cut = affix_total(items::AK_RECLAIM) / 2;
+    if (cut > 3) cut = 3;
+    return 4 - cut;
 }
 int player_dodge() {
     return g.pl.st.dex / 2 + affix_total(items::AK_DODGE) + 4 * g.pl.st.talents[8];
@@ -1547,8 +1548,7 @@ void upkeep() {
     const bool sheltered = (tf & (map::TF_INDOOR | map::TF_SHADE)) != 0;
     if (amb >= tune::kExposureHotThreshold && !sheltered) {
         int gain = tune::kExposureGain;
-        const items::Inst& suit = g.pl.equip[int(items::Slot::Suit)];
-        if (!suit.empty()) gain -= (4 - suit.d().a) + 1;  // Mk I halves, Mk III negates
+        gain -= affix_total(items::AK_HEAT);  // B2a: hood/cloak heat shielding blunts the sun
         if (g.pl.litany_turns > 0) gain /= 2;
         if (gain < 0) gain = 0;
         if (g.pl.exposure == 0 && gain > 0)
@@ -2348,8 +2348,14 @@ void game_init(uint64_t seed, const GameServices& services) {
     // old code set the mask directly, which silently skipped the NPC spawn.
     spawn_zone_wildlife(g.zone_, map::kZoneSietch);
 
-    g.pl.equip[int(items::Slot::Weapon)].def = 0;  // Dust Knife
-    g.pl.equip[int(items::Slot::Suit)].def = 9;    // Stillsuit Mk I
+    // B2a: start in a basic tier-1 Fremen stillsuit set (Cloak/Catchpockets/Token are loot targets)
+    g.pl.equip[int(items::Slot::Weapon)].def = 0;     // Dust Knife
+    g.pl.equip[int(items::Slot::Hood)].def = 5;       // Cloth Headwrap
+    g.pl.equip[int(items::Slot::Mask)].def = 8;       // Cracked Mask
+    g.pl.equip[int(items::Slot::NosePlugs)].def = 11; // Rough Filt-plugs
+    g.pl.equip[int(items::Slot::WaterTube)].def = 14; // Frayed Catchtube
+    g.pl.equip[int(items::Slot::Body)].def = 17;      // Patched Suit-body
+    g.pl.equip[int(items::Slot::Pumps)].def = 22;     // Worn Heel-pumps
     g.pl.hp = player_max_hp();
     g.choosing = services.interactive;
     // Interactive launches open on the title menu; headless tests jump into play.
@@ -3936,16 +3942,17 @@ void pass_ui(RenderCtx& r) {
                       uint8_t(g.menu_sel == 12 ? 245 : 20));
         } else if (g.menu_open == 6) {
             draw_text_shadow(ctx, "PACK  (ENTER equips)", x0 + 24, y0 + 16, 230, 1);
-            const char* slots[4] = {"wpn", "arm", "sut", "trk"};
-            for (int i = 0; i < 4; ++i) {
+            static const char* slots[int(items::Slot::Count)] =
+                {"wpn", "hood", "mask", "plug", "tube", "body", "pkts", "pump", "clok", "tokn"};
+            for (int i = 0; i < int(items::Slot::Count); ++i) {
                 char nm[64];
                 g.pl.equip[i].full_name(nm, sizeof nm);
                 std::snprintf(buf, sizeof buf, "[%s] %s", slots[i], nm);
-                draw_text(ctx, buf, x0 + 24, y0 + 44 + i * 22, 136);
+                draw_text(ctx, buf, x0 + 24, y0 + 40 + i * 16, 136);
             }
             for (int i = 0; i < 12; ++i) {
                 const bool sel = g.menu_sel == i;
-                const int y = y0 + 140 + i * 24;
+                const int y = y0 + 212 + i * 20;
                 if (sel) fill_rect(ctx, x0 + 16, y - 2, 728, 22, 4);
                 char nm[64];
                 g.pl.inv[i].full_name(nm, sizeof nm);

@@ -7,7 +7,7 @@
 #include <vector>
 
 inline constexpr uint32_t kSaveMagic = 0x54535544;  // 'DUST'
-inline constexpr uint16_t kSaveVersion = 5;  // v5: B1.3 world graph (cur_node + node flags)
+inline constexpr uint16_t kSaveVersion = 6;  // v6: B2a 10-slot Fremen paperdoll (equip[] grew)
 
 class SaveWriter {
 public:
