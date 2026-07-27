@@ -1812,9 +1812,27 @@ void advance_world() {
     refresh_fov_and_paths();
 }
 
-// ---- worm-riding ---------------------------------------------------------------
+// ---- worm-riding / extraction --------------------------------------------------
+
+void enter_node(int idx);  // fwd (defined below)
 
 constexpr int kMaxRideTurns = 40;
+constexpr int kExtractRideTurns = 6;  // B4: a few strides of spectacle, then the Maker bears you home
+
+// B4: the ONE purpose of worm-riding is extraction. Ride home = end the vision and wake in the
+// sietch; the Fremen forge/secure the vision's yield (gear + spice/water/materials). Gear and the
+// character are never lost; only un-extracted run resources die with the vision (loss model = B5).
+void extract_run() {
+    g.pl.riding = false;
+    g.pl.ride_turns = 0;
+    g.wrm = worm::Worm{};
+    g.noise.clear();
+    g.services.mixer->push({audio::Cmd::Rumble, 0, 0, 0});
+    g.log.push("The Maker bears you home across the dunes. The vision fades.");
+    g.log.push("The Fremen forge what Muad'Dib showed you. Your haul is made real.");
+    enter_node(0);      // wake in the sietch hub
+    advance_world();
+}
 
 bool worm_rideable_at(int x, int y) {
     if (g.wrm.state != worm::State::Surfaced) return false;
@@ -1848,8 +1866,11 @@ void dismount(const char* why) {
 void try_ride() {
     Entity& p = player_ent();
     if (g.pl.riding) {
-        dismount("You plant the hooks and slide down the flank.");
-        advance_world();
+        extract_run();  // B4: committing to the ride carries you home (extraction)
+        return;
+    }
+    if (g.cur_node == 0) {
+        g.log.push("No Makers ride the sietch's stone halls.");
         return;
     }
     if (!g.pl.maker_hooks) {
@@ -1908,11 +1929,11 @@ void ride_move(int dx, int dy) {
     player_ent().y = g.wrm.y;
     g.wrm.timer = 12;  // stays surfaced while ridden
 
-    if (++g.pl.ride_turns >= kMaxRideTurns) {
-        dismount("The Maker tires and bucks you into the sand. It dives.");
-        g.wrm.state = worm::State::Dormant;
-        g.noise.clear();
-        g.services.mixer->push({audio::Cmd::Rumble, 0, 0, 0});
+    // B4: after a short ride the Maker bears you home — extraction (no free-roam dismount).
+    if (++g.pl.ride_turns >= kExtractRideTurns) {
+        extract_run();
+        (void)cb;
+        return;
     }
     advance_world();
     (void)cb;
@@ -2536,6 +2557,7 @@ void game_init(uint64_t seed, const GameServices& services) {
     g.pl.equip[int(items::Slot::Body)].def = 17;      // Patched Suit-body
     g.pl.equip[int(items::Slot::Pumps)].def = 22;     // Worn Heel-pumps
     g.pl.hp = player_max_hp();
+    g.pl.maker_hooks = true;  // B4: extraction (ride a Maker home) is always available
     g.choosing = services.interactive;
     // Interactive launches open on the title menu; headless tests jump into play.
     g.screen = services.interactive ? GameState::Screen::Menu : GameState::Screen::Play;

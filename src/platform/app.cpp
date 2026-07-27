@@ -704,6 +704,38 @@ int run_ridetest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cma
     return pass ? 0 : 1;
 }
 
+// B4: worm-ride extraction bears you home — surface a Maker, mount, ride, and wake in the sietch.
+int run_extractiontest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(4242, services);
+    InputState in;
+    auto tick_with = [&](Key k) { in.pressed[int(k)] = true; game_update(in); in.end_tick(); };
+
+    game_debug_use_door();                               // hub -> field node 1
+    const int node_field = game_debug_cur_node();
+    for (int i = 0; i < 8; ++i) tick_with(Key::Right);
+    tick_with(Key::Thumper);
+    for (int i = 0; i < 7; ++i) tick_with(Key::Left);
+    int turns = 0;
+    while (turns++ < 120 && game_worm_state() != 4 && !game_is_dead()) {
+        if (turns % 12 == 0) game_debug_refill();
+        tick_with(Key::Wait);
+    }
+    if (game_worm_state() != 4) { std::printf("extractiontest FAIL (no surface)\n"); return 1; }
+
+    game_debug_warp_to_worm();
+    tick_with(Key::Ride);
+    const bool mounted = game_debug_riding();
+    tick_with(Key::Ride);                                // commit: the Maker bears you home
+    const int node_home = game_debug_cur_node();
+
+    const bool extracted = node_home == 0 && !game_debug_riding() && !game_is_dead();
+    const bool pass = node_field > 0 && mounted && extracted;
+    std::printf("extractiontest %s (field_node %d mounted %d home_node %d)\n",
+                pass ? "PASS" : "FAIL", node_field, mounted, node_home);
+    return pass ? 0 : 1;
+}
+
 // The extraction loop, end to end: kill -> XP/levels -> loot -> bank at the
 // vault -> die/restart -> the banked gear survives; carried gear does not.
 int run_rpgtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
@@ -868,7 +900,7 @@ int main(int argc, char** argv) {
          optest = false, opdemo = false, uishot = false, shieldtest = false,
          campaigntest = false, dettest = false, ridetest = false, animdebug = false,
          circledemo = false, fightdemo = false, rpgtest = false, clicktest = false,
-         reveltest = false, gauntlettest = false;
+         reveltest = false, gauntlettest = false, extractiontest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
         if (SDL_strcmp(argv[i], "--seamtest") == 0) seamtest = true;
@@ -889,6 +921,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--clicktest") == 0) clicktest = true;
         if (SDL_strcmp(argv[i], "--reveltest") == 0) reveltest = true;
         if (SDL_strcmp(argv[i], "--gauntlettest") == 0) gauntlettest = true;
+        if (SDL_strcmp(argv[i], "--extractiontest") == 0) extractiontest = true;
     }
 
     Palette master;
@@ -918,6 +951,7 @@ int main(int argc, char** argv) {
     if (rpgtest) return run_rpgtest(mixer, assets, cmaps);
     if (reveltest) return run_reveltest(mixer, assets, cmaps);
     if (gauntlettest) return run_gauntlettest(mixer, assets, cmaps);
+    if (extractiontest) return run_extractiontest(mixer, assets, cmaps);
 
     Platform platform;
     if (!platform_init(platform, &mixer)) {
