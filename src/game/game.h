@@ -78,3 +78,6 @@ void game_debug_revelation_pick(int idx);  // B2b: choose row idx + confirm the 
 int game_debug_cur_node();  // B1.3: current graph node index
 void game_debug_warp_to_node(int idx);  // B3: enter a specific graph node
 int game_debug_hostile_count();  // B3: hostiles in the resident zone
+void game_debug_awaken(int* unlocked, int* cleared, int* banked_spice);  // B5: Awaken ladder + wallet
+void game_debug_set_awaken_choice(int lvl);  // B5: choose the launch Awaken level
+int game_debug_char_level();  // B5: persistent character level

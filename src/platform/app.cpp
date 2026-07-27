@@ -865,6 +865,39 @@ int run_gauntlettest(audio::Mixer& mixer, const Assets& assets, const Colormaps&
     return pass ? 0 : 1;
 }
 
+// B5: clearing a pinnacle advances the Awaken ladder (unlock the next level) in persistent meta.
+int run_metatest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    std::remove("meta.dat");
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(1357, services);
+    InputState in;
+    auto tick_with = [&](Key k) { in.pressed[int(k)] = true; game_update(in); in.end_tick(); };
+
+    int u0 = 0, c0 = 0, b0 = 0;
+    game_debug_awaken(&u0, &c0, &b0);           // fresh: unlocked 1, cleared 0, banked 0
+
+    game_debug_warp_to_node(4);                 // the Awaken-1 pinnacle (Esmar Tuek)
+    const bool boss = game_debug_boss_alive();
+    game_debug_buff();
+    int guard = 0;
+    while (game_debug_boss_alive() && guard++ < 400) {
+        game_debug_refill();
+        int ax = 0, ay = 0;
+        game_debug_warp_to_boss(&ax, &ay);
+        Key k = ax > 0 ? Key::Right : ax < 0 ? Key::Left : ay > 0 ? Key::Down : Key::Up;
+        tick_with(k);
+    }
+    int u1 = 0, c1 = 0, b1 = 0;
+    game_debug_awaken(&u1, &c1, &b1);           // pinnacle cleared -> Awaken 2 unlocked
+
+    const bool started = u0 == 1 && c0 == 0 && b0 == 0;
+    const bool unlocked = u1 >= 2 && c1 >= 1;
+    const bool pass = started && boss && unlocked;
+    std::printf("metatest %s (start[u%d c%d b%d] boss %d -> [u%d c%d])\n",
+                pass ? "PASS" : "FAIL", u0, c0, b0, boss, u1, c1);
+    return pass ? 0 : 1;
+}
+
 // A4: click-to-move pathfinds to the goal and is deterministic across runs.
 int run_clicktest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
     GameServices services{&mixer, &assets, &cmaps};
@@ -900,7 +933,7 @@ int main(int argc, char** argv) {
          optest = false, opdemo = false, uishot = false, shieldtest = false,
          campaigntest = false, dettest = false, ridetest = false, animdebug = false,
          circledemo = false, fightdemo = false, rpgtest = false, clicktest = false,
-         reveltest = false, gauntlettest = false, extractiontest = false;
+         reveltest = false, gauntlettest = false, extractiontest = false, metatest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
         if (SDL_strcmp(argv[i], "--seamtest") == 0) seamtest = true;
@@ -922,6 +955,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--reveltest") == 0) reveltest = true;
         if (SDL_strcmp(argv[i], "--gauntlettest") == 0) gauntlettest = true;
         if (SDL_strcmp(argv[i], "--extractiontest") == 0) extractiontest = true;
+        if (SDL_strcmp(argv[i], "--metatest") == 0) metatest = true;
     }
 
     Palette master;
@@ -952,6 +986,7 @@ int main(int argc, char** argv) {
     if (reveltest) return run_reveltest(mixer, assets, cmaps);
     if (gauntlettest) return run_gauntlettest(mixer, assets, cmaps);
     if (extractiontest) return run_extractiontest(mixer, assets, cmaps);
+    if (metatest) return run_metatest(mixer, assets, cmaps);
 
     Platform platform;
     if (!platform_init(platform, &mixer)) {

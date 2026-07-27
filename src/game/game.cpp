@@ -190,6 +190,7 @@ struct GameState {
     int cur_node = 0;     // B1.3: current graph node (0 = sietch hub); drives the resident zone
     uint8_t cur_zone = map::kZoneSietch;  // derived from the current node's Stage (biome/membership tag)
     // B2b: the Revelation (a prescient gear suggestion at each forward door). Transient (reset on load).
+    int awaken_choice = 1;                 // B5: Awaken level to launch (1..meta.awaken_unlocked)
     int revelation_stage = 0;              // 0 none, 1 pick slot, 2 pick item
     int rev_sel = 0;
     int rev_dest = 0;                      // node to enter once the pick resolves
@@ -876,26 +877,48 @@ void refresh_fov_and_paths() {
     recompute_light();
 }
 
-// meta.dat: tiny cross-run memory — seasons played, endings witnessed.
+// meta.dat: cross-run memory. B5 grows it to hold the Awaken ladder, a banked spice wallet,
+// and the PERSISTENT character (level/attributes/gear survive death — the ARPG spine).
 struct Meta {
     uint32_t runs = 0;
     uint8_t endings_seen = 0;      // bit per campaign::Ending
     uint8_t stash_count = 0;       // X4: the tribe vault — gear that survived
     items::Inst stash[24];
+    // --- B5 (DME3) ---
+    uint8_t awaken_unlocked = 1;   // highest Awaken level the player may launch (1..10)
+    uint8_t awaken_cleared = 0;    // highest pinnacle defeated
+    uint8_t has_char = 0;          // 1 once a persistent character exists
+    int32_t banked_spice = 0;      // safe wallet; run spice banks here on extraction
+    CharStats st;                  // persistent level / attributes / talents / xp
+    items::Inst equip[int(items::Slot::Count)];
+    items::Inst inv[12];
 };
 Meta g_meta;
+
+inline constexpr uint32_t kMetaV3 = 0x33454D44u;  // 'DME3'
+inline constexpr uint32_t kMetaV2 = 0x32454D44u;  // 'DME2'
+inline constexpr uint32_t kMetaV1 = 0x54454D44u;  // 'DMET'
 
 void meta_load() {
     FILE* f = std::fopen("meta.dat", "rb");
     if (!f) return;
     uint32_t magic = 0;
     if (std::fread(&magic, 4, 1, f) == 1) {
-        if (magic == 0x32454D44u) {  // 'DME2'
+        if (magic == kMetaV3 || magic == kMetaV2) {  // v2 + v3 share the leading fields
             (void)!std::fread(&g_meta.runs, 4, 1, f);
             (void)!std::fread(&g_meta.endings_seen, 1, 1, f);
             (void)!std::fread(&g_meta.stash_count, 1, 1, f);
             (void)!std::fread(g_meta.stash, sizeof g_meta.stash, 1, f);
-        } else if (magic == 0x54454D44u) {  // v1: carry runs/endings forward
+        }
+        if (magic == kMetaV3) {  // + the Awaken ladder, wallet, and persistent character
+            (void)!std::fread(&g_meta.awaken_unlocked, 1, 1, f);
+            (void)!std::fread(&g_meta.awaken_cleared, 1, 1, f);
+            (void)!std::fread(&g_meta.has_char, 1, 1, f);
+            (void)!std::fread(&g_meta.banked_spice, 4, 1, f);
+            (void)!std::fread(&g_meta.st, sizeof g_meta.st, 1, f);
+            (void)!std::fread(g_meta.equip, sizeof g_meta.equip, 1, f);
+            (void)!std::fread(g_meta.inv, sizeof g_meta.inv, 1, f);
+        } else if (magic == kMetaV1) {  // v1: carry runs/endings forward only
             (void)!std::fread(&g_meta.runs, 4, 1, f);
             (void)!std::fread(&g_meta.endings_seen, 1, 1, f);
         }
@@ -906,13 +929,28 @@ void meta_load() {
 void meta_save() {
     FILE* f = std::fopen("meta.dat", "wb");
     if (!f) return;
-    const uint32_t magic = 0x32454D44u;  // 'DME2'
-    std::fwrite(&magic, 4, 1, f);
+    std::fwrite(&kMetaV3, 4, 1, f);
     std::fwrite(&g_meta.runs, 4, 1, f);
     std::fwrite(&g_meta.endings_seen, 1, 1, f);
     std::fwrite(&g_meta.stash_count, 1, 1, f);
     std::fwrite(g_meta.stash, sizeof g_meta.stash, 1, f);
+    std::fwrite(&g_meta.awaken_unlocked, 1, 1, f);
+    std::fwrite(&g_meta.awaken_cleared, 1, 1, f);
+    std::fwrite(&g_meta.has_char, 1, 1, f);
+    std::fwrite(&g_meta.banked_spice, 4, 1, f);
+    std::fwrite(&g_meta.st, sizeof g_meta.st, 1, f);
+    std::fwrite(g_meta.equip, sizeof g_meta.equip, 1, f);
+    std::fwrite(g_meta.inv, sizeof g_meta.inv, 1, f);
     std::fclose(f);
+}
+
+// B5: snapshot the live character into meta so it survives death/extraction.
+void persist_character() {
+    g_meta.has_char = 1;
+    g_meta.st = g.pl.st;
+    std::memcpy(g_meta.equip, g.pl.equip, sizeof g_meta.equip);
+    std::memcpy(g_meta.inv, g.pl.inv, sizeof g_meta.inv);
+    meta_save();
 }
 
 void grant_xp(int amount) {
@@ -1022,7 +1060,9 @@ void die(const char* cause) {
     g.log.push("%s", cause);
     g.services.mixer->push({audio::Cmd::PlaySfx, 0 /* roar */, 200, 96});
     ++g_meta.runs;
-    meta_save();
+    // B5: death keeps the character (level / attributes / gear) but NOT the run's spice haul.
+    // banked_spice is left untouched -- only extraction banks it -- so the vision's spice is lost.
+    persist_character();
 }
 
 void end_season(uint8_t ending) {
@@ -1121,6 +1161,20 @@ void spawn_escort(int awaken) {
                     int16_t(x), int16_t(y), int16_t(hp), 0, 0};
         ++placed;
     }
+}
+
+// B5: clearing a pinnacle marks its node and advances the Awaken ladder (unlock the next level).
+void award_pinnacle_clear(int node) {
+    world::Node& n = g.graph.nodes[node];
+    if (n.flags & world::NF_CLEARED) return;  // once
+    n.flags |= world::NF_CLEARED;
+    const int aw = n.awaken;
+    if (aw > g_meta.awaken_cleared) g_meta.awaken_cleared = uint8_t(aw);
+    if (aw == g_meta.awaken_unlocked && g_meta.awaken_unlocked < 10) {
+        ++g_meta.awaken_unlocked;
+        g.log.push("A deeper vision opens to Muad'Dib: AWAKEN %d.", g_meta.awaken_unlocked);
+    }
+    meta_save();
 }
 
 void spawn_boss(bool baron) {
@@ -1234,7 +1288,7 @@ void worm_cb_crush(void*, int x, int y) {
             if (e.type == EType::Trooper) g.log.push("A trooper is snatched screaming into the sand.");
             if (e.type == EType::Boss) {
                 const bool pin = boss_is_pinnacle(e.data2);
-                if (pin) g.graph.nodes[g.cur_node].flags |= world::NF_CLEARED;
+                if (pin) award_pinnacle_clear(g.cur_node);
                 if (e.data2 == -1 || (pin && boss_pinnacle_idx(e.data2) == 9)) {
                     g.log.push("SHAI-HULUD TAKES THE BARON. Shield and all.");
                     g.log.push("The desert itself has judged him.");
@@ -1830,6 +1884,8 @@ void extract_run() {
     g.services.mixer->push({audio::Cmd::Rumble, 0, 0, 0});
     g.log.push("The Maker bears you home across the dunes. The vision fades.");
     g.log.push("The Fremen forge what Muad'Dib showed you. Your haul is made real.");
+    g_meta.banked_spice = g.pl.spice;  // B5: the whole run's spice is now safe (banked)
+    persist_character();               // gear + progress made real
     enter_node(0);      // wake in the sietch hub
     advance_world();
 }
@@ -2070,9 +2126,14 @@ void enter_node(int idx) {
 }
 
 // The Water-of-Life ritual (B2) launches a campaign run at node 1; here it's a bare trigger.
+// B5: launch the vision at the chosen Awaken level (its first field node on the spine).
 void begin_run() {
-    const int first = g.graph.forward(0);
-    if (first >= 0) enter_node(first);
+    int lvl = g.awaken_choice;
+    if (lvl < 1) lvl = 1;
+    if (lvl > world::kAwakenLevels) lvl = world::kAwakenLevels;
+    const int first = 1 + (lvl - 1) * (world::kRoomsPerLevel + 1);  // first field node of the level
+    if (first >= 1 && first < g.graph.count) enter_node(first);
+    else { const int f = g.graph.forward(0); if (f >= 0) enter_node(f); }
 }
 
 // B2b: open the Revelation at a forward door — Muad'Dib's vision reveals gear for the road ahead.
@@ -2266,7 +2327,7 @@ void try_move(int dx, int dy) {
                                    (victim->data2 == -1 ||
                                     (pinnacle && boss_pinnacle_idx(victim->data2) == 9));
             if (pinnacle) {
-                g.graph.nodes[g.cur_node].flags |= world::NF_CLEARED;
+                award_pinnacle_clear(g.cur_node);
                 raise_standing(8);
             }
             maybe_drop_loot(victim->type, victim->x, victim->y);
@@ -2548,20 +2609,33 @@ void game_init(uint64_t seed, const GameServices& services) {
     // old code set the mask directly, which silently skipped the NPC spawn.
     spawn_zone_wildlife(g.zone_, map::kZoneSietch);
 
-    // B2a: start in a basic tier-1 Fremen stillsuit set (Cloak/Catchpockets/Token are loot targets)
-    g.pl.equip[int(items::Slot::Weapon)].def = 0;     // Dust Knife
-    g.pl.equip[int(items::Slot::Hood)].def = 5;       // Cloth Headwrap
-    g.pl.equip[int(items::Slot::Mask)].def = 8;       // Cracked Mask
-    g.pl.equip[int(items::Slot::NosePlugs)].def = 11; // Rough Filt-plugs
-    g.pl.equip[int(items::Slot::WaterTube)].def = 14; // Frayed Catchtube
-    g.pl.equip[int(items::Slot::Body)].def = 17;      // Patched Suit-body
-    g.pl.equip[int(items::Slot::Pumps)].def = 22;     // Worn Heel-pumps
+    // B5: the character is PERSISTENT. If one exists in meta, restore it (level/attributes/gear +
+    // the banked spice wallet) and skip the chooser; otherwise start a fresh tier-1 Fremen.
+    // Restore only for real (interactive) play so headless tests stay isolated on the shared
+    // meta.dat (the vault still loads for rpgtest; persistence WRITES still happen for a metatest).
+    if (g_meta.has_char && services.interactive) {
+        g.pl.st = g_meta.st;
+        std::memcpy(g.pl.equip, g_meta.equip, sizeof g.pl.equip);
+        std::memcpy(g.pl.inv, g_meta.inv, sizeof g.pl.inv);
+        g.pl.spice = g_meta.banked_spice;   // spendable wallet = the safe banked amount
+        g.choosing = false;
+    } else {
+        // B2a: a fresh character in a basic tier-1 stillsuit set (Cloak/Catchpockets/Token are loot).
+        g.pl.equip[int(items::Slot::Weapon)].def = 0;     // Dust Knife
+        g.pl.equip[int(items::Slot::Hood)].def = 5;       // Cloth Headwrap
+        g.pl.equip[int(items::Slot::Mask)].def = 8;       // Cracked Mask
+        g.pl.equip[int(items::Slot::NosePlugs)].def = 11; // Rough Filt-plugs
+        g.pl.equip[int(items::Slot::WaterTube)].def = 14; // Frayed Catchtube
+        g.pl.equip[int(items::Slot::Body)].def = 17;      // Patched Suit-body
+        g.pl.equip[int(items::Slot::Pumps)].def = 22;     // Worn Heel-pumps
+        g.choosing = services.interactive;
+        if (!g.choosing) apply_background(g.pl, Background::Fedaykin);
+    }
     g.pl.hp = player_max_hp();
     g.pl.maker_hooks = true;  // B4: extraction (ride a Maker home) is always available
-    g.choosing = services.interactive;
+    g.awaken_choice = services.interactive ? g_meta.awaken_unlocked : 1;  // B5: frontier (headless=1)
     // Interactive launches open on the title menu; headless tests jump into play.
     g.screen = services.interactive ? GameState::Screen::Menu : GameState::Screen::Play;
-    if (!g.choosing) apply_background(g.pl, Background::Fedaykin);
 
     g.log.push("Muad'Dib waits with the Water of Life. Drink, and walk the vision.");
     g.log.push("Click Muad'Dib to begin. Arrows move. G harvest. C sandwalk.");
@@ -4662,6 +4736,13 @@ void game_debug_revelation_pick(int idx) {  // headless: choose row idx + confir
 }
 int game_debug_cur_node() { return g.cur_node; }
 void game_debug_warp_to_node(int idx) { enter_node(idx); }  // B3: jump straight to a graph node
+void game_debug_awaken(int* unlocked, int* cleared, int* banked_spice) {  // B5: meta ladder + wallet
+    if (unlocked) *unlocked = g_meta.awaken_unlocked;
+    if (cleared) *cleared = g_meta.awaken_cleared;
+    if (banked_spice) *banked_spice = g_meta.banked_spice;
+}
+void game_debug_set_awaken_choice(int lvl) { g.awaken_choice = lvl; }  // B5: pick the launch level
+int game_debug_char_level() { return g.pl.st.level; }
 int game_debug_hostile_count() {
     int n = 0;
     for (const Entity& e : g.ents)
