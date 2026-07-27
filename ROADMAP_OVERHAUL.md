@@ -2,14 +2,15 @@
 
 The first playtest produced a large, coherent set of change requests plus one
 critical rendering bug. This roadmap turns that feedback into an execution plan:
-DUSTFALL becomes a **roguelike / extraction / ARPG blend** — a *persistent
-character* runs *procedural excursions* out of the sietch through a *branching
-world map* shaped like *Hades* (**12 regular areas across 4 tiers, each tier
-capped by a boss = 4 bosses**), extracting by **riding a sandworm home** to bank
-loot or dying and losing what was carried. The campaign climbs an **"Awaken"
-difficulty ladder (1→10, Hades "Heat")**: each level has a dedicated pinnacle boss,
-gated so only clearing the current level advances the story, culminating in **Baron
-Harkonnen at Awaken 10** (a first, undefeatable confrontation at Awaken 5).
+DUSTFALL becomes a **roguelike / extraction / ARPG blend** set inside **Paul Muad'Dib's
+prescient visions**: a persistent Fremen (who never Awakens) is Paul's instrument, enacting
+his *possible futures* — a *Hades*-style gauntlet climb **across Arrakis to Arrakeen to
+confront the Baron**. The journey is **5 acts (biomes) × 2 Awaken levels = 10 pinnacle
+bosses**; you **ride a sandworm home** to have the Fremen **forge/secure the vision's yield**
+(gear + spice + water), or die and lose only that run's gathered resources (gear & progress
+are safe). The campaign climbs an **"Awaken" ladder (1→10, Hades "Heat")** — the sharpening of
+Paul's path — gated so only clearing the current level advances the story, culminating in
+**Baron Harkonnen at Awaken 10** (a first, undefeatable confrontation at Awaken 5).
 
 House rules unchanged: **done** means the **Exit** criterion runs in the game and
 the sim stays deterministic (`dettest` holds, re-baselined once per legit sim
@@ -155,153 +156,158 @@ recolor, and a good window-scaling filter.
 
 ## PHASE B — Run / World / Extraction Architecture
 
-> **DESIGN PIVOT (mid-project): Hades-style gauntlet climb inside Paul's prescient visions.**
+> **DESIGN PIVOT (mid-project): a Hades-style gauntlet climb inside Paul's prescient visions.**
 >
-> **Framing — the runs are Paul's possible futures.** The player is a **Fremen** (Fedaykin /
-> Saboteur / Sayyadina) — **not** Paul; no Voice, no weirding way. **Paul Muad'Dib is an NPC in
-> the sietch hub** (Sietch Tabr, in parallel to the novel). **A run begins by drinking the Water
-> of Life** — the poison Paul transmuted after he awoke as Kwisatz Haderach, shared at the Fremen
-> tau gathering — which links the Fremen to Paul's prescience. Each run = **walking one of Paul's
-> *possible* futures: a directed journey across Arrakis to Arrakeen to confront the Baron.**
-> Because they are *possible* futures, **book canon is never broken** — bosses "die" only within
-> the vision. **"Awaken"** = awakening prescient sight; the ladder = ever-deeper, harder visions.
+> **Framing — Paul's visions, steered by the player.** *Setting:* the **~2–3 year time-jump after
+> Paul takes the Water of Life at Sietch Tabr** — he consolidates Fremen power and plans to **overthrow
+> the Emperor and take revenge on the Harkonnens**; the campaign plays out inside the visions he weaves.
+> The **visions are Paul's** — the prescience is his alone; **Paul Muad'Dib is an NPC in the hub**. The
+> player is a **Fremen** (Fedaykin / Saboteur / Sayyadina) — **not** Paul, no Voice / no weirding way,
+> and **never Awakens** (no prescience of their own); the player is Paul's **instrument inside the
+> vision**, enlisted to *act within* his foresight and **steer it onto the chosen path** to Arrakeen.
+> A run begins at the **Water of Life** (shared at the tau gathering), which draws the Fremen **into
+> Paul's vision as a participant, not a seer**. Each run = **enacting one of Paul's *possible* futures:
+> a directed journey across Arrakis to Arrakeen to confront the Baron** — so **book canon is never
+> broken** (bosses "die" only within the vision). **"Awaken"** = the sharpening of *Paul's* prescient
+> path (not the player's): each level pushes his foresight deeper toward the decisive confrontation.
 >
-> **Within a run** — a climb of **combat rooms**, not time-scheduled harvests. Each field node is
-> a ROOM: enter → fight an **elite-mob escort** → **deny/loot the harvester it guards** (the room's
-> reward) → **pick 1 of a few boons** (run-scoped powerups, Hades-style) → advance through a
-> previewed forward door. The graph is **4 tiers of 3 rooms (12 regular areas), each tier capped by
-> a boss (4 bosses)**; difficulty escalates tier by tier. The 4th (summit) boss is the run's
-> **pinnacle**. The old op-scheduling (schedule_ops, global quota, deadlines, non-current-zone
-> look-ahead) is **retired** — the harvester + escort now **spawn on room entry**, which is what lets
-> B1 use a single resident zone. **Extraction = hybrid:** after clearing a tier boss you may **ride
-> the worm home to bank** carried spice/gear/boons-as-meta and end the run, or **push deeper** for
-> more; **die anywhere = lose everything carried.**
+> **Structure — 5 acts (biomes) × 2 Awaken levels.** The campaign is **5 ACTS, one per biome** (the
+> geography march), each holding **2 Awaken levels = 2 pinnacle bosses** → **10 Awaken levels / 10
+> pinnacles** (Act 1 = Awaken 1–2 … Act 5 = Awaken 9–10). **A run/vision plays within its biome** (set
+> by your Awaken level): a gauntlet of **elite-escort rooms** (clear escort → complete the biome
+> objective → **boon pick** → forward door) capped by the level's **pinnacle boss**. Beat the pinnacle →
+> advance one Awaken level; re-running a cleared level gives **no better drops and no story progress**.
+> You *can* **chain** act-to-act in one continuous vision, but it's brutal because **points are only
+> allotted when you END the vision** (extract) — you carry back what you learned. The old op-scheduling
+> (schedule_ops, quota, deadlines, look-ahead) is **retired**; content **spawns on room entry**.
 >
-> **Environments — the journey to Arrakeen (curated, NOT procedural biomes).** The campaign's
-> environments are **fixed per tier**, a geography march toward the city: **Tier 1 deep desert /
-> open erg** (Tanzerouft) → **Tier 2 rimwall & the Shield Wall** → **Tier 3 graben-pan &
-> Harkonnen-held outskirts** → **Tier 4 Arrakeen city & the Residency** (the pinnacle waits here).
-> The campaign **never rolls its biome** — the tier decides it (`node.seed` still varies room
-> *layout* within a tier; that is not "biome generation"). **Procedural biome *variety* is an
-> endgame-only feature**, living exclusively in the B10 cartography "maps." A distinct **Arrakeen
-> city generator** (streets/buildings/the Residency) is a new environment — its gen + art is its own
-> downstream task.
+> **Environments — the journey to Arrakeen (curated, NOT procedural biomes).** Five **fixed biomes,
+> one per act**: **Act 1 deep desert / open erg** (Tanzerouft) → **Act 2 rimwall / broken rock & sinks**
+> → **Act 3 the Shield Wall** → **Act 4 graben-pan & Harkonnen-held outskirts** → **Act 5 Arrakeen city
+> & the Residency**. The campaign **never rolls its biome** — the act decides it (`node.seed` still
+> varies room *layout*; that is not "biome generation"). **Procedural biome *variety* is endgame-only**,
+> living exclusively in the B10 cartography "maps." A distinct **Arrakeen city generator** is a new
+> environment — its gen + art is its own downstream task.
 >
-> **Across runs — the "Awaken" ladder (Hades "Heat").** 10 escalating levels, **Awaken 1 … 10**.
-> You advance the story only by clearing the current level's run and defeating its **pinnacle boss**,
-> unlocking Awaken N+1. Re-running a cleared level yields **no better drops and no campaign progress**
-> (pure practice/farm). **Awaken 10**'s pinnacle is the defeatable **Baron Harkonnen** — beating him
-> is the ending. (`awaken_level` + `awaken_cleared` live in meta.dat — B5; the graph's
-> `NodeType::Pinnacle` summit slot is filled by the Awaken level's boss — B3.)
+> **Room objective shifts with the biome** (the `Stage` drives both environment *and* objective; B3):
+> Act 1 **spice-harvester sabotage** → Act 2 **caravan raids** → Act 3 **breach the Shield Wall**
+> (garrisons / emplacements) → Act 4 **liberate the settled land** (raid garrisons, free Fremen, seize
+> water) → Act 5 **urban insurgency** / storm the Residency. Sabotaging harvesters makes no sense in
+> Arrakeen — the objective fits the place.
 >
-> **Run launch — no hub exit door (pure roguelike).** There is **no walk-out door** in the sietch.
-> Runs launch from hub interactions, gated by progress: the **Water-of-Life vision ritual** (Paul)
-> launches a **campaign run** — available from the start, the *only* launcher during the campaign;
-> the **cartography table** launches **endgame resource raids** (procedural "maps") and **unlocks
-> only after the campaign is complete** (Baron defeated at Awaken 10). Removing the physical exit
-> tile + building the ritual is **B2**; the progress-gated table is **B10**.
+> **Vision economy — lootable gear, made real by the sietch (canon-safe).** Nothing in a vision
+> "really" happens (a Fremen never truly kills the Baron), yet loot is **fully lootable ARPG gear** from
+> caches, enemies, **and bosses**. The vision is Paul's **recon** and the sietch acts on it: **gear** you
+> "loot" is Paul's prescient **spec**, which the **Fremen smiths forge for real** on extraction (grounds
+> the crafting bench D2 + Gurney/armory — a "Baron drop" is gear the vision marked necessary, not looted
+> from a kill that never happened); **spice / water / materials** are real Harkonnen caches / spice blows
+> / water stores the vision reveals and the **tribe then secures**. **Loss rules (crafting is expensive,
+> so the kit is protected):** the **character + gear + full inventory are NEVER lost** (real kit in the
+> sietch; a trance can't destroy them); **only this run's gathered spice / water / materials** are
+> **extract-or-lose** (die → the thread collapses, that haul is never secured/forged). Death costs the
+> run's *resource* haul, not gear or progress. (Extraction/forge-on-return = B4/B5.)
 >
-> **Sietch hub cast — a progress-gated, growing roster.** The hub **starts nearly empty** — only
-> **Paul** + a crowd of ambient **Fremen** — and **fills as the campaign advances** (each named NPC
-> gated on an `awaken` threshold in `Meta`), the sietch swelling as the rebellion gathers.
-> Shopkeepers (roles to finalize): **Stilgar** (the Naib — leadership/quests/Awaken selector, extends
-> `EType::Naib`), **Lady Jessica** (Reverend Mother — abilities / passive-tree / Water-of-Life &
-> consumables / poison-craft, elevates `EType::Sayyadina`), **Chani** (desert-craft — stillsuits /
-> water / Sandcraft gear), **Gurney Halleck** (warmaster & smuggler contact — weapons / black-market,
-> takes `EType::Smuggler`). Lore/quest residents: **Alia** (pre-born oracle), **Harah** (Jamis's
-> widow / household), **Otheym** & **Korba** (Fedaykin). A **larger crowd of ambient Fremen**
-> bystanders (idle-wander + barks, reusing `kFremenSprites`/`kFremenBarks`) keeps the warren alive.
-> Characters dead or with the Harkonnens by this era (Duncan, Kynes, Jamis, Yueh, Hawat) are **not**
-> living hub NPCs — some appear as bosses or in lore. Code home: **B2** hub pass + **C8** vendors +
-> **E2** art.
+> **Run launch — no hub exit door (pure roguelike).** There is **no walk-out door**. Two launchers:
+> the **Water-of-Life vision ritual** (Paul) launches a **campaign run** — from the start, the *only*
+> launcher during the campaign; the **cartography table** launches **endgame resource raids**
+> (procedural maps) and **unlocks only after the campaign is complete** (Baron defeated at Awaken 10).
+> Removing the exit tile + building the ritual = **B2**; the progress-gated table = **B10**.
 >
-> **Narrative spine — bosses are informants (climbing the Harkonnen chain).** A Fremen insurgency
-> striking back: the **3 per-run tier bosses** are seeded Harkonnen informant-officers you break for
-> intel; **each Awaken level's pinnacle is a *named* informant one rung higher**, the intel pointing
-> at the next. **LOCKED Awaken→pinnacle roster:**
+> **Sietch hub cast — a progress-gated, growing roster.** The hub **starts nearly empty** — only **Paul**
+> + a crowd of ambient **Fremen** — and **fills as the campaign advances** (each named NPC gated on an
+> `awaken` threshold in `Meta`), swelling as the rebellion gathers. Shopkeepers: **Stilgar** (the Naib —
+> leadership / quests / Awaken selector, extends `EType::Naib`), **Lady Jessica** (Reverend Mother —
+> abilities / passive-tree / Water-of-Life & consumables / poison-craft, elevates `EType::Sayyadina`),
+> **Chani** (desert-craft — stillsuits / water / Sandcraft gear), **Gurney Halleck** (warmaster &
+> smuggler contact — weapons / black-market, takes `EType::Smuggler`). Lore/quest residents: **Alia**
+> (pre-born oracle), **Harah** (Jamis's widow / household), **Otheym** & **Korba** (Fedaykin). A **larger
+> ambient Fremen crowd** (idle-wander + barks, reusing `kFremenSprites`/`kFremenBarks`) keeps the warren
+> alive. Characters dead or with the Harkonnens by this era (Duncan, Kynes, Jamis, Yueh, Hawat) are
+> **not** living hub NPCs. Code home: **B2** hub pass + **C8** vendors + **E2** art.
 >
-> | Awaken | Pinnacle |
-> |---|---|
-> | 1 | Esmar Tuek (smuggler — a turned/coerced "ally" you must break) |
-> | 2 | Wellington Yueh |
-> | 3 | Caid Orlan Kest |
-> | 4 | Iakin Nefud (Captain) |
-> | 5 | Baron Harkonnen + Thufir Hawat — you kill Hawat, the Baron escapes |
-> | 6 | Bashar Vorek Harkonnen |
-> | 7 | Piter de Vries |
-> | 8 | Glossu Rabban |
-> | 9 | Feyd-Rautha |
-> | 10 | Baron Harkonnen (defeatable = ending) |
+> **Narrative spine — bosses are informants (climbing the Harkonnen chain).** The **room/gauntlet
+> bosses** are seeded Harkonnen informant-officers you break for intel (faceless → may drop materiel);
+> **each Awaken level's pinnacle is a *named* informant one rung higher**, the intel pointing at the
+> next. Pinnacles drop lootable gear like any ARPG (the sietch forges it real). **LOCKED roster, 2 per
+> act / by biome:**
+>
+> | Act (biome) | Awaken | Pinnacle |
+> |---|---|---|
+> | 1 — Deep desert | 1 | Esmar Tuek (smuggler — a turned/coerced "ally" you must break) |
+> | 1 — Deep desert | 2 | Wellington Yueh — flavor: Piter de Vries's stab wasn't fatal; Yueh lived |
+> | 2 — Rimwall | 3 | Caid Orlan Kest |
+> | 2 — Rimwall | 4 | Iakin Nefud (Captain) |
+> | 3 — Shield Wall | 5 | Baron Harkonnen + Thufir Hawat (the *poisoned* Hawat, coerced into Baron's service) — kill Hawat, the Baron escapes |
+> | 3 — Shield Wall | 6 | Bashar Vorek Harkonnen |
+> | 4 — Outskirts | 7 | Piter de Vries — a replacement Tleilaxu clone en route to the Baron; you intercept & kill it (the original died to Duke Leto's poison gas) |
+> | 4 — Outskirts | 8 | Glossu Rabban |
+> | 5 — Arrakeen | 9 | Feyd-Rautha |
+> | 5 — Arrakeen | 10 | Baron Harkonnen (defeated = ending) |
 >
 > *(Roster fills the `NodeType::Pinnacle` slot via a B3/B5 data table keyed by `awaken_level`.)*
 >
-> **Sietch replayability device (PoE "maps") + hidden Corrino super-bosses.** The **cartography
-> table** (B10, post-campaign) lets the player craft/roll modified raids for bonus rewards — the
-> endgame loop layered on the Awaken ladder. **Rare charts unlock hidden pinnacle bosses drawn from
-> House Corrino** — Princess Irulan, Emperor Shaddam IV, Sardaukar command (and possibly the
-> Truthsayer, Gaius Helen Mohiam) — optional super-bosses *beyond* the Baron arc.
+> **Sietch replayability device (PoE "maps") + hidden Corrino super-bosses.** The **cartography table**
+> (B10, post-campaign) lets the player craft/roll modified raids for bonus rewards — the endgame loop
+> layered on the Awaken ladder. **Rare charts unlock hidden pinnacle bosses drawn from House Corrino** —
+> Princess Irulan, Emperor Shaddam IV, Sardaukar command (and possibly the Truthsayer, Gaius Helen
+> Mohiam) — optional super-bosses *beyond* the Baron arc.
 
 ### B1 — World graph + single resident zone ⬜ *(B1.1 ✅, B1.2 ✅)*
-Per-run `world::Graph` (nodes = sietch hub + 4 tiers of 3 room nodes each capped by a
-boss, summit `Pinnacle`) + one resident `map::Zone`; node_seed = node_hash(run_seed, i).
-**B1.1 ✅** — `world.h`: deterministic graph built at run start (additive; not yet
-driving zones). **B1.2 ✅** — graph reshaped to **17 nodes = sietch + 12 fields + 4
-bosses** (kTiers=4, kSectionsPerTier=3); replaced `g.zones[3]` with one resident
-`g.zone_`; `apply_deltas`/`spawn_zone_wildlife`/`spawn_op_in`/`place_npc_near` take a
-`map::Zone&`; the op look-ahead into a non-current zone uses a temp buffer (retired in
-B3); serialize/deserialize store one zone's vis; save.dat format changed (roguelike, no
-migration); dettest hash unchanged (`af5340c1f7cb0ba2`), seamtest green. **B1.3 (next):**
-reframe `world::Biome`→`Stage {Sietch, DeepDesert, Rimwall, Graben, Arrakeen}` with `build()`
-assigning each tier its stage by the **geography march to Arrakeen** (deletes the tier-parity
-biome toggle — the campaign no longer *rolls* its environment); add `cur_node` + `enter_node(idx)`
-graph traversal (regenerate the resident zone from `nodes[idx].seed` via a `Stage→ZoneId` map;
-Graben & Arrakeen use placeholder generators for now); a `begin_run()` launch trigger repoints the
-existing sietch-exit interaction; serialize `cur_node` + node flags, bump `kSaveVersion` 4→5;
-rebaseline dettest/clicktest once.
-**Exit:** launch into the graph, traverse node-to-node (tier 1→4), save/load round-trips.
+Per-run `world::Graph` (sietch hub + the campaign spine) + one resident `map::Zone`;
+node_seed = node_hash(run_seed, i). **B1.1 ✅** — `world.h`: deterministic graph built at run
+start (additive). **B1.2 ✅** — replaced `g.zones[3]` with one resident `g.zone_`;
+`apply_deltas`/`spawn_zone_wildlife`/`spawn_op_in`/`place_npc_near` take a `map::Zone&`; op
+look-ahead uses a temp buffer (retired in B3); serialize/deserialize store one zone's vis;
+save.dat format changed (roguelike, no migration); dettest `af5340c1f7cb0ba2`, seamtest green.
+**B1.3 (next):** reframe `world::Biome`→`Stage {Sietch, DeepDesert, Rimwall, ShieldWall,
+Outskirts, Arrakeen}` and `build()` to the **5-act / 10-Awaken spine** (5 acts × 2 Awaken levels,
+each level = a few rooms + a boss; stage fixed by act — the **geography march to Arrakeen**, no
+tier-parity roll); add `cur_node` + `enter_node(idx)` traversal (regenerate the resident zone from
+`nodes[idx].seed` via a `Stage→ZoneId` map; ShieldWall/Outskirts/Arrakeen use placeholder
+generators for now); a `begin_run()` launch trigger repoints the sietch-exit interaction; serialize
+`cur_node` + node flags, bump `kSaveVersion` 4→5; rebaseline dettest/clicktest once.
+**Exit:** launch into the graph, traverse node-to-node along the campaign spine, save/load round-trips.
 
 ### B2 — Gated run flow + boons (Hades rooms) ⬜
-Sietch = pure hub; leaving via the door **commits a run** (enter node 1). Each room:
-clear the elite escort → deny/loot the harvester → a **boon pick** (2-3 run-scoped
-powerups) → a **previewed forward door** (biome/threat/reward hint) to the next node.
-Tier-end funnels to the boss room; grace retreat to the sietch only before the first
-room is cleared. New: a Boon system (run-scoped stat/ability modifiers) + the boon-pick
-and door-preview overlays.
-**Exit:** leaving commits; clear a room → choose a boon → advance; bosses cap tiers.
+Sietch = pure hub with **no walk-out door**; the **Water-of-Life vision ritual** (Paul) **commits a
+run** at the current Awaken level (remove the physical exit tile). Each room: clear the elite escort
+→ complete the **biome objective** → a **boon pick** (2-3 run-scoped powerups) → a **previewed
+forward door**. The level funnels to its **pinnacle**; grace retreat to the sietch only before the
+first room is cleared. New: a Boon system + the boon-pick / door-preview overlays + the run-launch UI.
+**Exit:** the ritual commits a run; clear a room → choose a boon → advance; the level ends at its pinnacle.
 
-### B3 — Elite gauntlet rooms + tiered bosses ⬜
-Room content spawns **on entry**: an escort pack of **elite mobs** (scaled to the tier)
-guarding the section's harvester; killing the escort lets you deny the harvester for
-spice + loot. **3 rooms per tier then a boss** (`NodeType::Boss`, tiers 1-3) via the
-champion generator, scaled by tier **and by the run's Awaken level** — these are the
-**seeded Harkonnen informant-officers** you break for intel (the insurgency loop). The
-tier-4 summit is `NodeType::Pinnacle`: a **named** informant selected by the Awaken level
-(B5) from the inner-circle roster (Piter / Rabban / Feyd / … → **Baron Harkonnen** at
-Awaken 10, defeatable = ending; **withdraw-undefeated Baron confrontation at Awaken 5**).
-Retire schedule_ops / quota / deadlines / climax_pending; `denied`+`alert` become per-run.
-**Exit:** clear 3 elite rooms before each tier boss; bosses scale with tier + Awaken; the
-summit yields the Awaken pinnacle (Baron at 10); campaigntest updated (clear rooms → tier
-boss → pinnacle).
+### B3 — Elite gauntlet rooms + per-biome objectives + named bosses ⬜
+Room content spawns **on entry**: an **elite-mob escort** (scaled to Awaken level) guarding the
+biome objective (Act1 harvester-sabotage / Act2 caravan raids / Act3 breach the Shield Wall / Act4
+liberate settlements / Act5 urban insurgency). Room/gauntlet bosses are **seeded Harkonnen
+informant-officers** (champion generator). Each Awaken level's **pinnacle** (`NodeType::Pinnacle`) is
+a **named** boss from the LOCKED 2-per-act roster (Tuek/Yueh → … → Feyd/Baron), selected by Awaken
+level (B5) and scaled to it; pinnacles drop lootable gear. Retire schedule_ops / quota / deadlines /
+climax_pending; `denied`+`alert` become per-run.
+**Exit:** clear the biome objective + escort rooms then the level's named pinnacle; bosses scale with
+Awaken; campaigntest updated (clear rooms → pinnacle; Baron at Awaken 10).
 
-### B4 — Extraction via worm-ride (hybrid bank-out) ⬜
-After clearing a **tier boss**, a worm-ride-home verb banks carried inv + spice +
-materials + this run's boons-as-meta and ends the run — or push deeper. Bait/mount with
-a thumper + maker hooks (as before). No mid-tier extraction; **die anywhere = lose the
-carry**.
-**Exit (reworked extractiontest):** clear a tier boss → ride home → land in the sietch
-with loot banked; dying instead loses everything carried.
+### B4 — Extraction via worm-ride (forge-on-return) ⬜
+A worm-ride-home verb ends the vision and has the sietch **realize the run's yield**: Fremen **forge
+the looted gear-specs** and **secure the spice/water/materials** the vision revealed — or push deeper
+(chain). Bait/mount with a thumper + maker hooks. **Gear + inventory + character are never lost**;
+**dying loses only this run's gathered spice/water/materials** (the thread collapses; nothing forged).
+**Exit (reworked extractiontest):** ride home → gear forged + resources secured in the sietch; dying
+instead loses only the run's resource haul (gear/character intact).
 
 ### B5 — Persistence & meta (+ Awaken ladder) ⬜
-Persistent character + banked wallets in meta.dat ('DME2'→'DME3', back-compat);
-death keeps the character, clears carried gear/spice/materials. **Awaken ladder** lives
-here: `awaken_level` (currently unlocked, 1..10) + `awaken_cleared` (highest defeated)
-in meta; **a run is launched at a chosen Awaken level ≤ unlocked**; clearing the pinnacle
-at your current top level unlocks the next; re-running a cleared level gives **no drop
-bonus / no story progress** (scaling reads `awaken_level`). Defeating the **Awaken-10
-Baron** sets the ending flag. Sietch UI: an Awaken selector at the run-start door.
-**Exit:** level up + extract; next run die; character/level/vault/banked spice + Awaken
-progress survive; carried gear + spice gone; clearing a level's pinnacle unlocks the next
-and re-running a cleared level grants no bonus.
+Persistent character **+ gear + full inventory** + banked wallets in meta.dat
+('DME2'→'DME3', back-compat). **Revised loss model (crafting is expensive):** death keeps the
+character, **gear, and inventory** — it clears **only the run's un-extracted spice/water/materials**
+(the vision thread collapses; nothing forged/secured). **Awaken ladder** lives here: `awaken_level`
+(unlocked, 1..10) + `awaken_cleared` in meta; **a run launches at a chosen Awaken level ≤ unlocked**
+(the Awaken level picks the act/biome, 5 acts × 2 levels); clearing the current top level's pinnacle
+unlocks the next; re-running a cleared level gives **no drop bonus / no story progress**. Points are
+allotted only back in the sietch (on ending a vision). Defeating the **Awaken-10 Baron** sets the
+ending flag. Sietch UI: an Awaken selector at the Water-of-Life ritual.
+**Exit:** level up + extract (gear forged, resources secured); next run die; character / level /
+gear / inventory / vault / banked spice + Awaken progress survive; only the fatal run's gathered
+spice/water/materials are gone; clearing a pinnacle unlocks the next level.
 
 ### B6 — Sietch suspicion (meta pressure) + Guild bribe ⬜
 Persistent suspicion meter; Guild envoy bribe cools it; maxing = a raid that costs
