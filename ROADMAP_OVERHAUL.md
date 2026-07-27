@@ -179,9 +179,22 @@ recolor, and a good window-scaling filter.
 > him is the ending. (`awaken_level` + `awaken_cleared` live in meta.dat — B5; the graph's
 > `NodeType::Pinnacle` summit slot is filled by the Awaken level's boss — B3.)
 >
-> **Sietch replayability device (PoE "maps").** An in-hub station that lets the player
-> configure/craft modified excursions for bonus rewards — the endgame loop layered on top
-> of the Awaken ladder (B10).
+> **Narrative spine — climbing the Harkonnen chain of command.** The campaign is a Fremen
+> insurgency striking back at the Harkonnens. **Bosses are informants**: the 3 per-run tier
+> bosses are seeded Harkonnen officers you break for intel (the "fighting back" loop), and
+> **each Awaken level's pinnacle boss is a *named* informant one rung higher up the ladder**
+> — the intel from each points at the next. As Awaken climbs, the pinnacles become the
+> Baron's inner circle: **Piter De Vries, Glossu "the Beast" Rabban, Feyd-Rautha, [Gaius]**,
+> … culminating in **Baron Harkonnen** himself at Awaken 10 (with the Awaken-5 confrontation
+> where he withdraws undefeated). *(The concrete Awaken→pinnacle roster is a B3/B5 data table
+> keyed by `awaken_level`; names above are placeholders to be finalized. "Gaius" = Gaius
+> Helen Mohiam? she may instead anchor the Corrino hidden bosses below.)*
+>
+> **Sietch replayability device (PoE "maps") + hidden Corrino super-bosses.** An in-hub
+> station (B10) that lets the player configure/craft modified excursions for bonus rewards —
+> the endgame loop layered on top of the Awaken ladder. **Rare charts unlock hidden pinnacle
+> bosses drawn from House Corrino** — Princess Irulan, Emperor Shaddam IV, Sardaukar command
+> (and possibly the Truthsayer) — optional super-bosses *beyond* the Baron arc.
 
 ### B1 — World graph + single resident zone ⬜ *(B1.1 ✅, B1.2 ✅)*
 Per-run `world::Graph` (nodes = sietch hub + 4 tiers of 3 room nodes each capped by a
@@ -210,11 +223,12 @@ and door-preview overlays.
 Room content spawns **on entry**: an escort pack of **elite mobs** (scaled to the tier)
 guarding the section's harvester; killing the escort lets you deny the harvester for
 spice + loot. **3 rooms per tier then a boss** (`NodeType::Boss`, tiers 1-3) via the
-champion generator, scaled by tier **and by the run's Awaken level**. The tier-4 summit
-is `NodeType::Pinnacle`: its concrete encounter is selected by the Awaken level (B5) —
-a per-level pinnacle boss, with **Baron Harkonnen** filling it at Awaken 10 (defeatable =
-ending) and a **withdraw-undefeated Baron confrontation at Awaken 5**. Retire schedule_ops
-/ quota / deadlines / climax_pending; `denied`+`alert` become per-run.
+champion generator, scaled by tier **and by the run's Awaken level** — these are the
+**seeded Harkonnen informant-officers** you break for intel (the insurgency loop). The
+tier-4 summit is `NodeType::Pinnacle`: a **named** informant selected by the Awaken level
+(B5) from the inner-circle roster (Piter / Rabban / Feyd / … → **Baron Harkonnen** at
+Awaken 10, defeatable = ending; **withdraw-undefeated Baron confrontation at Awaken 5**).
+Retire schedule_ops / quota / deadlines / climax_pending; `denied`+`alert` become per-run.
 **Exit:** clear 3 elite rooms before each tier boss; bosses scale with tier + Awaken; the
 summit yields the Awaken pinnacle (Baron at 10); campaigntest updated (clear rooms → tier
 boss → pinnacle).
@@ -268,11 +282,13 @@ consumable, craftable item that seeds and modifies a bonus excursion: rolled **m
 **reward mods** (spice/loot/material quantity + rarity), plus a **chart tier** that gates
 depth. Slotting a chart into the table launches a run built from `hash_combine(chart_seed,
 …)` (deterministic, no new resident-zone machinery — reuses the B1 graph + biome params);
-completing it can drop **higher-tier charts** (the self-sustaining map economy) and rare
-charts point at **special bosses / Jacurutu (B9)**. Charts are crafted/rerolled at the
-**D2 bench** with materials, tying itemization into replayability. Runs are extract-or-lose
-like any other. Files: new chart item kind (items.h), `world::Graph` build-from-chart path,
-a cartography-table hub menu, chart drops in the loot roll.
+completing it can drop **higher-tier charts** (the self-sustaining map economy) and the
+rarest charts point at **hidden House Corrino super-bosses** — Princess Irulan, Emperor
+Shaddam IV, Sardaukar command (optional pinnacles *beyond* the Baron arc) — and at
+**Jacurutu (B9)**. Charts are crafted/rerolled at the **D2 bench** with materials, tying
+itemization into replayability. Runs are extract-or-lose like any other. Files: new chart
+item kind (items.h), `world::Graph` build-from-chart path, a cartography-table hub menu,
+the Corrino boss table, chart drops in the loot roll.
 **Exit:** find/craft a route-chart → slot it at the table → run a modified excursion whose
 danger + rewards match the chart's mods → extract with the loot → it drops higher-tier
 charts; deterministic across save/load.
