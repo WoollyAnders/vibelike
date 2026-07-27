@@ -186,8 +186,9 @@ struct GameState {
     uint64_t seed = 0;
 
     map::Zone zone_;      // B1.2: the single resident zone (regenerated on node entry)
-    world::Graph graph;   // B1: per-run node graph (built from seed; not yet driving zones)
-    uint8_t cur_zone = map::kZoneSietch;
+    world::Graph graph;   // B1: per-run node graph (built from run seed)
+    int cur_node = 0;     // B1.3: current graph node (0 = sietch hub); drives the resident zone
+    uint8_t cur_zone = map::kZoneSietch;  // derived from the current node's Stage (biome/membership tag)
     uint8_t spawned_mask = 0;  // zones whose wildlife has been placed
     int shade_hour = -1;       // hour the shade map was computed for
 
@@ -1824,10 +1825,10 @@ bool worm_occupies(int x, int y) {
 // ---- player actions ------------------------------------------------------------
 
 // use_spawn: reposition the player at the zone's default spawn point.
-void enter_zone(uint8_t id, bool use_spawn, int at_x = 0, int at_y = 0) {
+void enter_zone(uint8_t id, uint64_t gen_seed, bool use_spawn, int at_x = 0, int at_y = 0) {
     g.cur_zone = id;
     int sx, sy;
-    map::generate(zone(), g.seed, map::ZoneId(id), sx, sy);
+    map::generate(zone(), gen_seed, map::ZoneId(id), sx, sy);
     apply_deltas(zone(), id);
     spawn_zone_wildlife(zone(), id);
     // crawler footprint re-blocks after regen
@@ -1914,24 +1915,40 @@ void enter_zone(uint8_t id, bool use_spawn, int at_x = 0, int at_y = 0) {
     flash(10, 10, 10);
 }
 
+// B1.3: traverse the world graph. Each node is a fresh instance of the resident zone,
+// regenerated from the node's own seed + its Stage's biome. Consecutive nodes can share a
+// map::ZoneId, so we must clear the previous node's entities + per-node state so each node
+// spawns fresh (the membership filters key off e.zone == cur_zone).
+void enter_node(int idx) {
+    if (idx < 0 || idx >= g.graph.count) return;
+    world::Node& n = g.graph.nodes[idx];
+    g.cur_node = idx;
+    n.flags |= world::NF_VISITED;
+
+    // wipe the outgoing node's transient occupants (keep the player, ents[0])
+    for (int i = 1; i < kMaxEnts; ++i) g.ents[i] = Entity{};
+    g.op = harvest::Op{};        // the harvester op is per-node (retired in B3)
+    g.alarm_turns = 0;
+    g.alarm_spawn_cd = 0;
+    g.delta_count = 0;           // tile edits (churn, breaches) reset per node
+    g.spawned_mask = 0;          // let spawn_zone_wildlife repopulate this fresh node
+
+    const uint8_t zid = uint8_t(world::zone_id_of(n.stage));
+    enter_zone(zid, n.seed, /*use_spawn=*/true);
+}
+
+// The Water-of-Life ritual (B2) launches a campaign run at node 1; here it's a bare trigger.
+void begin_run() {
+    const int first = g.graph.forward(0);
+    if (first >= 0) enter_node(first);
+}
+
 void try_move(int dx, int dy) {
     Entity& p = player_ent();
     const int nx = p.x + dx, ny = p.y + dy;
     map::Zone& z = zone();
 
-    // walking off the east/west edge travels between desert regions
-    if (nx >= map::W && g.cur_zone == map::kZoneDesert) {
-        g.log.push("You cross into the Deep Pan. Open erg. Worm country.");
-        enter_zone(map::kZoneDeepPan, false, 1, p.y);
-        advance_world();
-        return;
-    }
-    if (nx < 0 && g.cur_zone == map::kZoneDeepPan) {
-        g.log.push("Back across the Rimwall fringe.");
-        enter_zone(map::kZoneDesert, false, map::W - 2, p.y);
-        advance_world();
-        return;
-    }
+    // B1.3: zone-to-zone travel is via the graph (doors/nodes), not the map edge.
     if (nx < 0 || nx >= map::W || ny < 0 || ny >= map::H) return;
     const uint8_t tf = z.at(nx, ny);
 
@@ -2317,6 +2334,7 @@ void game_init(uint64_t seed, const GameServices& services) {
     g.seed = seed;
     g.rng.init(seed);
     g.graph.build(seed);  // B1: build the run's node graph (deterministic from seed)
+    g.cur_node = 0;       // B1.3: start in the sietch hub (node 0); generate_sietch ignores seed
     meta_load();
 
     int sx, sy;
@@ -2424,12 +2442,19 @@ bool click_step_toward(int gx, int gy) {
 // Click-only sietch exit: fired from game_update when the player has walked
 // adjacent to a door they clicked (water seals the sietch — you leave by the door).
 void use_door() {
-    if (g.cur_zone == map::kZoneSietch) {
-        g.log.push("You step out into the Tanzerouft.");
-        enter_zone(map::kZoneDesert, true);
+    if (g.cur_node == 0) {
+        // B1.3 stand-in for the Water-of-Life ritual (B2): step into Paul's vision.
+        g.log.push("You drink deep of the Water. Muad'Dib's vision takes you.");
+        begin_run();
     } else {
-        g.log.push("You slip back into the sietch's cool dark.");
-        enter_zone(map::kZoneSietch, true);
+        const int nxt = g.graph.forward(g.cur_node);
+        if (nxt >= 0) {
+            g.log.push("You press on, deeper into the vision toward Arrakeen.");
+            enter_node(nxt);
+        } else {
+            g.log.push("The vision recedes; you wake in the sietch.");
+            enter_node(0);
+        }
     }
     advance_world();
 }
@@ -4079,6 +4104,9 @@ bool game_consume_fullscreen_request() {
 void game_serialize(SaveWriter& w) {
     w.u64(g.seed);
     w.u8(g.cur_zone);
+    w.i32(g.cur_node);                                  // B1.3: current graph node
+    w.i32(g.graph.count);                               // + per-node flags (graph rebuilds from seed)
+    for (int i = 0; i < g.graph.count; ++i) w.u8(g.graph.nodes[i].flags);
     w.i32(g.pl.hp);
     w.i32(g.pl.water);
     w.i32(g.pl.exposure);
@@ -4140,6 +4168,11 @@ void game_serialize(SaveWriter& w) {
 bool game_deserialize(SaveReader& r) {
     const uint64_t seed = r.u64();
     const uint8_t cur = r.u8();
+    const int cur_node = r.i32();                       // B1.3: current graph node
+    const int gcount = r.i32();                         // + per-node flags
+    static uint8_t node_flags[world::kMaxNodes];
+    const int gclamp = (gcount >= 0 && gcount <= world::kMaxNodes) ? gcount : 0;
+    for (int i = 0; i < gclamp; ++i) node_flags[i] = r.u8();
     Player pl;
     pl.hp = r.i32();
     pl.water = r.i32();
@@ -4206,9 +4239,13 @@ bool game_deserialize(SaveReader& r) {
     r.bytes(deltas, sizeof deltas);
     static uint8_t vis[map::N];
     r.bytes(vis, sizeof vis);
-    if (!r.ok() || cur >= map::kZoneCount || delta_count > kMaxDeltas) return false;
+    if (!r.ok() || cur >= map::kZoneCount || delta_count > kMaxDeltas ||
+        cur_node < 0 || cur_node >= world::kMaxNodes) return false;
 
     g.seed = seed;
+    g.graph.build(seed);                               // B1.3: rebuild the run graph from the seed
+    for (int i = 0; i < gclamp && i < g.graph.count; ++i) g.graph.nodes[i].flags = node_flags[i];
+    g.cur_node = (cur_node < g.graph.count) ? cur_node : 0;
     g.cur_zone = cur;
     g.pl = pl;
     g.spawned_mask = spawned;
@@ -4242,7 +4279,8 @@ bool game_deserialize(SaveReader& r) {
     g.delta_count = delta_count;
     std::memcpy(g.deltas, deltas, sizeof g.deltas);
     int sx_, sy_;
-    map::generate(g.zone_, seed, map::ZoneId(cur), sx_, sy_);
+    const world::Node& cn = g.graph.nodes[g.cur_node];   // regen the resident zone from its node
+    map::generate(g.zone_, cn.seed, map::ZoneId(cur), sx_, sy_);
     apply_deltas(g.zone_, cur);
     std::memcpy(g.zone_.vis, vis, sizeof vis);
     if (g.op.live() && g.op.zone == g.cur_zone)
@@ -4424,7 +4462,10 @@ int game_debug_shield_hp() {
 int game_worm_state() { return int(g.wrm.state); }
 
 void game_debug_warp(int zone_id, int x, int y) {
-    enter_zone(uint8_t(zone_id), false, x, y);
+    // keep cur_node consistent with the warped-to biome (first node of that Stage)
+    for (int i = 0; i < g.graph.count; ++i)
+        if (world::zone_id_of(g.graph.nodes[i].stage) == zone_id) { g.cur_node = i; break; }
+    enter_zone(uint8_t(zone_id), g.seed, false, x, y);  // g.seed keeps the old warp map layout
 }
 
 void game_debug_op_info(int* state, int* x, int* y) {
@@ -4449,6 +4490,7 @@ uint64_t game_state_hash() {
     auto mix = [&](uint64_t v) { h = (h ^ v) * 0x100000001b3ULL; };
     mix(g.seed);
     mix(uint64_t(g.cur_zone));
+    mix(uint64_t(uint32_t(g.cur_node)));  // B1.3: graph position is part of run state
     mix(uint64_t(uint32_t(g.pl.hp)));
     mix(uint64_t(uint32_t(g.pl.water)));
     mix(uint64_t(uint32_t(g.pl.exposure)));

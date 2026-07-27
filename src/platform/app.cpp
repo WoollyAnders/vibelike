@@ -305,6 +305,7 @@ int run_seamtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cma
         }
     };
 
+    game_debug_use_door();    // B1.3: traverse into field node 1 so the save round-trips cur_node
     tick_with(Key::Right, 3);
     tick_with(Key::Down, 2);
     tick_with(Key::Save, 1);
@@ -318,6 +319,7 @@ int run_seamtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cma
 
     // Re-init from the same seed and replay the pre-save inputs: determinism.
     game_init(12345, services);
+    game_debug_use_door();
     tick_with(Key::Right, 3);
     tick_with(Key::Down, 2);
     const uint64_t h_replayed = game_state_hash();
@@ -720,9 +722,12 @@ int run_rpgtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmap
 
     int level = 0, inv = 0, stash = 0;
     for (int kills = 0; kills < 8; ++kills) {
+        // B1.3 retired edge-travel recycling; hunt at a fresh spot each kill so the slain
+        // trooper's corpse/loot doesn't block the next spawn (Right walks when not adjacent).
+        game_debug_warp(1, 18 + kills * 4, 30);
         int hp = 0;
         game_debug_spawn_shield_adjacent(&hp);
-        if (hp <= 0) break;
+        if (hp <= 0) continue;  // unwalkable spot; try the next one
         int guard = 0;
         while (game_debug_shield_hp() > 0 && guard++ < 40) {
             game_debug_refill();

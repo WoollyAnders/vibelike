@@ -7,7 +7,7 @@
 #include <vector>
 
 inline constexpr uint32_t kSaveMagic = 0x54535544;  // 'DUST'
-inline constexpr uint16_t kSaveVersion = 4;  // v4: RPG stats, items, talents
+inline constexpr uint16_t kSaveVersion = 5;  // v5: B1.3 world graph (cur_node + node flags)
 
 class SaveWriter {
 public:
