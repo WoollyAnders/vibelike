@@ -18,7 +18,8 @@ func _ready():
     _blit()
 
 func _blit():
-    var w := sim.fb_width(); var h := sim.fb_height()
+    var w: int = sim.fb_width()
+    var h: int = sim.fb_height()
     var img := Image.create_from_data(w, h, false, Image.FORMAT_RGBA8, sim.frame_rgba())
     tr.texture = ImageTexture.create_from_image(img)
 
