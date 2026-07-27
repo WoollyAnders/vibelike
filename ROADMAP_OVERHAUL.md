@@ -4,9 +4,12 @@ The first playtest produced a large, coherent set of change requests plus one
 critical rendering bug. This roadmap turns that feedback into an execution plan:
 DUSTFALL becomes a **roguelike / extraction / ARPG blend** — a *persistent
 character* runs *procedural excursions* out of the sietch through a *branching
-world map* shaped like *Hades* (~4 field sections per tier, then a boss,
-escalating to Baron Harkonnen), extracting by **riding a sandworm home** to bank
-loot or dying and losing what was carried.
+world map* shaped like *Hades* (**12 regular areas across 4 tiers, each tier
+capped by a boss = 4 bosses**), extracting by **riding a sandworm home** to bank
+loot or dying and losing what was carried. The campaign climbs an **"Awaken"
+difficulty ladder (1→10, Hades "Heat")**: each level has a dedicated pinnacle boss,
+gated so only clearing the current level advances the story, culminating in **Baron
+Harkonnen at Awaken 10** (a first, undefeatable confrontation at Awaken 5).
 
 House rules unchanged: **done** means the **Exit** criterion runs in the game and
 the sim stays deterministic (`dettest` holds, re-baselined once per legit sim
@@ -152,35 +155,89 @@ recolor, and a good window-scaling filter.
 
 ## PHASE B — Run / World / Extraction Architecture
 
-### B1 — World graph + single resident zone ⬜
-Per-run `world::Graph` (≤~20 nodes, tiers of ~4 field sections capped by a boss,
-summit Baron) + one resident `map::Zone`; node_seed = hash_combine(run_seed, i).
-**Exit:** leave the sietch, traverse the chain, save/load round-trips; seamtest/
-dettest hold (rebaselined once).
+> **DESIGN PIVOT (mid-project): Hades-style gauntlet climb + an "Awaken" ladder.**
+>
+> **Within a run** — a climb of **combat rooms**, not time-scheduled harvests. Each
+> field node is a ROOM: enter → fight an **elite-mob escort** → **deny/loot the harvester
+> it guards** (the room's reward) → **pick 1 of a few boons** (run-scoped powerups,
+> Hades-style) → advance through a previewed forward door. The graph is **4 tiers of 3
+> rooms (12 regular areas), each tier capped by a boss (4 bosses)**; difficulty escalates
+> tier by tier. The 4th (summit) boss is the run's **pinnacle**. The old op-scheduling
+> (schedule_ops, global quota, deadlines, non-current-zone look-ahead) is **retired** —
+> the harvester + escort now **spawn on room entry**, which is what lets B1 use a single
+> resident zone. **Extraction = hybrid:** after clearing a tier boss you may **ride the
+> worm home to bank** carried spice/gear/boons-as-meta and end the run, or **push deeper**
+> for more; **die anywhere = lose everything carried.**
+>
+> **Across runs — the "Awaken" ladder (Hades "Heat").** The campaign is 10 escalating
+> difficulty levels, **Awaken 1 … Awaken 10**. You only advance the story by clearing the
+> current level's run and defeating its **pinnacle boss**, which unlocks Awaken N+1.
+> Re-running a level you've already cleared is allowed but yields **no better drops and no
+> campaign progress** (pure practice/farm). **Each Awaken level fields a dedicated pinnacle
+> boss.** **Awaken 5** stages a first confrontation with **Baron Harkonnen** — he withdraws
+> undefeated. **Awaken 10**'s pinnacle is the real, defeatable **Baron Harkonnen**: beating
+> him is the ending. (`awaken_level` + `awaken_cleared` live in meta.dat — B5; the graph's
+> `NodeType::Pinnacle` summit slot is filled by the Awaken level's boss — B3.)
+>
+> **Sietch replayability device (PoE "maps").** An in-hub station that lets the player
+> configure/craft modified excursions for bonus rewards — the endgame loop layered on top
+> of the Awaken ladder (B10).
 
-### B2 — Gated, branching run flow ⬜
-Sietch = pure hub; leaving commits a run; section exits offer 2-3 previewed doors;
-tier-end funnels to the boss; grace retreat only pre-denial.
-**Exit:** leaving commits; you pick doors each section; no free return after a
-denial.
+### B1 — World graph + single resident zone ⬜ *(B1.1 ✅, B1.2 ✅)*
+Per-run `world::Graph` (nodes = sietch hub + 4 tiers of 3 room nodes each capped by a
+boss, summit `Pinnacle`) + one resident `map::Zone`; node_seed = node_hash(run_seed, i).
+**B1.1 ✅** — `world.h`: deterministic graph built at run start (additive; not yet
+driving zones). **B1.2 ✅** — graph reshaped to **17 nodes = sietch + 12 fields + 4
+bosses** (kTiers=4, kSectionsPerTier=3); replaced `g.zones[3]` with one resident
+`g.zone_`; `apply_deltas`/`spawn_zone_wildlife`/`spawn_op_in`/`place_npc_near` take a
+`map::Zone&`; the op look-ahead into a non-current zone uses a temp buffer (retired in
+B3); serialize/deserialize store one zone's vis; save.dat format changed (roguelike, no
+migration); dettest hash unchanged (`af5340c1f7cb0ba2`), seamtest green. **B1.3 (next):**
+`enter_zone`→`enter_node(idx)` graph traversal (regenerate the resident zone from the
+node's seed+biome, clear stale entities, deltas reset per node).
+**Exit:** leave the sietch, traverse the graph node-to-node, save/load round-trips.
 
-### B3 — Harvesters per section + tiered bosses (Hades cadence) ⬜
-One harvester per field section; ~4 sections per tier then a scaled boss; bosses
-escalate to Baron Harkonnen.
-**Exit:** clear ~4 sections before the first boss; each tier boss tougher; summit
-yields the Baron; campaigntest updated.
+### B2 — Gated run flow + boons (Hades rooms) ⬜
+Sietch = pure hub; leaving via the door **commits a run** (enter node 1). Each room:
+clear the elite escort → deny/loot the harvester → a **boon pick** (2-3 run-scoped
+powerups) → a **previewed forward door** (biome/threat/reward hint) to the next node.
+Tier-end funnels to the boss room; grace retreat to the sietch only before the first
+room is cleared. New: a Boon system (run-scoped stat/ability modifiers) + the boon-pick
+and door-preview overlays.
+**Exit:** leaving commits; clear a room → choose a boon → advance; bosses cap tiers.
 
-### B4 — Extraction via worm-ride ⬜
-Repurpose worm-riding into a one-way extraction verb; sweep carried inv + spice +
-materials into the banked wallets.
-**Exit (reworked extractiontest):** deny → thumper → surface → mount → land home
-with loot banked; dying loses everything carried.
+### B3 — Elite gauntlet rooms + tiered bosses ⬜
+Room content spawns **on entry**: an escort pack of **elite mobs** (scaled to the tier)
+guarding the section's harvester; killing the escort lets you deny the harvester for
+spice + loot. **3 rooms per tier then a boss** (`NodeType::Boss`, tiers 1-3) via the
+champion generator, scaled by tier **and by the run's Awaken level**. The tier-4 summit
+is `NodeType::Pinnacle`: its concrete encounter is selected by the Awaken level (B5) —
+a per-level pinnacle boss, with **Baron Harkonnen** filling it at Awaken 10 (defeatable =
+ending) and a **withdraw-undefeated Baron confrontation at Awaken 5**. Retire schedule_ops
+/ quota / deadlines / climax_pending; `denied`+`alert` become per-run.
+**Exit:** clear 3 elite rooms before each tier boss; bosses scale with tier + Awaken; the
+summit yields the Awaken pinnacle (Baron at 10); campaigntest updated (clear rooms → tier
+boss → pinnacle).
 
-### B5 — Persistence & meta ⬜
+### B4 — Extraction via worm-ride (hybrid bank-out) ⬜
+After clearing a **tier boss**, a worm-ride-home verb banks carried inv + spice +
+materials + this run's boons-as-meta and ends the run — or push deeper. Bait/mount with
+a thumper + maker hooks (as before). No mid-tier extraction; **die anywhere = lose the
+carry**.
+**Exit (reworked extractiontest):** clear a tier boss → ride home → land in the sietch
+with loot banked; dying instead loses everything carried.
+
+### B5 — Persistence & meta (+ Awaken ladder) ⬜
 Persistent character + banked wallets in meta.dat ('DME2'→'DME3', back-compat);
-death keeps the character, clears carried gear/spice/materials.
-**Exit:** level up + extract; next run die; character/level/vault/banked spice
-survive; carried gear + spice gone.
+death keeps the character, clears carried gear/spice/materials. **Awaken ladder** lives
+here: `awaken_level` (currently unlocked, 1..10) + `awaken_cleared` (highest defeated)
+in meta; **a run is launched at a chosen Awaken level ≤ unlocked**; clearing the pinnacle
+at your current top level unlocks the next; re-running a cleared level gives **no drop
+bonus / no story progress** (scaling reads `awaken_level`). Defeating the **Awaken-10
+Baron** sets the ending flag. Sietch UI: an Awaken selector at the run-start door.
+**Exit:** level up + extract; next run die; character/level/vault/banked spice + Awaken
+progress survive; carried gear + spice gone; clearing a level's pinnacle unlocks the next
+and re-running a cleared level grants no bonus.
 
 ### B6 — Sietch suspicion (meta pressure) + Guild bribe ⬜
 Persistent suspicion meter; Guild envoy bribe cools it; maxing = a raid that costs
@@ -202,6 +259,23 @@ deterministic.
 Rare cave sub-maps + a super-rare legendary Jacurutu hoard as transient sub-zones.
 **Exit:** a cave entrance rarely appears → clear it for a dense reward; Jacurutu
 appears once across many runs; deterministic.
+
+### B10 — Sietch cartography (PoE-"maps" replayability) ⬜
+An in-hub station (a **cartography table** / Fremen route-cache) that gives the endgame
+its own loop on top of the Awaken ladder. The player holds **route-charts** — a
+consumable, craftable item that seeds and modifies a bonus excursion: rolled **modifiers**
+(more/tougher elites, extra harvesters, hazards, worm density) in exchange for scaled
+**reward mods** (spice/loot/material quantity + rarity), plus a **chart tier** that gates
+depth. Slotting a chart into the table launches a run built from `hash_combine(chart_seed,
+…)` (deterministic, no new resident-zone machinery — reuses the B1 graph + biome params);
+completing it can drop **higher-tier charts** (the self-sustaining map economy) and rare
+charts point at **special bosses / Jacurutu (B9)**. Charts are crafted/rerolled at the
+**D2 bench** with materials, tying itemization into replayability. Runs are extract-or-lose
+like any other. Files: new chart item kind (items.h), `world::Graph` build-from-chart path,
+a cartography-table hub menu, chart drops in the loot roll.
+**Exit:** find/craft a route-chart → slot it at the table → run a modified excursion whose
+danger + rewards match the chart's mods → extract with the loot → it drops higher-tier
+charts; deterministic across save/load.
 
 ---
 
