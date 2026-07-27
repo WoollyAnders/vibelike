@@ -155,46 +155,91 @@ recolor, and a good window-scaling filter.
 
 ## PHASE B — Run / World / Extraction Architecture
 
-> **DESIGN PIVOT (mid-project): Hades-style gauntlet climb + an "Awaken" ladder.**
+> **DESIGN PIVOT (mid-project): Hades-style gauntlet climb inside Paul's prescient visions.**
 >
-> **Within a run** — a climb of **combat rooms**, not time-scheduled harvests. Each
-> field node is a ROOM: enter → fight an **elite-mob escort** → **deny/loot the harvester
-> it guards** (the room's reward) → **pick 1 of a few boons** (run-scoped powerups,
-> Hades-style) → advance through a previewed forward door. The graph is **4 tiers of 3
-> rooms (12 regular areas), each tier capped by a boss (4 bosses)**; difficulty escalates
-> tier by tier. The 4th (summit) boss is the run's **pinnacle**. The old op-scheduling
-> (schedule_ops, global quota, deadlines, non-current-zone look-ahead) is **retired** —
-> the harvester + escort now **spawn on room entry**, which is what lets B1 use a single
-> resident zone. **Extraction = hybrid:** after clearing a tier boss you may **ride the
-> worm home to bank** carried spice/gear/boons-as-meta and end the run, or **push deeper**
-> for more; **die anywhere = lose everything carried.**
+> **Framing — the runs are Paul's possible futures.** The player is a **Fremen** (Fedaykin /
+> Saboteur / Sayyadina) — **not** Paul; no Voice, no weirding way. **Paul Muad'Dib is an NPC in
+> the sietch hub** (Sietch Tabr, in parallel to the novel). **A run begins by drinking the Water
+> of Life** — the poison Paul transmuted after he awoke as Kwisatz Haderach, shared at the Fremen
+> tau gathering — which links the Fremen to Paul's prescience. Each run = **walking one of Paul's
+> *possible* futures: a directed journey across Arrakis to Arrakeen to confront the Baron.**
+> Because they are *possible* futures, **book canon is never broken** — bosses "die" only within
+> the vision. **"Awaken"** = awakening prescient sight; the ladder = ever-deeper, harder visions.
 >
-> **Across runs — the "Awaken" ladder (Hades "Heat").** The campaign is 10 escalating
-> difficulty levels, **Awaken 1 … Awaken 10**. You only advance the story by clearing the
-> current level's run and defeating its **pinnacle boss**, which unlocks Awaken N+1.
-> Re-running a level you've already cleared is allowed but yields **no better drops and no
-> campaign progress** (pure practice/farm). **Each Awaken level fields a dedicated pinnacle
-> boss.** **Awaken 5** stages a first confrontation with **Baron Harkonnen** — he withdraws
-> undefeated. **Awaken 10**'s pinnacle is the real, defeatable **Baron Harkonnen**: beating
-> him is the ending. (`awaken_level` + `awaken_cleared` live in meta.dat — B5; the graph's
+> **Within a run** — a climb of **combat rooms**, not time-scheduled harvests. Each field node is
+> a ROOM: enter → fight an **elite-mob escort** → **deny/loot the harvester it guards** (the room's
+> reward) → **pick 1 of a few boons** (run-scoped powerups, Hades-style) → advance through a
+> previewed forward door. The graph is **4 tiers of 3 rooms (12 regular areas), each tier capped by
+> a boss (4 bosses)**; difficulty escalates tier by tier. The 4th (summit) boss is the run's
+> **pinnacle**. The old op-scheduling (schedule_ops, global quota, deadlines, non-current-zone
+> look-ahead) is **retired** — the harvester + escort now **spawn on room entry**, which is what lets
+> B1 use a single resident zone. **Extraction = hybrid:** after clearing a tier boss you may **ride
+> the worm home to bank** carried spice/gear/boons-as-meta and end the run, or **push deeper** for
+> more; **die anywhere = lose everything carried.**
+>
+> **Environments — the journey to Arrakeen (curated, NOT procedural biomes).** The campaign's
+> environments are **fixed per tier**, a geography march toward the city: **Tier 1 deep desert /
+> open erg** (Tanzerouft) → **Tier 2 rimwall & the Shield Wall** → **Tier 3 graben-pan &
+> Harkonnen-held outskirts** → **Tier 4 Arrakeen city & the Residency** (the pinnacle waits here).
+> The campaign **never rolls its biome** — the tier decides it (`node.seed` still varies room
+> *layout* within a tier; that is not "biome generation"). **Procedural biome *variety* is an
+> endgame-only feature**, living exclusively in the B10 cartography "maps." A distinct **Arrakeen
+> city generator** (streets/buildings/the Residency) is a new environment — its gen + art is its own
+> downstream task.
+>
+> **Across runs — the "Awaken" ladder (Hades "Heat").** 10 escalating levels, **Awaken 1 … 10**.
+> You advance the story only by clearing the current level's run and defeating its **pinnacle boss**,
+> unlocking Awaken N+1. Re-running a cleared level yields **no better drops and no campaign progress**
+> (pure practice/farm). **Awaken 10**'s pinnacle is the defeatable **Baron Harkonnen** — beating him
+> is the ending. (`awaken_level` + `awaken_cleared` live in meta.dat — B5; the graph's
 > `NodeType::Pinnacle` summit slot is filled by the Awaken level's boss — B3.)
 >
-> **Narrative spine — climbing the Harkonnen chain of command.** The campaign is a Fremen
-> insurgency striking back at the Harkonnens. **Bosses are informants**: the 3 per-run tier
-> bosses are seeded Harkonnen officers you break for intel (the "fighting back" loop), and
-> **each Awaken level's pinnacle boss is a *named* informant one rung higher up the ladder**
-> — the intel from each points at the next. As Awaken climbs, the pinnacles become the
-> Baron's inner circle: **Piter De Vries, Glossu "the Beast" Rabban, Feyd-Rautha, [Gaius]**,
-> … culminating in **Baron Harkonnen** himself at Awaken 10 (with the Awaken-5 confrontation
-> where he withdraws undefeated). *(The concrete Awaken→pinnacle roster is a B3/B5 data table
-> keyed by `awaken_level`; names above are placeholders to be finalized. "Gaius" = Gaius
-> Helen Mohiam? she may instead anchor the Corrino hidden bosses below.)*
+> **Run launch — no hub exit door (pure roguelike).** There is **no walk-out door** in the sietch.
+> Runs launch from hub interactions, gated by progress: the **Water-of-Life vision ritual** (Paul)
+> launches a **campaign run** — available from the start, the *only* launcher during the campaign;
+> the **cartography table** launches **endgame resource raids** (procedural "maps") and **unlocks
+> only after the campaign is complete** (Baron defeated at Awaken 10). Removing the physical exit
+> tile + building the ritual is **B2**; the progress-gated table is **B10**.
 >
-> **Sietch replayability device (PoE "maps") + hidden Corrino super-bosses.** An in-hub
-> station (B10) that lets the player configure/craft modified excursions for bonus rewards —
-> the endgame loop layered on top of the Awaken ladder. **Rare charts unlock hidden pinnacle
-> bosses drawn from House Corrino** — Princess Irulan, Emperor Shaddam IV, Sardaukar command
-> (and possibly the Truthsayer) — optional super-bosses *beyond* the Baron arc.
+> **Sietch hub cast — a progress-gated, growing roster.** The hub **starts nearly empty** — only
+> **Paul** + a crowd of ambient **Fremen** — and **fills as the campaign advances** (each named NPC
+> gated on an `awaken` threshold in `Meta`), the sietch swelling as the rebellion gathers.
+> Shopkeepers (roles to finalize): **Stilgar** (the Naib — leadership/quests/Awaken selector, extends
+> `EType::Naib`), **Lady Jessica** (Reverend Mother — abilities / passive-tree / Water-of-Life &
+> consumables / poison-craft, elevates `EType::Sayyadina`), **Chani** (desert-craft — stillsuits /
+> water / Sandcraft gear), **Gurney Halleck** (warmaster & smuggler contact — weapons / black-market,
+> takes `EType::Smuggler`). Lore/quest residents: **Alia** (pre-born oracle), **Harah** (Jamis's
+> widow / household), **Otheym** & **Korba** (Fedaykin). A **larger crowd of ambient Fremen**
+> bystanders (idle-wander + barks, reusing `kFremenSprites`/`kFremenBarks`) keeps the warren alive.
+> Characters dead or with the Harkonnens by this era (Duncan, Kynes, Jamis, Yueh, Hawat) are **not**
+> living hub NPCs — some appear as bosses or in lore. Code home: **B2** hub pass + **C8** vendors +
+> **E2** art.
+>
+> **Narrative spine — bosses are informants (climbing the Harkonnen chain).** A Fremen insurgency
+> striking back: the **3 per-run tier bosses** are seeded Harkonnen informant-officers you break for
+> intel; **each Awaken level's pinnacle is a *named* informant one rung higher**, the intel pointing
+> at the next. **LOCKED Awaken→pinnacle roster:**
+>
+> | Awaken | Pinnacle |
+> |---|---|
+> | 1 | Esmar Tuek (smuggler — a turned/coerced "ally" you must break) |
+> | 2 | Wellington Yueh |
+> | 3 | Caid Orlan Kest |
+> | 4 | Iakin Nefud (Captain) |
+> | 5 | Baron Harkonnen + Thufir Hawat — you kill Hawat, the Baron escapes |
+> | 6 | Bashar Vorek Harkonnen |
+> | 7 | Piter de Vries |
+> | 8 | Glossu Rabban |
+> | 9 | Feyd-Rautha |
+> | 10 | Baron Harkonnen (defeatable = ending) |
+>
+> *(Roster fills the `NodeType::Pinnacle` slot via a B3/B5 data table keyed by `awaken_level`.)*
+>
+> **Sietch replayability device (PoE "maps") + hidden Corrino super-bosses.** The **cartography
+> table** (B10, post-campaign) lets the player craft/roll modified raids for bonus rewards — the
+> endgame loop layered on the Awaken ladder. **Rare charts unlock hidden pinnacle bosses drawn from
+> House Corrino** — Princess Irulan, Emperor Shaddam IV, Sardaukar command (and possibly the
+> Truthsayer, Gaius Helen Mohiam) — optional super-bosses *beyond* the Baron arc.
 
 ### B1 — World graph + single resident zone ⬜ *(B1.1 ✅, B1.2 ✅)*
 Per-run `world::Graph` (nodes = sietch hub + 4 tiers of 3 room nodes each capped by a
@@ -206,9 +251,14 @@ bosses** (kTiers=4, kSectionsPerTier=3); replaced `g.zones[3]` with one resident
 `map::Zone&`; the op look-ahead into a non-current zone uses a temp buffer (retired in
 B3); serialize/deserialize store one zone's vis; save.dat format changed (roguelike, no
 migration); dettest hash unchanged (`af5340c1f7cb0ba2`), seamtest green. **B1.3 (next):**
-`enter_zone`→`enter_node(idx)` graph traversal (regenerate the resident zone from the
-node's seed+biome, clear stale entities, deltas reset per node).
-**Exit:** leave the sietch, traverse the graph node-to-node, save/load round-trips.
+reframe `world::Biome`→`Stage {Sietch, DeepDesert, Rimwall, Graben, Arrakeen}` with `build()`
+assigning each tier its stage by the **geography march to Arrakeen** (deletes the tier-parity
+biome toggle — the campaign no longer *rolls* its environment); add `cur_node` + `enter_node(idx)`
+graph traversal (regenerate the resident zone from `nodes[idx].seed` via a `Stage→ZoneId` map;
+Graben & Arrakeen use placeholder generators for now); a `begin_run()` launch trigger repoints the
+existing sietch-exit interaction; serialize `cur_node` + node flags, bump `kSaveVersion` 4→5;
+rebaseline dettest/clicktest once.
+**Exit:** launch into the graph, traverse node-to-node (tier 1→4), save/load round-trips.
 
 ### B2 — Gated run flow + boons (Hades rooms) ⬜
 Sietch = pure hub; leaving via the door **commits a run** (enter node 1). Each room:
