@@ -283,16 +283,17 @@ the spine terminates at the sietch, no softlock.)*
 **Exit ✅:** ritual commits a run; advancing a field node opens the Revelation → pick slot → pick item
 → gear enters the pack + node advances; `reveltest` + full suite green.
 
-### B3 — Elite gauntlet rooms + per-biome objectives + named bosses ⬜
-Room content spawns **on entry**: an **elite-mob escort** (scaled to Awaken level) guarding the
-biome objective (Act1 harvester-sabotage / Act2 caravan raids / Act3 breach the Shield Wall / Act4
-liberate settlements / Act5 urban insurgency). Room/gauntlet bosses are **seeded Harkonnen
-informant-officers** (champion generator). Each Awaken level's **pinnacle** (`NodeType::Pinnacle`) is
-a **named** boss from the LOCKED 2-per-act roster (Tuek/Yueh → … → Feyd/Baron), selected by Awaken
-level (B5) and scaled to it; pinnacles drop lootable gear. Retire schedule_ops / quota / deadlines /
-climax_pending; `denied`+`alert` become per-run.
-**Exit:** clear the biome objective + escort rooms then the level's named pinnacle; bosses scale with
-Awaken; campaigntest updated (clear rooms → pinnacle; Baron at Awaken 10).
+### B3 — Elite gauntlet escorts + named pinnacle bosses ✅ *(core)*
+`enter_node` spawns content **on entry**: Field nodes field an **elite Harkonnen escort** (count
+scales with `node.awaken`); Pinnacle nodes field the **LOCKED named boss** for that Awaken level
+(`kPinnacles[10]`: Tuek/Yueh/Kest/Nefud/Hawat/Vorek/Piter/Rabban/Feyd/Baron), scaled by awaken
+(`data2 = kPinnacleTag - idx`). Killing a pinnacle marks the node `NF_CLEARED`; killing the **Awaken-10
+Baron** ends the vision (victory), via melee + worm-swallow. Boss label/sprite handle named pinnacles.
+`gauntlettest` (escort spawns; Awaken-10 pinnacle is the Baron; slaying him → victory) + full suite green.
+**Deferred:** per-biome objective *variety* (currently all escorts), and fully retiring the legacy
+op-scheduler/quota (kept — campaigntest still exercises it; harmless alongside nodes). Bosses use
+`node.awaken` directly, so no B5 dependency.
+**Exit ✅:** field escort spawns; pinnacle = the level's named boss; the Awaken-10 Baron kill = victory.
 
 ### B4 — Extraction via worm-ride (forge-on-return) ⬜
 A worm-ride-home verb ends the vision and has the sietch **realize the run's yield**: Fremen **forge
