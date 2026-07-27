@@ -1,0 +1,9 @@
+[configuration]
+entry_symbol = "dustfall_library_init"
+compatibility_minimum = "4.3"
+
+[libraries]
+linux.debug.x86_64 = "res://bin/libdustfall.so"
+linux.release.x86_64 = "res://bin/libdustfall.so"
+windows.debug.x86_64 = "res://bin/dustfall.dll"
+windows.release.x86_64 = "res://bin/dustfall.dll"
