@@ -275,12 +275,37 @@ refill on kills.
 
 ## PHASE E — UI Polish + Art
 
+### E0 — Front-end: title menu + field manual ✅ *(added mid-project)*
+A "login"/title screen shown at launch (interactive only; headless tests jump
+straight to Play): **Enter the Sietch / Field Manual / Options / Leave the
+Desert**, keyboard + mouse. **Options**: sound on/off, fullscreen toggle, wipe
+character+vault (platform reads game_muted()/game_consume_fullscreen_request()).
+**Field Manual**: an 8-page paged primer (premise, controls, water/heat, combat &
+classes, harvesters & the worm, extraction, the sietch, gear & crafting) so new
+players learn the game. New game state `GameState::Screen` (Menu/Options/Manual/
+Play); the world is paused on the front-end.
+**Exit:** ✅ launch opens on the menu; Manual pages turn; Options toggle; Enter
+starts play; 10/10 tests green (dettest unchanged — headless skips the menu).
+
 ### E1 — Diablo character/inventory + drag-and-drop ⬜
 Paperdoll + equip slots + flask belt + grid; mouse drag-and-drop; affix tooltips.
 **Exit:** hovering shows affixes; drag equips/swaps/reorders; keyboard still works.
 
+### E1b — Character roster + creation (10 slots) ⬜ *(added mid-project)*
+Replace the single-class chooser with a **character-select screen** off the title
+menu: up to **10 saved character slots** (name, class, level, look), pick one to
+continue or **New Character** → **type a name** + **choose a class**. Needs SDL
+text-input plumbed into InputState and a multi-character roster in meta.dat
+(pairs with **B5** persistence — each slot stores its persistent character +
+banked vault). Delete-slot with confirm.
+**Exit:** launch → pick from up to 10 named characters or create one (name +
+class); the roster persists across launches; deleting a slot frees it.
+
 ### E2 — Art regen + terrain/animation refinement ⬜
 Portraits, item/flask/material icons, sietch/cave tiles, footprint decals, walk
-re-timing.
-**Exit:** atlas rebuilds; portraits + icons render; terrain visibly varied; no
-missing-asset fallbacks.
+re-timing. **Plus (added mid-project):** generated **main-menu art + an animated
+background** for the title screen, and **regenerated character-select art**
+(class portraits / full-body renders for the roster + creation screen), and the
+hand-authored isometric prop/decor art the billboard hub is a placeholder for.
+**Exit:** atlas rebuilds; portraits + icons + menu art render; animated title
+background; terrain visibly varied; no missing-asset fallbacks.

@@ -33,6 +33,11 @@ void game_render(Framebuffer& frame);
 // Current global palette fade (damage flash, transitions). Applied at present.
 PaletteFade game_fade();
 
+// Options-screen state the platform layer acts on. game_muted(): pause audio.
+// game_consume_fullscreen_request(): true once after the player picks Fullscreen.
+bool game_muted();
+bool game_consume_fullscreen_request();
+
 void game_serialize(SaveWriter& w);
 bool game_deserialize(SaveReader& r);
 
