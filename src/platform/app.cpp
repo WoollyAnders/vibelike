@@ -762,6 +762,40 @@ int run_rpgtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmap
     return pass ? 0 : 1;
 }
 
+// B2b: the Revelation gear-pick fires at a forward door: pick a slot, then 1 of 3 items.
+int run_reveltest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(4321, services);
+
+    game_debug_use_door();                 // hub -> node 1 (first entry: no Revelation)
+    const int node_before = game_debug_cur_node();
+    int stage = -1, inv0 = 0;
+    game_debug_revelation(&stage, &inv0);
+    const bool no_rev_on_entry = (stage == 0);
+
+    game_debug_use_door();                 // forward door at node 1 -> opens the Revelation
+    game_debug_revelation(&stage, &inv0);
+    const bool opened_slot = (stage == 1);
+
+    game_debug_revelation_pick(0);         // choose a slot -> roll 3 items
+    game_debug_revelation(&stage, &inv0);
+    const bool opened_item = (stage == 2);
+
+    game_debug_revelation_pick(0);         // choose an item -> take it + advance
+    int stage_end = -1, inv1 = 0;
+    game_debug_revelation(&stage_end, &inv1);
+    const int node_after = game_debug_cur_node();
+
+    const bool gained = inv1 == inv0 + 1;
+    const bool closed = stage_end == 0;
+    const bool advanced = node_after > node_before;
+    const bool pass = no_rev_on_entry && opened_slot && opened_item && gained && closed && advanced;
+    std::printf("reveltest %s (entry_clean %d slot %d item %d gained %d closed %d advanced %d: %d->%d)\n",
+                pass ? "PASS" : "FAIL", no_rev_on_entry, opened_slot, opened_item, gained, closed,
+                advanced, node_before, node_after);
+    return pass ? 0 : 1;
+}
+
 // A4: click-to-move pathfinds to the goal and is deterministic across runs.
 int run_clicktest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
     GameServices services{&mixer, &assets, &cmaps};
@@ -796,7 +830,8 @@ int main(int argc, char** argv) {
     bool seamtest = false, slicetest = false, wormtest = false, autodemo = false,
          optest = false, opdemo = false, uishot = false, shieldtest = false,
          campaigntest = false, dettest = false, ridetest = false, animdebug = false,
-         circledemo = false, fightdemo = false, rpgtest = false, clicktest = false;
+         circledemo = false, fightdemo = false, rpgtest = false, clicktest = false,
+         reveltest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
         if (SDL_strcmp(argv[i], "--seamtest") == 0) seamtest = true;
@@ -815,6 +850,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--animdebug") == 0) animdebug = true;
         if (SDL_strcmp(argv[i], "--rpgtest") == 0) rpgtest = true;
         if (SDL_strcmp(argv[i], "--clicktest") == 0) clicktest = true;
+        if (SDL_strcmp(argv[i], "--reveltest") == 0) reveltest = true;
     }
 
     Palette master;
@@ -842,6 +878,7 @@ int main(int argc, char** argv) {
     if (dettest) return run_dettest(mixer, assets, cmaps);
     if (ridetest) return run_ridetest(mixer, assets, cmaps);
     if (rpgtest) return run_rpgtest(mixer, assets, cmaps);
+    if (reveltest) return run_reveltest(mixer, assets, cmaps);
 
     Platform platform;
     if (!platform_init(platform, &mixer)) {
