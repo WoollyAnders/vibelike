@@ -306,6 +306,26 @@ inline constexpr const char* kBossEpithets[8] = {
     "the Unbowed", "the Flenser", "of the Tithe", "the Whip-Hand",
     "the Waterless", "the Gilded", "the Patient", "the Cruel"};
 
+// B3: the LOCKED named pinnacle roster, indexed by node.awaken (1..10). A named pinnacle is an
+// EType::Boss whose data2 = kPinnacleTag - roster_idx (a range distinct from champion name-packs
+// >= 0 and the old Baron sentinel -1). Slaying the Awaken-10 Baron (idx 9) is the campaign victory.
+struct Pinnacle { const char* name; const char* note; };
+inline constexpr Pinnacle kPinnacles[10] = {
+    {"Esmar Tuek", "the turned smuggler"},        // Awaken 1  (deep desert)
+    {"Wellington Yueh", "who survived Piter's blade"},  // 2
+    {"Caid Orlan Kest", "the taskmaster"},        // 3  (rimwall)
+    {"Iakin Nefud", "Guard Captain"},             // 4
+    {"Thufir Hawat", "the poisoned Mentat"},      // 5  (Shield Wall; the Baron flees)
+    {"Bashar Vorek Harkonnen", "the Bashar"},     // 6
+    {"Piter de Vries", "the Tleilaxu clone"},     // 7  (outskirts)
+    {"Glossu Rabban", "the Beast"},               // 8
+    {"Feyd-Rautha", "the na-Baron"},              // 9  (Arrakeen)
+    {"Baron Vladimir Harkonnen", "at last"},      // 10 (the Residency; victory)
+};
+inline constexpr int16_t kPinnacleTag = -100;  // data2 = kPinnacleTag - idx  ->  -100..-109
+inline bool boss_is_pinnacle(int16_t data2) { return data2 <= kPinnacleTag && data2 >= -109; }
+inline int boss_pinnacle_idx(int16_t data2) { return int(kPinnacleTag - data2); }
+
 // X2: Diablo-style enemy statlines.
 struct Foe { uint8_t level, tohit, dmin, dmax, ac_dodge; uint16_t xp; };
 Foe boss_foe(const Entity& e) {
@@ -1055,6 +1075,54 @@ void raise_standing(int amount) {
     }
 }
 
+// B3: spawn the node's NAMED pinnacle boss, scaled by its Awaken level (1..10).
+void spawn_pinnacle(int awaken) {
+    if (awaken < 1) awaken = 1;
+    if (awaken > 10) awaken = 10;
+    const int idx = awaken - 1;
+    map::Zone& z = zone();
+    for (int tries = 0; tries < 400; ++tries) {
+        const int edge = int(g.rng.combat.below(4));
+        const int x = edge < 2 ? (edge == 0 ? 2 : map::W - 3) : g.rng.combat.range(2, map::W - 3);
+        const int y = edge < 2 ? g.rng.combat.range(2, map::H - 3) : (edge == 2 ? 2 : map::H - 3);
+        if (!z.walkable(x, y) || entity_at(x, y, g.cur_zone)) continue;
+        Entity* e = alloc_entity();
+        if (!e) return;
+        uint8_t traits = BT_BRUTE | BT_STALWART;
+        if (awaken >= 5) traits |= BT_SHIELDED;
+        if (awaken >= 7) traits |= BT_SWIFT;
+        const int tier = awaken + 2;            // feeds boss_foe's tier scaling
+        const int hp = 30 + awaken * 12;
+        *e = Entity{EType::Boss, Ai::Hunt, g.cur_zone, int16_t(x), int16_t(y),
+                    int16_t(hp), 0, int16_t(tier | (traits << 8)), int16_t(kPinnacleTag - idx)};
+        g.log.push("%s stands in your path -- %s.", kPinnacles[idx].name, kPinnacles[idx].note);
+        if (awaken == 5) g.log.push("The Baron watches from a gilded 'thopter, out of reach.");
+        if (awaken == 10) g.log.push("BARON HARKONNEN. End the vision here.");
+        return;
+    }
+}
+
+// B3: an elite Harkonnen escort guards each field node's objective (count scales with Awaken).
+void spawn_escort(int awaken) {
+    const int want = 2 + awaken / 2;            // 2..7 troopers
+    const Entity& p = player_ent();
+    int placed = 0;
+    for (int tries = 0; tries < 3000 && placed < want; ++tries) {
+        const int x = g.rng.world.range(6, map::W - 3);
+        const int y = g.rng.world.range(2, map::H - 3);
+        if (!zone().walkable(x, y) || entity_at(x, y, g.cur_zone)) continue;
+        const int ddx = x > p.x ? x - p.x : p.x - x;
+        const int ddy = y > p.y ? y - p.y : p.y - y;
+        if (ddx + ddy < 8) continue;            // give the player breathing room on entry
+        Entity* e = alloc_entity();
+        if (!e) break;
+        const int hp = 6 + awaken * 2;
+        *e = Entity{EType::Trooper, Ai::Hunt, g.cur_zone,
+                    int16_t(x), int16_t(y), int16_t(hp), 0, 0};
+        ++placed;
+    }
+}
+
 void spawn_boss(bool baron) {
     map::Zone& z = zone();
     for (int tries = 0; tries < 300; ++tries) {
@@ -1165,14 +1233,17 @@ void worm_cb_crush(void*, int x, int y) {
             if (e.type == EType::Hound) g.log.push("A dust hound vanishes into the maw.");
             if (e.type == EType::Trooper) g.log.push("A trooper is snatched screaming into the sand.");
             if (e.type == EType::Boss) {
-                if (e.data2 == -1) {
+                const bool pin = boss_is_pinnacle(e.data2);
+                if (pin) g.graph.nodes[g.cur_node].flags |= world::NF_CLEARED;
+                if (e.data2 == -1 || (pin && boss_pinnacle_idx(e.data2) == 9)) {
                     g.log.push("SHAI-HULUD TAKES THE BARON. Shield and all.");
                     g.log.push("The desert itself has judged him.");
                     e.type = EType::None;
                     end_season(campaign::kVictory);
                     continue;
                 }
-                g.log.push("The champion's shield sang to the worm. It answered.");
+                g.log.push(pin ? "Shai-Hulud takes your quarry whole." :
+                                 "The champion's shield sang to the worm. It answered.");
             }
             e.type = EType::None;
         }
@@ -1968,6 +2039,13 @@ void enter_node(int idx) {
 
     const uint8_t zid = uint8_t(world::zone_id_of(n.stage));
     enter_zone(zid, n.seed, /*use_spawn=*/true);
+
+    // B3: the vision's content spawns on entry. Field nodes field an elite Harkonnen escort;
+    // Pinnacle nodes field the Awaken level's named boss. (Cleared nodes stay quiet on re-entry.)
+    if (!(n.flags & world::NF_CLEARED)) {
+        if (n.type == world::NodeType::Field) spawn_escort(n.awaken);
+        else if (n.type == world::NodeType::Pinnacle) spawn_pinnacle(n.awaken);
+    }
 }
 
 // The Water-of-Life ritual (B2) launches a campaign run at node 1; here it's a bare trigger.
@@ -2161,7 +2239,15 @@ void try_move(int dx, int dy) {
                 if (g.pl.st.level > foe->level + 2) xp /= 2;
                 grant_xp(xp);
             }
-            const bool was_baron = victim->type == EType::Boss && victim->data2 == -1;
+            // B3: a named pinnacle clears its node; the Awaken-10 Baron ends the vision (victory).
+            const bool pinnacle = victim->type == EType::Boss && boss_is_pinnacle(victim->data2);
+            const bool was_baron = victim->type == EType::Boss &&
+                                   (victim->data2 == -1 ||
+                                    (pinnacle && boss_pinnacle_idx(victim->data2) == 9));
+            if (pinnacle) {
+                g.graph.nodes[g.cur_node].flags |= world::NF_CLEARED;
+                raise_standing(8);
+            }
             maybe_drop_loot(victim->type, victim->x, victim->y);
             if (was_baron) {
                 *victim = Entity{EType::Corpse, Ai::Idle, uint8_t(g.cur_zone),
@@ -2202,6 +2288,9 @@ void try_move(int dx, int dy) {
                     if (victim->data2 == -1) {
                         g.log.push("The Baron falls, disbelieving, into the sand.");
                         g.log.push("His water belongs to the tribe. ALL of it.");
+                    } else if (boss_is_pinnacle(victim->data2)) {
+                        g.log.push("%s dies. Muad'Dib's sight was true.",
+                                   kPinnacles[boss_pinnacle_idx(victim->data2)].name);
                     } else {
                         g.log.push("The champion dies hard. His gear is yours.");
                         raise_standing(5);
@@ -2680,7 +2769,13 @@ const char* describe_at(int tx, int ty) {
             case EType::SpiceCache: return "raw spice (G: gather)";
             case EType::Boss: {
                 if (e.data2 == -1) return "BARON HARKONNEN (shielded!)";
-                static char bbuf[80];
+                static char bbuf[96];
+                if (boss_is_pinnacle(e.data2)) {
+                    const Pinnacle& p = kPinnacles[boss_pinnacle_idx(e.data2)];
+                    std::snprintf(bbuf, sizeof bbuf, "%s -- %s%s", p.name, p.note,
+                                  ((e.data >> 8) & BT_SHIELDED) ? " (shielded!)" : "");
+                    return bbuf;
+                }
                 std::snprintf(bbuf, sizeof bbuf, "%s %s %s%s",
                               kBossTitles[e.data2 & 7], kBossNames[(e.data2 >> 4) & 7],
                               kBossEpithets[(e.data2 >> 8) & 7],
@@ -3488,7 +3583,8 @@ void pass_entities(RenderCtx& r) {
                 g.draw_list.add(r.assets->get("spicecache"), 0, sx, sy + 12, light, 0);
                 break;
             case EType::Boss: {
-                const bool baron = e.data2 == -1;
+                const int pidx = boss_is_pinnacle(e.data2) ? boss_pinnacle_idx(e.data2) : -1;
+                const bool baron = e.data2 == -1 || pidx == 9;  // the Baron himself
                 g.draw_list.add(r.assets->get(baron ? "baron" : "champion"),
                                 (g.anim_tick / 8) % 2, sx, sy + 12, light, 1);
                 if (((e.data >> 8) & BT_SHIELDED) && g.anim_tick % 4 == 0)
@@ -4543,6 +4639,15 @@ void game_debug_revelation_pick(int idx) {  // headless: choose row idx + confir
     revelation_confirm();
 }
 int game_debug_cur_node() { return g.cur_node; }
+void game_debug_warp_to_node(int idx) { enter_node(idx); }  // B3: jump straight to a graph node
+int game_debug_hostile_count() {
+    int n = 0;
+    for (const Entity& e : g.ents)
+        if (e.zone == g.cur_zone &&
+            (e.type == EType::Trooper || e.type == EType::ShieldTrooper ||
+             e.type == EType::Hound || e.type == EType::Boss)) ++n;
+    return n;
+}
 
 void game_debug_rpg(int* level, int* inv_count, int* stash_count) {
     if (level) *level = g.pl.st.level;
@@ -4625,7 +4730,9 @@ void game_debug_buff() {  // harness only: end fights before the worm arrives
 
 bool game_debug_boss_is_baron() {
     for (const Entity& e : g.ents)
-        if (e.type == EType::Boss && e.zone == g.cur_zone && e.data2 == -1) return true;
+        if (e.type == EType::Boss && e.zone == g.cur_zone &&
+            (e.data2 == -1 || (boss_is_pinnacle(e.data2) && boss_pinnacle_idx(e.data2) == 9)))
+            return true;
     return false;
 }
 
