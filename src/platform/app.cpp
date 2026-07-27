@@ -348,6 +348,7 @@ int run_slicetest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cm
     game_debug_use_door();  // leave the sietch (doors are click-only now)
     int waits = 0;
     while (!game_is_dead() && waits < 6000) {
+        game_debug_clear_hostiles();  // B3: isolate survival from the field node's escort
         tick_with(Key::Wait);
         ++waits;
     }
@@ -796,6 +797,42 @@ int run_reveltest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cm
     return pass ? 0 : 1;
 }
 
+// B3: field nodes field an elite escort; the Awaken-10 Pinnacle is the Baron; killing him wins.
+int run_gauntlettest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    std::remove("meta.dat");
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(2468, services);
+
+    InputState in;
+    auto tick_with = [&](Key k) { in.pressed[int(k)] = true; game_update(in); in.end_tick(); };
+
+    game_debug_warp_to_node(1);                 // Awaken-1 field node
+    const int escort = game_debug_hostile_count();
+    const bool has_escort = escort >= 1;
+
+    game_debug_warp_to_node(40);                // Awaken-10 Pinnacle (the Baron)
+    const bool boss_here = game_debug_boss_alive();
+    const bool is_baron = game_debug_boss_is_baron();
+
+    game_debug_buff();                          // end the fight before the worm intervenes
+    tick_with(Key::Sandwalk);                   // the slow blade defeats the Baron's shield
+    int atkx = 0, atky = 0, guard = 0;
+    while (game_debug_boss_alive() && guard++ < 800) {
+        game_debug_refill();
+        game_debug_warp_to_boss(&atkx, &atky);
+        Key k = atkx > 0 ? Key::Right : atkx < 0 ? Key::Left : atky > 0 ? Key::Down : Key::Up;
+        tick_with(k);
+    }
+    int ending = 0;
+    game_debug_campaign(nullptr, nullptr, nullptr, nullptr, &ending);
+    const bool victory = ending == 1;  // campaign::kVictory
+
+    const bool pass = has_escort && boss_here && is_baron && victory;
+    std::printf("gauntlettest %s (escort %d boss %d baron %d victory %d)\n",
+                pass ? "PASS" : "FAIL", escort, boss_here, is_baron, victory);
+    return pass ? 0 : 1;
+}
+
 // A4: click-to-move pathfinds to the goal and is deterministic across runs.
 int run_clicktest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
     GameServices services{&mixer, &assets, &cmaps};
@@ -831,7 +868,7 @@ int main(int argc, char** argv) {
          optest = false, opdemo = false, uishot = false, shieldtest = false,
          campaigntest = false, dettest = false, ridetest = false, animdebug = false,
          circledemo = false, fightdemo = false, rpgtest = false, clicktest = false,
-         reveltest = false;
+         reveltest = false, gauntlettest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
         if (SDL_strcmp(argv[i], "--seamtest") == 0) seamtest = true;
@@ -851,6 +888,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--rpgtest") == 0) rpgtest = true;
         if (SDL_strcmp(argv[i], "--clicktest") == 0) clicktest = true;
         if (SDL_strcmp(argv[i], "--reveltest") == 0) reveltest = true;
+        if (SDL_strcmp(argv[i], "--gauntlettest") == 0) gauntlettest = true;
     }
 
     Palette master;
@@ -879,6 +917,7 @@ int main(int argc, char** argv) {
     if (ridetest) return run_ridetest(mixer, assets, cmaps);
     if (rpgtest) return run_rpgtest(mixer, assets, cmaps);
     if (reveltest) return run_reveltest(mixer, assets, cmaps);
+    if (gauntlettest) return run_gauntlettest(mixer, assets, cmaps);
 
     Platform platform;
     if (!platform_init(platform, &mixer)) {
