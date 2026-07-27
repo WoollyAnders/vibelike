@@ -29,7 +29,7 @@ constexpr int kMaxDeltas = 192;
 enum class EType : uint8_t { None = 0, Player, Hound, Corpse, Thumper, Trooper, Spotter,
                              Glowglobe, ShieldTrooper, Naib, Sayyadina, Smuggler,
                              PanAdder, Hermit, HunterSeeker, SpiceCache, Loot, Boss,
-                             Caravan, Envoy, Fremen };
+                             Caravan, Envoy, Fremen, Paul };
 enum class Ai : uint8_t { Idle = 0, Wander, Hunt, Guard };
 
 struct Entity {
@@ -131,7 +131,7 @@ struct CharStats {
 struct Player {
     CharStats st;
     items::Inst inv[12];
-    items::Inst equip[4];  // by items::Slot
+    items::Inst equip[int(items::Slot::Count)];  // by items::Slot (B2a: 10-slot Fremen paperdoll)
     int hp = tune::kPlayerHpMax;
     int water = tune::kStartWater;
     int exposure = 0;
@@ -189,6 +189,12 @@ struct GameState {
     world::Graph graph;   // B1: per-run node graph (built from run seed)
     int cur_node = 0;     // B1.3: current graph node (0 = sietch hub); drives the resident zone
     uint8_t cur_zone = map::kZoneSietch;  // derived from the current node's Stage (biome/membership tag)
+    // B2b: the Revelation (a prescient gear suggestion at each forward door). Transient (reset on load).
+    int revelation_stage = 0;              // 0 none, 1 pick slot, 2 pick item
+    int rev_sel = 0;
+    int rev_dest = 0;                      // node to enter once the pick resolves
+    uint8_t rev_slot_offer[3] = {0, 0, 0};
+    items::Inst rev_item_offer[3];
     uint8_t spawned_mask = 0;  // zones whose wildlife has been placed
     int shade_hour = -1;       // hour the shade map was computed for
 
@@ -346,13 +352,14 @@ int player_max_hp() {
 }
 int player_max_water() { return tune::kWaterMax + affix_total(items::AK_WATER); }
 int player_armor() {
-    const items::Inst& a = g.pl.equip[int(items::Slot::Armor)];
-    return (a.empty() ? 0 : a.d().a) + affix_total(items::AK_ARMOR);
+    return affix_total(items::AK_ARMOR);  // Body's intrinsic armor + any Guarded affixes
 }
+// B2a: thirst multiplier (x/4) derived from summed stillsuit reclamation (AK_RECLAIM),
+// replacing the old single Suit slot. 4 = no reclaim ... 1 = a full, sealed stillsuit.
 int player_suit_mul4() {
-    const items::Inst& su = g.pl.equip[int(items::Slot::Suit)];
-    int m = su.empty() ? 4 : su.d().a;
-    return m;
+    int cut = affix_total(items::AK_RECLAIM) / 2;
+    if (cut > 3) cut = 3;
+    return 4 - cut;
 }
 int player_dodge() {
     return g.pl.st.dex / 2 + affix_total(items::AK_DODGE) + 4 * g.pl.st.talents[8];
@@ -482,6 +489,7 @@ void spawn_zone_wildlife(map::Zone& z, uint8_t zone_id) {
     if (zone_id == map::kZoneSietch) {
         place_sietch_decor();
         // vendors, spread across the warren
+        place_npc_near(EType::Paul, z, zone_id, 32, 22);       // Muad'Dib: the vision ritual
         place_npc_near(EType::Naib, z, zone_id, 30, 30);       // great hall
         place_npc_near(EType::Sayyadina, z, zone_id, 32, 16);  // cistern chamber
         place_npc_near(EType::Smuggler, z, zone_id, 50, 28);   // storeroom
@@ -915,6 +923,32 @@ items::Inst roll_item(int item_level, int rarity_bonus) {
             items::kDefs[i].level + 3 >= item_level)
             candidates[n++] = i;
     items::Inst it;
+    if (!n) return it;
+    it.def = uint8_t(candidates[g.rng.loot.below(uint32_t(n))]);
+    const int r = int(g.rng.loot.below(100)) - rarity_bonus;
+    it.rarity = r < 10 ? 2 : r < 40 ? 1 : 0;
+    if (it.rarity >= 1) {
+        if (g.rng.loot.chance(1, 2) || it.rarity == 2)
+            it.prefix = uint8_t(g.rng.loot.below(items::kPrefixCount));
+        if (it.prefix == 0xFF || it.rarity == 2)
+            it.suffix = uint8_t(g.rng.loot.below(items::kSuffixCount));
+    }
+    return it;
+}
+
+// B2b: slot-locked roll for a Revelation offer (mirrors roll_item + a slot predicate).
+items::Inst roll_item_for_slot(int item_level, int rarity_bonus, items::Slot s) {
+    int candidates[items::kDefCount];
+    int n = 0;
+    for (int i = 0; i < items::kDefCount; ++i)
+        if (items::kDefs[i].slot == s && items::kDefs[i].level <= item_level + 2 &&
+            items::kDefs[i].level + 4 >= item_level)
+            candidates[n++] = i;
+    items::Inst it;
+    if (!n) {  // widen if the level window yielded nothing of this slot
+        for (int i = 0; i < items::kDefCount; ++i)
+            if (items::kDefs[i].slot == s) candidates[n++] = i;
+    }
     if (!n) return it;
     it.def = uint8_t(candidates[g.rng.loot.below(uint32_t(n))]);
     const int r = int(g.rng.loot.below(100)) - rarity_bonus;
@@ -1546,8 +1580,7 @@ void upkeep() {
     const bool sheltered = (tf & (map::TF_INDOOR | map::TF_SHADE)) != 0;
     if (amb >= tune::kExposureHotThreshold && !sheltered) {
         int gain = tune::kExposureGain;
-        const items::Inst& suit = g.pl.equip[int(items::Slot::Suit)];
-        if (!suit.empty()) gain -= (4 - suit.d().a) + 1;  // Mk I halves, Mk III negates
+        gain -= affix_total(items::AK_HEAT);  // B2a: hood/cloak heat shielding blunts the sun
         if (g.pl.litany_turns > 0) gain /= 2;
         if (gain < 0) gain = 0;
         if (g.pl.exposure == 0 && gain > 0)
@@ -1943,6 +1976,64 @@ void begin_run() {
     if (first >= 0) enter_node(first);
 }
 
+// B2b: open the Revelation at a forward door — Muad'Dib's vision reveals gear for the road ahead.
+// Offers 3 (preferably distinct) slots; the pick rolls 3 items and advances to `dest` after choosing.
+void open_revelation(int dest) {
+    g.rev_dest = dest;
+    g.rev_sel = 0;
+    const int kN = int(items::Slot::Count);
+    for (int i = 0; i < 3; ++i) {
+        uint8_t s = 0;
+        for (int tries = 0; tries < 12; ++tries) {
+            s = uint8_t(g.rng.loot.below(uint32_t(kN)));
+            const bool dup = (i > 0 && s == g.rev_slot_offer[0]) ||
+                             (i > 1 && s == g.rev_slot_offer[1]);
+            if (!dup) break;
+        }
+        g.rev_slot_offer[i] = s;
+    }
+    g.revelation_stage = 1;
+    g.log.push("Muad'Dib's sight settles on what you will need...");
+}
+
+// B2c: human-readable name of a journey stage (for the forward-door preview).
+const char* stage_name(world::Stage s) {
+    switch (s) {
+        case world::Stage::Sietch:     return "the sietch";
+        case world::Stage::DeepDesert: return "the deep desert";
+        case world::Stage::Rimwall:    return "the rimwall";
+        case world::Stage::ShieldWall: return "the Shield Wall";
+        case world::Stage::Outskirts:  return "the Arrakeen outskirts";
+        default:                       return "Arrakeen";
+    }
+}
+
+// Resolve the current Revelation selection (shared by the modal input + the debug hook).
+void revelation_confirm() {
+    if (g.revelation_stage == 1) {  // slot chosen -> roll 3 items of that slot
+        const items::Slot s = items::Slot(g.rev_slot_offer[g.rev_sel]);
+        for (int i = 0; i < 3; ++i)
+            g.rev_item_offer[i] =
+                roll_item_for_slot(2 + run_difficulty(), 30 + run_difficulty() * 6, s);
+        g.revelation_stage = 2;
+        g.rev_sel = 0;
+    } else if (g.revelation_stage == 2) {  // item chosen -> take it, then advance
+        const items::Inst chosen = g.rev_item_offer[g.rev_sel];
+        bool placed = false;
+        if (!chosen.empty())
+            for (items::Inst& slot : g.pl.inv)
+                if (slot.empty()) { slot = chosen; placed = true; break; }
+        char nm[64];
+        chosen.full_name(nm, sizeof nm);
+        g.log.push(placed ? "Muad'Dib's sight was true. You will bear: %s"
+                          : "Your pack is full; the vision of %s fades.", nm);
+        const int dest = g.rev_dest;
+        g.revelation_stage = 0;
+        enter_node(dest);
+        advance_world();
+    }
+}
+
 void try_move(int dx, int dy) {
     Entity& p = player_ent();
     const int nx = p.x + dx, ny = p.y + dy;
@@ -2018,6 +2109,7 @@ void try_move(int dx, int dy) {
     if (entity_at(nx, ny, g.cur_zone, EType::Naib) ||
         entity_at(nx, ny, g.cur_zone, EType::Sayyadina) ||
         entity_at(nx, ny, g.cur_zone, EType::Smuggler) ||
+        entity_at(nx, ny, g.cur_zone, EType::Paul) ||
         entity_at(nx, ny, g.cur_zone, EType::Fremen))
         return;
 
@@ -2346,16 +2438,22 @@ void game_init(uint64_t seed, const GameServices& services) {
     // old code set the mask directly, which silently skipped the NPC spawn.
     spawn_zone_wildlife(g.zone_, map::kZoneSietch);
 
-    g.pl.equip[int(items::Slot::Weapon)].def = 0;  // Dust Knife
-    g.pl.equip[int(items::Slot::Suit)].def = 9;    // Stillsuit Mk I
+    // B2a: start in a basic tier-1 Fremen stillsuit set (Cloak/Catchpockets/Token are loot targets)
+    g.pl.equip[int(items::Slot::Weapon)].def = 0;     // Dust Knife
+    g.pl.equip[int(items::Slot::Hood)].def = 5;       // Cloth Headwrap
+    g.pl.equip[int(items::Slot::Mask)].def = 8;       // Cracked Mask
+    g.pl.equip[int(items::Slot::NosePlugs)].def = 11; // Rough Filt-plugs
+    g.pl.equip[int(items::Slot::WaterTube)].def = 14; // Frayed Catchtube
+    g.pl.equip[int(items::Slot::Body)].def = 17;      // Patched Suit-body
+    g.pl.equip[int(items::Slot::Pumps)].def = 22;     // Worn Heel-pumps
     g.pl.hp = player_max_hp();
     g.choosing = services.interactive;
     // Interactive launches open on the title menu; headless tests jump into play.
     g.screen = services.interactive ? GameState::Screen::Menu : GameState::Screen::Play;
     if (!g.choosing) apply_background(g.pl, Background::Fedaykin);
 
-    g.log.push("The Naib's word: deny them the spice. Go.");
-    g.log.push("Arrows move. G harvest. T thumper. C sandwalk.");
+    g.log.push("Muad'Dib waits with the Water of Life. Drink, and walk the vision.");
+    g.log.push("Click Muad'Dib to begin. Arrows move. G harvest. C sandwalk.");
     refresh_fov_and_paths();
 
     int px, py;
@@ -2441,22 +2539,23 @@ bool click_step_toward(int gx, int gy) {
 
 // Click-only sietch exit: fired from game_update when the player has walked
 // adjacent to a door they clicked (water seals the sietch — you leave by the door).
+void open_revelation(int dest);  // fwd (defined above)
 void use_door() {
     if (g.cur_node == 0) {
-        // B1.3 stand-in for the Water-of-Life ritual (B2): step into Paul's vision.
         g.log.push("You drink deep of the Water. Muad'Dib's vision takes you.");
         begin_run();
-    } else {
-        const int nxt = g.graph.forward(g.cur_node);
-        if (nxt >= 0) {
-            g.log.push("You press on, deeper into the vision toward Arrakeen.");
-            enter_node(nxt);
-        } else {
-            g.log.push("The vision recedes; you wake in the sietch.");
-            enter_node(0);
-        }
+        advance_world();
+        return;
     }
-    advance_world();
+    const int nxt = g.graph.forward(g.cur_node);
+    if (nxt < 0) {
+        g.log.push("The vision recedes; you wake in the sietch.");
+        enter_node(0);
+        advance_world();
+        return;
+    }
+    // B2b: at a forward door the vision reveals gear; the Revelation pick then advances to `nxt`.
+    open_revelation(nxt);
 }
 
 // Per render tick (60Hz): every visible entity glides toward its logical
@@ -2571,6 +2670,7 @@ const char* describe_at(int tx, int ty) {
             case EType::ShieldTrooper: return "SHIELDED trooper (slow blade!)";
             case EType::Spotter: return "Harkonnen spotter";
             case EType::Glowglobe: return "glowglobe (L: retrieve)";
+            case EType::Paul: return "Muad'Dib (drink the Water: begin the vision)";
             case EType::Naib: return "the Naib";
             case EType::Sayyadina: return "the Sayyadina";
             case EType::Smuggler: return "Greybeard the smuggler";
@@ -2670,6 +2770,21 @@ bool game_update(const InputState& in) {
     if (g.screen == GameState::Screen::Manual) { update_manual(in); return true; }
     if (g.microshake > 0) --g.microshake;
     if (!g.choosing) visual_tick();
+
+    // B2b: the Revelation modal — a prescient gear pick at a forward door; pauses the world.
+    if (g.revelation_stage) {
+        if (in.was_pressed(Key::Up)) g.rev_sel = (g.rev_sel + 2) % 3;
+        else if (in.was_pressed(Key::Down)) g.rev_sel = (g.rev_sel + 1) % 3;
+        bool confirm = in.was_pressed(Key::Confirm);
+        if (in.mouse_pressed[0] && in.mouse_x >= 0) {
+            const int y0 = 280, my = in.mouse_y;
+            for (int i = 0; i < 3; ++i)
+                if (my >= y0 + 76 + i * 40 && my < y0 + 76 + i * 40 + 34) { g.rev_sel = i; confirm = true; }
+        }
+        if (confirm) revelation_confirm();
+        return true;
+    }
+
     g.hover_tx = -1;
     if (in.mouse_x >= 0 && !g.choosing && !g.menu_open) {
         int tx, ty;
@@ -2989,6 +3104,7 @@ bool game_update(const InputState& in) {
         else if (entity_at(g.hover_tx, g.hover_ty, g.cur_zone, EType::Smuggler)) g.interact_kind = 3;
         else if (zone().at(g.hover_tx, g.hover_ty) & map::TF_DOOR) g.interact_kind = 4;
         else if (entity_at(g.hover_tx, g.hover_ty, g.cur_zone, EType::Fremen)) g.interact_kind = 5;
+        else if (entity_at(g.hover_tx, g.hover_ty, g.cur_zone, EType::Paul)) g.interact_kind = 6;
         else g.interact_kind = 0;
     } else if (cursor_in_world && in.mouse_down[0] &&
                (g.hover_tx != g.move_goal_x || g.hover_ty != g.move_goal_y)) {
@@ -3021,6 +3137,14 @@ bool game_update(const InputState& in) {
             if (adx >= -1 && adx <= 1 && ady >= -1 && ady <= 1) {
                 if (g.interact_kind == 4) {
                     use_door();
+                } else if (g.interact_kind == 6) {  // Muad'Dib: the Water of Life ritual
+                    if (g.cur_node == 0) {
+                        g.log.push("Muad'Dib presses the Water of Life to your lips.");
+                        g.log.push("The vision takes you: the road to Arrakeen opens.");
+                        begin_run();
+                    } else {
+                        g.log.push("Muad'Dib walks only in the sietch of the waking world.");
+                    }
                 } else if (g.interact_kind == 5) {  // Fremen flavor bark
                     if (Entity* f = entity_at(g.move_goal_x, g.move_goal_y,
                                               g.cur_zone, EType::Fremen)) {
@@ -3326,6 +3450,10 @@ void pass_entities(RenderCtx& r) {
                                       sy - 20 + int(g.rng.fx.below(25)),
                                       0, -20, 10, 182);
                 break;
+            case EType::Paul:  // placeholder sprite until E2 art; distinct via a lit tint
+                g.draw_list.add(r.assets->get("naib"), 0, sx, sy + 12,
+                                light < 12 ? 14 : light, 1);
+                break;
             case EType::Naib:
                 g.draw_list.add(r.assets->get("naib"), 0, sx, sy + 12, light, 1);
                 break;
@@ -3496,22 +3624,25 @@ void pass_weather(RenderCtx& r) {
 
 struct ManualPage { const char* title; const char* lines[13]; };
 const ManualPage kManual[] = {
-    {"THE FREMEN REBEL", {
-        "You are a Fremen of the deep desert, waging a water-war on House",
-        "Harkonnen. From your hidden sietch you strike out across the",
-        "Tanzerouft to deny the Baron his spice, then vanish into the sand.",
+    {"WALKER OF VISIONS", {
+        "You are a Fremen of Sietch Tabr. Muad'Dib has drunk the Water of",
+        "Life; the futures lie open to him. He cannot walk them all -- so he",
+        "sends YOU. Drink at his hand and enter a prescient vision: the road",
+        "across Arrakis to Arrakeen, and the fall of Baron Harkonnen.",
         "",
-        "A run is a raid: leave the sietch, sabotage spice harvesters, and",
-        "ride a sandworm home to BANK what you carried. Die in the field and",
-        "the desert keeps your spice and gear -- only banked loot is safe.",
+        "Click MUAD'DIB in the sietch to begin the vision. Each run climbs the",
+        "AWAKEN ladder toward the Baron. Nothing in a vision is truly real --",
+        "so your gear and your life are never lost. But the spice, water, and",
+        "materials you gather are only MADE REAL if you ride a worm home; die,",
+        "and the vision's spoils vanish with the thread.",
         "",
-        "'The spice must NOT flow.'",
+        "'Dreams are messages from the deep.'",
         nullptr}},
     {"CONTROLS", {
         "WASD ........ move (screen-relative; the cursor aims)",
         "Left mouse .. primary action / attack toward the cursor",
         "R/Q/E, RMB .. skills (aimed at the cursor); 1-4 use flasks",
-        "Click NPC ... talk / trade   |   Click the door ... leave the sietch",
+        "Click Muad'Dib to begin a vision  |  click the east door to press on",
         "G ........... work a harvester    T ... drop a thumper (worm bait)",
         "C ........... sandwalk (slow, quiet)   R ... mount a surfaced worm",
         "M ........... map   I ... pack   P/Character ... sheet",
@@ -3917,16 +4048,17 @@ void pass_ui(RenderCtx& r) {
                       uint8_t(g.menu_sel == 12 ? 245 : 20));
         } else if (g.menu_open == 6) {
             draw_text_shadow(ctx, "PACK  (ENTER equips)", x0 + 24, y0 + 16, 230, 1);
-            const char* slots[4] = {"wpn", "arm", "sut", "trk"};
-            for (int i = 0; i < 4; ++i) {
+            static const char* slots[int(items::Slot::Count)] =
+                {"wpn", "hood", "mask", "plug", "tube", "body", "pkts", "pump", "clok", "tokn"};
+            for (int i = 0; i < int(items::Slot::Count); ++i) {
                 char nm[64];
                 g.pl.equip[i].full_name(nm, sizeof nm);
                 std::snprintf(buf, sizeof buf, "[%s] %s", slots[i], nm);
-                draw_text(ctx, buf, x0 + 24, y0 + 44 + i * 22, 136);
+                draw_text(ctx, buf, x0 + 24, y0 + 40 + i * 16, 136);
             }
             for (int i = 0; i < 12; ++i) {
                 const bool sel = g.menu_sel == i;
-                const int y = y0 + 140 + i * 24;
+                const int y = y0 + 212 + i * 20;
                 if (sel) fill_rect(ctx, x0 + 16, y - 2, 728, 22, 4);
                 char nm[64];
                 g.pl.inv[i].full_name(nm, sizeof nm);
@@ -3984,6 +4116,40 @@ void pass_ui(RenderCtx& r) {
             if (sel) fill_rect(ctx, x0 + 16, y0 + 80 + i * 32 - 4, 568, 28, 4);
             draw_text(ctx, kMenus[g.menu_open][i], x0 + 24, y0 + 80 + i * 32,
                       uint8_t(sel ? 245 : 20));
+        }
+    }
+
+    // B2b: the Revelation overlay — Paul's prescient gear suggestion (pick a slot, then 1 of 3).
+    if (g.revelation_stage) {
+        static const char* kSlotName[int(items::Slot::Count)] = {
+            "Weapon", "Hood", "Filter Mask", "Filt-plugs", "Catchtube",
+            "Stillsuit Body", "Catchpockets", "Heel-pumps", "Jubba Cloak", "Token"};
+        const int x0 = fb::W / 2 - 300, y0 = 280;
+        fill_rect(ctx, x0, y0, 600, 240, 2);
+        fill_rect(ctx, x0, y0, 600, 2, 228);
+        fill_rect(ctx, x0, y0 + 238, 600, 2, 228);
+        draw_text_shadow(ctx, "A REVELATION OF MUAD'DIB", x0 + 24, y0 + 16, 230, 1);
+        char lead[80];
+        std::snprintf(lead, sizeof lead, "The road leads on to %s.",
+                      stage_name(g.graph.nodes[g.rev_dest].stage));
+        draw_text(ctx, lead, x0 + 300, y0 + 16, 14);
+        draw_text(ctx, g.revelation_stage == 1 ? "The vision reveals what you must bear -- choose:"
+                                               : "Three shapes the vision might take -- choose one:",
+                  x0 + 24, y0 + 44, 14);
+        char row[80];
+        for (int i = 0; i < 3; ++i) {
+            const bool sel = i == g.rev_sel;
+            if (sel) fill_rect(ctx, x0 + 16, y0 + 76 + i * 40, 568, 34, 4);
+            if (g.revelation_stage == 1) {
+                std::snprintf(row, sizeof row, "%s", kSlotName[g.rev_slot_offer[i] % int(items::Slot::Count)]);
+            } else {
+                char nm[64];
+                g.rev_item_offer[i].full_name(nm, sizeof nm);
+                std::snprintf(row, sizeof row, "%s", nm);
+            }
+            const uint8_t col = g.revelation_stage == 2 && g.rev_item_offer[i].rarity == 2 ? 245
+                                : g.revelation_stage == 2 && g.rev_item_offer[i].rarity == 1 ? 230 : 20;
+            draw_text(ctx, row, x0 + 32, y0 + 80 + i * 40, uint8_t(sel ? 245 : col));
         }
     }
 
@@ -4246,6 +4412,7 @@ bool game_deserialize(SaveReader& r) {
     g.graph.build(seed);                               // B1.3: rebuild the run graph from the seed
     for (int i = 0; i < gclamp && i < g.graph.count; ++i) g.graph.nodes[i].flags = node_flags[i];
     g.cur_node = (cur_node < g.graph.count) ? cur_node : 0;
+    g.revelation_stage = 0;  // B2b: transient modal — never mid-pick after a load
     g.cur_zone = cur;
     g.pl = pl;
     g.spawned_mask = spawned;
@@ -4361,6 +4528,21 @@ void game_debug_click(int tx, int ty) {  // A4: set a click-to-move goal (headle
 }
 
 void game_debug_use_door() { use_door(); }  // headless: leave the sietch (doors are click-only)
+
+void game_debug_revelation(int* stage, int* inv_count) {
+    if (stage) *stage = g.revelation_stage;
+    if (inv_count) {
+        int n = 0;
+        for (const items::Inst& it : g.pl.inv) if (!it.empty()) ++n;
+        *inv_count = n;
+    }
+}
+void game_debug_revelation_pick(int idx) {  // headless: choose row idx + confirm the Revelation
+    if (!g.revelation_stage) return;
+    g.rev_sel = (idx % 3 + 3) % 3;
+    revelation_confirm();
+}
+int game_debug_cur_node() { return g.cur_node; }
 
 void game_debug_rpg(int* level, int* inv_count, int* stash_count) {
     if (level) *level = g.pl.st.level;
