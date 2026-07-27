@@ -185,7 +185,7 @@ struct GameState {
     RngSet rng;
     uint64_t seed = 0;
 
-    map::Zone zones[map::kZoneCount];
+    map::Zone zone_;      // B1.2: the single resident zone (regenerated on node entry)
     world::Graph graph;   // B1: per-run node graph (built from seed; not yet driving zones)
     uint8_t cur_zone = map::kZoneSietch;
     uint8_t spawned_mask = 0;  // zones whose wildlife has been placed
@@ -275,9 +275,9 @@ GameState g;
 void op_denied(const char* how);
 void op_shipped_quota();
 uint8_t facing_from_tile_delta(int dx, int dy);
-void apply_deltas(uint8_t zone_id);
+void apply_deltas(map::Zone& z, uint8_t zone_id);
 void end_season(uint8_t ending);
-void spawn_zone_wildlife(uint8_t zone_id);
+void spawn_zone_wildlife(map::Zone& z, uint8_t zone_id);
 
 worm::Tuning worm_tuning() {
     worm::Tuning t;
@@ -387,7 +387,7 @@ int foe_attack_roll(const Foe& f) {
 int xp_to_level(int level) { return 30 * level * level; }
 
 void grant_xp(int amount);
-map::Zone& zone() { return g.zones[g.cur_zone]; }
+map::Zone& zone() { return g.zone_; }
 
 int ambient_now() { return tune::kAmbientByHour[(g.pl.turn % tune::kTurnsPerDay) * 24 / tune::kTurnsPerDay]; }
 int hour_now() { return (g.pl.turn % tune::kTurnsPerDay) * 24 / tune::kTurnsPerDay; }
@@ -422,8 +422,7 @@ Entity* alloc_entity() {
     return nullptr;
 }
 
-void place_npc_near(EType type, uint8_t zone_id, int px, int py, int16_t data = 0) {
-    map::Zone& z = g.zones[zone_id];
+void place_npc_near(EType type, map::Zone& z, uint8_t zone_id, int px, int py, int16_t data = 0) {
     for (int r = 0; r < 8; ++r)
         for (int dy = -r; dy <= r; ++dy)
             for (int dx = -r; dx <= r; ++dx) {
@@ -440,7 +439,7 @@ void place_npc_near(EType type, uint8_t zone_id, int px, int py, int16_t data = 
 // Drop a decor prop on a sietch floor tile (skips solid rock), tagging the tile
 // blocking/opaque per its DecorDef so props are solid and racks/banners occlude.
 void add_decor(uint8_t prop, int x, int y) {
-    map::Zone& z = g.zones[map::kZoneSietch];
+    map::Zone& z = zone();  // B1.2: sietch decor lands on the resident zone
     if (x < 1 || x >= map::W - 1 || y < 1 || y >= map::H - 1) return;
     const int idx = y * map::W + x;
     if (!(z.flags[idx] & map::TF_INDOOR) || (z.flags[idx] & map::TF_BLOCK)) return;
@@ -476,29 +475,28 @@ void place_sietch_decor() {
     add_decor(0, 46, 46);  add_decor(6, 42, 42);  add_decor(6, 50, 50);
 }
 
-void spawn_zone_wildlife(uint8_t zone_id) {
+void spawn_zone_wildlife(map::Zone& z, uint8_t zone_id) {
     if (g.spawned_mask & (1 << zone_id)) return;
     g.spawned_mask |= uint8_t(1 << zone_id);
     if (zone_id == map::kZoneSietch) {
         place_sietch_decor();
         // vendors, spread across the warren
-        place_npc_near(EType::Naib, zone_id, 30, 30);       // great hall
-        place_npc_near(EType::Sayyadina, zone_id, 32, 16);  // cistern chamber
-        place_npc_near(EType::Smuggler, zone_id, 50, 28);   // storeroom
+        place_npc_near(EType::Naib, z, zone_id, 30, 30);       // great hall
+        place_npc_near(EType::Sayyadina, z, zone_id, 32, 16);  // cistern chamber
+        place_npc_near(EType::Smuggler, z, zone_id, 50, 28);   // storeroom
         // dialog-only Fremen — one per chamber, each in open floor well away from
         // the vendors and the wall-hugging props (so no NPC+prop "huddle" reads as
         // a cluster), each a distinct tribesperson (data = sprite/bark index).
-        place_npc_near(EType::Fremen, zone_id, 13, 30, 0);  // living quarters
-        place_npc_near(EType::Fremen, zone_id, 20, 47, 1);  // armory
-        place_npc_near(EType::Fremen, zone_id, 46, 47, 2);  // sleeping chamber
-        place_npc_near(EType::Fremen, zone_id, 53, 32, 3);  // storeroom
-        place_npc_near(EType::Fremen, zone_id, 36, 28, 4);  // great hall (east)
-        place_npc_near(EType::Fremen, zone_id, 26, 32, 5);  // great hall (west)
+        place_npc_near(EType::Fremen, z, zone_id, 13, 30, 0);  // living quarters
+        place_npc_near(EType::Fremen, z, zone_id, 20, 47, 1);  // armory
+        place_npc_near(EType::Fremen, z, zone_id, 46, 47, 2);  // sleeping chamber
+        place_npc_near(EType::Fremen, z, zone_id, 53, 32, 3);  // storeroom
+        place_npc_near(EType::Fremen, z, zone_id, 36, 28, 4);  // great hall (east)
+        place_npc_near(EType::Fremen, z, zone_id, 26, 32, 5);  // great hall (west)
         return;
     }
     if (zone_id == map::kZoneDesert)
-        place_npc_near(EType::Smuggler, zone_id, 12, 30);  // camp off the door road
-    map::Zone& z = g.zones[zone_id];
+        place_npc_near(EType::Smuggler, z, zone_id, 12, 30);  // camp off the door road
     const int want = zone_id == map::kZoneDeepPan ? 4 : tune::kHoundCount;
     int placed = 0, guard = 0;
     while (placed < want && ++guard < 2000) {
@@ -536,8 +534,7 @@ void spawn_zone_wildlife(uint8_t zone_id) {
 
 // Place a harvest op in a zone: crawler on open sand, spotters on the nearest
 // rock, an escort ring of troopers scaled by mutators and alert.
-void spawn_op_in(uint8_t zone_id, uint8_t mutators) {
-    map::Zone& z = g.zones[zone_id];
+void spawn_op_in(map::Zone& z, uint8_t zone_id, uint8_t mutators) {
 
     // find an open-sand anchor away from the west entry
     int ax = 0, ay = 0, guard = 0;
@@ -643,14 +640,19 @@ void schedule_ops() {
         for (int i = 0; i < rolls; ++i) mut |= pool[g.rng.world.below(4)];
     }
 
-    // ensure the target zone's terrain exists for placement
-    if (!(g.spawned_mask & (1 << target_zone))) {
+    // B1.2: with a single resident zone, a look-ahead into a NON-current zone
+    // regenerates it into a temp buffer just for placement (it rebuilds
+    // deterministically when the player actually enters). Current target uses the
+    // resident zone directly. (The whole op look-ahead is retired in B3.)
+    static map::Zone lookahead;  // static: avoids a ~12KB stack frame
+    map::Zone& tz = (target_zone == g.cur_zone) ? zone() : lookahead;
+    if (target_zone != g.cur_zone) {
         int sx_, sy_;
-        map::generate(g.zones[target_zone], g.seed, map::ZoneId(target_zone), sx_, sy_);
-        apply_deltas(target_zone);
-        spawn_zone_wildlife(target_zone);
+        map::generate(lookahead, g.seed, map::ZoneId(target_zone), sx_, sy_);
+        apply_deltas(lookahead, target_zone);
     }
-    spawn_op_in(target_zone, mut);
+    spawn_zone_wildlife(tz, target_zone);  // self-guards via spawned_mask
+    spawn_op_in(tz, target_zone, mut);
     if (!g.op.live()) return;  // no anchor found; retry next turn
 
     if (g.cur_zone == target_zone) {
@@ -744,16 +746,16 @@ void season_turn() {
     schedule_ops();
 }
 
-void apply_deltas(uint8_t zone_id) {
+void apply_deltas(map::Zone& z, uint8_t zone_id) {
     for (int i = 0; i < g.delta_count; ++i)
         if (g.deltas[i].zone == zone_id)
-            g.zones[zone_id].floor[g.deltas[i].y * map::W + g.deltas[i].x] = g.deltas[i].floor;
+            z.floor[g.deltas[i].y * map::W + g.deltas[i].x] = g.deltas[i].floor;
 }
 
 // Sun-tracked shade: shadows fall away from the sun. Morning sun in the east
 // casts westward shade; afternoon the reverse; midday almost none.
 void recompute_shade(uint8_t zone_id, int hour) {
-    map::Zone& z = g.zones[zone_id];
+    map::Zone& z = zone();  // B1.2: shade always applies to the resident zone
     for (int i = 0; i < map::N; ++i) z.flags[i] &= uint8_t(~map::TF_SHADE);
     if (zone_id == map::kZoneSietch) return;
 
@@ -1150,7 +1152,7 @@ void worm_cb_message(void*, const char* text) { g.log.push("%s", text); }
 
 void worm_cb_churn(void*, int x, int y) {
     if (x < 0 || x >= map::W || y < 0 || y >= map::H) return;
-    map::Zone& z = g.zones[g.cur_zone];
+    map::Zone& z = g.zone_;
     if (z.flags[y * map::W + x] & map::TF_BLOCK) return;
     if (z.floor[y * map::W + x] == 6) return;
     z.floor[y * map::W + x] = 6;  // churned sand (loud, disturbed)
@@ -1826,8 +1828,8 @@ void enter_zone(uint8_t id, bool use_spawn, int at_x = 0, int at_y = 0) {
     g.cur_zone = id;
     int sx, sy;
     map::generate(zone(), g.seed, map::ZoneId(id), sx, sy);
-    apply_deltas(id);
-    spawn_zone_wildlife(id);
+    apply_deltas(zone(), id);
+    spawn_zone_wildlife(zone(), id);
     // crawler footprint re-blocks after regen
     if (g.op.live() && g.op.zone == id)
         for (int dy = -1; dy <= 0; ++dy)
@@ -2318,13 +2320,13 @@ void game_init(uint64_t seed, const GameServices& services) {
     meta_load();
 
     int sx, sy;
-    map::generate(g.zones[map::kZoneSietch], seed, map::kZoneSietch, sx, sy);
+    map::generate(g.zone_, seed, map::kZoneSietch, sx, sy);
     g.ents[0] = Entity{EType::Player, Ai::Idle, map::kZoneSietch,
                        int16_t(sx), int16_t(sy), int16_t(tune::kPlayerHpMax), 0, 0};
     // Populate the sietch now that the player entity exists (the Naib + Sayyadina
     // are placed relative to it). This also sets spawned_mask for the zone; the
     // old code set the mask directly, which silently skipped the NPC spawn.
-    spawn_zone_wildlife(map::kZoneSietch);
+    spawn_zone_wildlife(g.zone_, map::kZoneSietch);
 
     g.pl.equip[int(items::Slot::Weapon)].def = 0;  // Dust Knife
     g.pl.equip[int(items::Slot::Suit)].def = 9;    // Stillsuit Mk I
@@ -4132,8 +4134,7 @@ void game_serialize(SaveWriter& w) {
     w.bytes(g.noise.at, sizeof g.noise.at);
     w.i32(g.delta_count);
     w.bytes(g.deltas, sizeof g.deltas);
-    for (int i = 0; i < map::kZoneCount; ++i)
-        w.bytes(g.zones[i].vis, sizeof g.zones[i].vis);
+    w.bytes(g.zone_.vis, sizeof g.zone_.vis);
 }
 
 bool game_deserialize(SaveReader& r) {
@@ -4203,8 +4204,8 @@ bool game_deserialize(SaveReader& r) {
     const int delta_count = r.i32();
     Delta deltas[kMaxDeltas];
     r.bytes(deltas, sizeof deltas);
-    static uint8_t vis[map::kZoneCount][map::N];
-    for (int i = 0; i < map::kZoneCount; ++i) r.bytes(vis[i], sizeof vis[i]);
+    static uint8_t vis[map::N];
+    r.bytes(vis, sizeof vis);
     if (!r.ok() || cur >= map::kZoneCount || delta_count > kMaxDeltas) return false;
 
     g.seed = seed;
@@ -4241,15 +4242,13 @@ bool game_deserialize(SaveReader& r) {
     g.delta_count = delta_count;
     std::memcpy(g.deltas, deltas, sizeof g.deltas);
     int sx_, sy_;
-    for (int i = 0; i < map::kZoneCount; ++i) {
-        map::generate(g.zones[i], seed, map::ZoneId(i), sx_, sy_);
-        apply_deltas(uint8_t(i));
-        std::memcpy(g.zones[i].vis, vis[i], sizeof vis[i]);
-    }
-    if (g.op.live())
+    map::generate(g.zone_, seed, map::ZoneId(cur), sx_, sy_);
+    apply_deltas(g.zone_, cur);
+    std::memcpy(g.zone_.vis, vis, sizeof vis);
+    if (g.op.live() && g.op.zone == g.cur_zone)
         for (int dy = -1; dy <= 0; ++dy)
             for (int dx = -1; dx <= 0; ++dx)
-                g.zones[g.op.zone].flags[(g.op.y + dy) * map::W + g.op.x + dx] |= map::TF_BLOCK;
+                g.zone_.flags[(g.op.y + dy) * map::W + g.op.x + dx] |= map::TF_BLOCK;
     g.shade_hour = -1;
     recompute_shade(g.cur_zone, hour_now());
     refresh_fov_and_paths();

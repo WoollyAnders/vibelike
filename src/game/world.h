@@ -1,8 +1,13 @@
 #pragma once
 // The per-run world graph (B1). A run is a Hades-style climb: the sietch hub,
-// then TIERS of ~4 field sections (each carrying a harvester) capped by a boss,
-// escalating to Baron Harkonnen at the summit. The graph is rebuilt from the run
-// seed every load, so a save stores only the current node + per-node flags.
+// then 4 TIERS of 3 field sections (each carrying a harvester), every tier capped
+// by a boss node -- 12 regular areas + 4 bosses. The 4th (summit) boss is the run's
+// PINNACLE. Its concrete identity is chosen by the run's AWAKEN level (B5 meta):
+// the campaign climbs Awaken 1..10 (Hades "Heat"), each level fielding a dedicated
+// pinnacle boss; Baron Harkonnen is the Awaken-10 pinnacle (the true ending), with a
+// mid-campaign Baron confrontation at Awaken 5 (he withdraws undefeated). The graph
+// is rebuilt from the run seed every load, so a save stores only the current node +
+// per-node flags (the Awaken level lives in meta, not the graph).
 //
 // B1 lands this as a deterministic data structure + builder; it does not yet
 // drive the resident zone (that wiring is B1.2 / B2). Kept header-only + tiny.
@@ -10,7 +15,9 @@
 
 namespace world {
 
-enum class NodeType : uint8_t { Sietch, Field, Boss, Baron };
+// Pinnacle = the summit boss slot; the Awaken level (B5) selects the concrete
+// encounter that fills it (Baron only at Awaken 10).
+enum class NodeType : uint8_t { Sietch, Field, Boss, Pinnacle };
 // Biome selects the terrain generator's parameters (see map::Biome). Sietch is
 // the carved hub; Rimwall is broken rock country; the Deep Pan is open worm erg.
 enum class Biome : uint8_t { Sietch, Rimwall, DeepPan };
@@ -31,8 +38,8 @@ struct Node {
 };
 
 inline constexpr int kMaxNodes = 32;
-inline constexpr int kTiers = 3;             // field tiers before/including the summit
-inline constexpr int kSectionsPerTier = 4;   // ~4 harvester sections, then a boss
+inline constexpr int kTiers = 4;             // 4 tiers, each capped by a boss (4 bosses)
+inline constexpr int kSectionsPerTier = 3;   // 3 harvester sections/tier -> 12 regular areas
 
 // SplitMix64 — a stateless per-node seed from (run_seed, index). No RNG stream is
 // drawn, so the whole graph is reconstructable from the run seed alone.
@@ -52,8 +59,8 @@ struct Graph {
     bool is_sietch(int i) const { return nodes[i].type == NodeType::Sietch; }
 
     // Deterministic layout: sietch(0) -> tier 1 (kSectionsPerTier fields) -> boss
-    // -> tier 2 -> boss -> ... -> Baron summit. B1 builds a linear spine; the 2-3
-    // previewed forward doors per section come in B2 (route choice).
+    // -> tier 2 -> boss -> ... -> tier 4 -> Pinnacle summit. B1 builds a linear
+    // spine; the 2-3 previewed forward doors per section come in B2 (route choice).
     void build(uint64_t run_seed) {
         count = 0;
         auto add = [&](NodeType t, Biome b, uint8_t tier) -> int {
@@ -79,7 +86,7 @@ struct Graph {
                 link(prev, idx);
                 prev = idx;
             }
-            const NodeType bt = (tier == kTiers) ? NodeType::Baron : NodeType::Boss;
+            const NodeType bt = (tier == kTiers) ? NodeType::Pinnacle : NodeType::Boss;
             int boss = add(bt, biome, uint8_t(tier));
             link(prev, boss);
             prev = boss;
