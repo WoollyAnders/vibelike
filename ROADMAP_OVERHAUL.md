@@ -252,21 +252,21 @@ recolor, and a good window-scaling filter.
 > Princess Irulan, Emperor Shaddam IV, Sardaukar command (and possibly the Truthsayer, Gaius Helen
 > Mohiam) — optional super-bosses *beyond* the Baron arc.
 
-### B1 — World graph + single resident zone ⬜ *(B1.1 ✅, B1.2 ✅)*
+### B1 — World graph + single resident zone ✅ *(B1.1 ✅, B1.2 ✅, B1.3 ✅)*
 Per-run `world::Graph` (sietch hub + the campaign spine) + one resident `map::Zone`;
 node_seed = node_hash(run_seed, i). **B1.1 ✅** — `world.h`: deterministic graph built at run
 start (additive). **B1.2 ✅** — replaced `g.zones[3]` with one resident `g.zone_`;
 `apply_deltas`/`spawn_zone_wildlife`/`spawn_op_in`/`place_npc_near` take a `map::Zone&`; op
-look-ahead uses a temp buffer (retired in B3); serialize/deserialize store one zone's vis;
-save.dat format changed (roguelike, no migration); dettest `af5340c1f7cb0ba2`, seamtest green.
-**B1.3 (next):** reframe `world::Biome`→`Stage {Sietch, DeepDesert, Rimwall, ShieldWall,
-Outskirts, Arrakeen}` and `build()` to the **5-act / 10-Awaken spine** (5 acts × 2 Awaken levels,
-each level = a few rooms + a boss; stage fixed by act — the **geography march to Arrakeen**, no
-tier-parity roll); add `cur_node` + `enter_node(idx)` traversal (regenerate the resident zone from
-`nodes[idx].seed` via a `Stage→ZoneId` map; ShieldWall/Outskirts/Arrakeen use placeholder
-generators for now); a `begin_run()` launch trigger repoints the sietch-exit interaction; serialize
-`cur_node` + node flags, bump `kSaveVersion` 4→5; rebaseline dettest/clicktest once.
-**Exit:** launch into the graph, traverse node-to-node along the campaign spine, save/load round-trips.
+look-ahead uses a temp buffer (retired in B3); serialize/deserialize store one zone's vis.
+**B1.3 ✅** — reframed `world::Biome`→`Stage {Sietch, DeepDesert, Rimwall, ShieldWall, Outskirts,
+Arrakeen}`; `build()` now lays the **5-act / 10-Awaken spine** (5 acts × 2 Awaken levels, each = 3
+rooms + a pinnacle = 41 nodes; stage fixed by act — the **geography march to Arrakeen**, no
+tier-parity roll). Added `cur_node` + `enter_node(idx)` (regenerates the resident zone from
+`nodes[idx].seed` via `Stage→ZoneId`, clears per-node entities/op/deltas; ShieldWall/Outskirts/
+Arrakeen use placeholder generators for now), `begin_run()`, graph-driven `use_door()`, retired edge
+travel; serialize `cur_node` + node flags, `kSaveVersion` 4→5; dettest `46ae0056dfad38ea`, clicktest
+`dcc065906642ebff` (rebaselined), seamtest round-trips a field node; full suite (9) green.
+**Exit ✅:** launch into the graph, traverse node-to-node along the campaign spine, save/load round-trips.
 
 ### B2 — Gated run flow + boons (Hades rooms) ⬜
 Sietch = pure hub with **no walk-out door**; the **Water-of-Life vision ritual** (Paul) **commits a
