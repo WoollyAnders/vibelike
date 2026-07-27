@@ -51,8 +51,7 @@ void generate_sietch(Zone& z, int& spawn_x, int& spawn_y) {
     carve_room(z, 31, 37, 34, 56);   // entry corridor -> door (south)
 
     z.flags[13 * W + 32] |= TF_CISTERN | TF_BLOCK;  // cistern basin
-    z.flags[56 * W + 32] |= TF_DOOR;                 // sietch exit (click the door)
-    z.floor[56 * W + 32] = 9;
+    // B2: no walk-out door in the hub -- you enter the vision at Paul's Water of Life.
 
     spawn_x = 32;
     spawn_y = 36;  // great hall, by the entry corridor
@@ -99,21 +98,26 @@ void generate_desert(Zone& z, uint64_t seed, ZoneId id, int& spawn_x, int& spawn
                 }
         }
 
-    if (id == kZoneDesert) {
-        // Door back to the sietch at the west edge; clear around it.
-        const int dx = 4, dy = 32;
-        for (int y = dy - 2; y <= dy + 2; ++y)
-            for (int x = dx - 2; x <= dx + 2; ++x) {
+    // B2: every field node is a leg of the march to Arrakeen -- enter at the west, cross to a
+    // FORWARD door on the east that advances to the next node. Both spots are cleared walkable.
+    {
+        const int sx0 = 3, sy0 = H / 2;          // entry (west)
+        for (int y = sy0 - 2; y <= sy0 + 2; ++y)
+            for (int x = sx0 - 2; x <= sx0 + 2; ++x) {
                 z.flags[y * W + x] &= uint8_t(~(TF_BLOCK | TF_ROCKPROP | TF_OPAQUE));
                 if (z.floor[y * W + x] > 6) z.floor[y * W + x] = 0;
             }
-        z.flags[dy * W + dx] |= TF_DOOR;
-        z.floor[dy * W + dx] = 9;
-        spawn_x = dx + 1;
-        spawn_y = dy;
-    } else {
-        spawn_x = 2;
-        spawn_y = H / 2;
+        spawn_x = sx0;
+        spawn_y = sy0;
+
+        const int fx = W - 4, fy = H / 2;        // forward door (east)
+        for (int y = fy - 2; y <= fy + 2; ++y)
+            for (int x = fx - 2; x <= fx + 2; ++x) {
+                z.flags[y * W + x] &= uint8_t(~(TF_BLOCK | TF_ROCKPROP | TF_OPAQUE));
+                if (z.floor[y * W + x] > 6) z.floor[y * W + x] = 0;
+            }
+        z.flags[fy * W + fx] |= TF_DOOR;
+        z.floor[fy * W + fx] = 9;
     }
 
     // Keep the east and west edge columns traversable somewhere: clear a lane

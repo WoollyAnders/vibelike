@@ -29,7 +29,7 @@ constexpr int kMaxDeltas = 192;
 enum class EType : uint8_t { None = 0, Player, Hound, Corpse, Thumper, Trooper, Spotter,
                              Glowglobe, ShieldTrooper, Naib, Sayyadina, Smuggler,
                              PanAdder, Hermit, HunterSeeker, SpiceCache, Loot, Boss,
-                             Caravan, Envoy, Fremen };
+                             Caravan, Envoy, Fremen, Paul };
 enum class Ai : uint8_t { Idle = 0, Wander, Hunt, Guard };
 
 struct Entity {
@@ -482,6 +482,7 @@ void spawn_zone_wildlife(map::Zone& z, uint8_t zone_id) {
     if (zone_id == map::kZoneSietch) {
         place_sietch_decor();
         // vendors, spread across the warren
+        place_npc_near(EType::Paul, z, zone_id, 32, 22);       // Muad'Dib: the vision ritual
         place_npc_near(EType::Naib, z, zone_id, 30, 30);       // great hall
         place_npc_near(EType::Sayyadina, z, zone_id, 32, 16);  // cistern chamber
         place_npc_near(EType::Smuggler, z, zone_id, 50, 28);   // storeroom
@@ -2018,6 +2019,7 @@ void try_move(int dx, int dy) {
     if (entity_at(nx, ny, g.cur_zone, EType::Naib) ||
         entity_at(nx, ny, g.cur_zone, EType::Sayyadina) ||
         entity_at(nx, ny, g.cur_zone, EType::Smuggler) ||
+        entity_at(nx, ny, g.cur_zone, EType::Paul) ||
         entity_at(nx, ny, g.cur_zone, EType::Fremen))
         return;
 
@@ -2354,8 +2356,8 @@ void game_init(uint64_t seed, const GameServices& services) {
     g.screen = services.interactive ? GameState::Screen::Menu : GameState::Screen::Play;
     if (!g.choosing) apply_background(g.pl, Background::Fedaykin);
 
-    g.log.push("The Naib's word: deny them the spice. Go.");
-    g.log.push("Arrows move. G harvest. T thumper. C sandwalk.");
+    g.log.push("Muad'Dib waits with the Water of Life. Drink, and walk the vision.");
+    g.log.push("Click Muad'Dib to begin. Arrows move. G harvest. C sandwalk.");
     refresh_fov_and_paths();
 
     int px, py;
@@ -2571,6 +2573,7 @@ const char* describe_at(int tx, int ty) {
             case EType::ShieldTrooper: return "SHIELDED trooper (slow blade!)";
             case EType::Spotter: return "Harkonnen spotter";
             case EType::Glowglobe: return "glowglobe (L: retrieve)";
+            case EType::Paul: return "Muad'Dib (drink the Water: begin the vision)";
             case EType::Naib: return "the Naib";
             case EType::Sayyadina: return "the Sayyadina";
             case EType::Smuggler: return "Greybeard the smuggler";
@@ -2989,6 +2992,7 @@ bool game_update(const InputState& in) {
         else if (entity_at(g.hover_tx, g.hover_ty, g.cur_zone, EType::Smuggler)) g.interact_kind = 3;
         else if (zone().at(g.hover_tx, g.hover_ty) & map::TF_DOOR) g.interact_kind = 4;
         else if (entity_at(g.hover_tx, g.hover_ty, g.cur_zone, EType::Fremen)) g.interact_kind = 5;
+        else if (entity_at(g.hover_tx, g.hover_ty, g.cur_zone, EType::Paul)) g.interact_kind = 6;
         else g.interact_kind = 0;
     } else if (cursor_in_world && in.mouse_down[0] &&
                (g.hover_tx != g.move_goal_x || g.hover_ty != g.move_goal_y)) {
@@ -3021,6 +3025,14 @@ bool game_update(const InputState& in) {
             if (adx >= -1 && adx <= 1 && ady >= -1 && ady <= 1) {
                 if (g.interact_kind == 4) {
                     use_door();
+                } else if (g.interact_kind == 6) {  // Muad'Dib: the Water of Life ritual
+                    if (g.cur_node == 0) {
+                        g.log.push("Muad'Dib presses the Water of Life to your lips.");
+                        g.log.push("The vision takes you: the road to Arrakeen opens.");
+                        begin_run();
+                    } else {
+                        g.log.push("Muad'Dib walks only in the sietch of the waking world.");
+                    }
                 } else if (g.interact_kind == 5) {  // Fremen flavor bark
                     if (Entity* f = entity_at(g.move_goal_x, g.move_goal_y,
                                               g.cur_zone, EType::Fremen)) {
@@ -3326,6 +3338,10 @@ void pass_entities(RenderCtx& r) {
                                       sy - 20 + int(g.rng.fx.below(25)),
                                       0, -20, 10, 182);
                 break;
+            case EType::Paul:  // placeholder sprite until E2 art; distinct via a lit tint
+                g.draw_list.add(r.assets->get("naib"), 0, sx, sy + 12,
+                                light < 12 ? 14 : light, 1);
+                break;
             case EType::Naib:
                 g.draw_list.add(r.assets->get("naib"), 0, sx, sy + 12, light, 1);
                 break;
@@ -3496,22 +3512,25 @@ void pass_weather(RenderCtx& r) {
 
 struct ManualPage { const char* title; const char* lines[13]; };
 const ManualPage kManual[] = {
-    {"THE FREMEN REBEL", {
-        "You are a Fremen of the deep desert, waging a water-war on House",
-        "Harkonnen. From your hidden sietch you strike out across the",
-        "Tanzerouft to deny the Baron his spice, then vanish into the sand.",
+    {"WALKER OF VISIONS", {
+        "You are a Fremen of Sietch Tabr. Muad'Dib has drunk the Water of",
+        "Life; the futures lie open to him. He cannot walk them all -- so he",
+        "sends YOU. Drink at his hand and enter a prescient vision: the road",
+        "across Arrakis to Arrakeen, and the fall of Baron Harkonnen.",
         "",
-        "A run is a raid: leave the sietch, sabotage spice harvesters, and",
-        "ride a sandworm home to BANK what you carried. Die in the field and",
-        "the desert keeps your spice and gear -- only banked loot is safe.",
+        "Click MUAD'DIB in the sietch to begin the vision. Each run climbs the",
+        "AWAKEN ladder toward the Baron. Nothing in a vision is truly real --",
+        "so your gear and your life are never lost. But the spice, water, and",
+        "materials you gather are only MADE REAL if you ride a worm home; die,",
+        "and the vision's spoils vanish with the thread.",
         "",
-        "'The spice must NOT flow.'",
+        "'Dreams are messages from the deep.'",
         nullptr}},
     {"CONTROLS", {
         "WASD ........ move (screen-relative; the cursor aims)",
         "Left mouse .. primary action / attack toward the cursor",
         "R/Q/E, RMB .. skills (aimed at the cursor); 1-4 use flasks",
-        "Click NPC ... talk / trade   |   Click the door ... leave the sietch",
+        "Click Muad'Dib to begin a vision  |  click the east door to press on",
         "G ........... work a harvester    T ... drop a thumper (worm bait)",
         "C ........... sandwalk (slow, quiet)   R ... mount a surfaced worm",
         "M ........... map   I ... pack   P/Character ... sheet",
