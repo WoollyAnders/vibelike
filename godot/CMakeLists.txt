@@ -26,6 +26,12 @@ target_include_directories(dustfall PRIVATE
 
 target_link_libraries(dustfall PRIVATE godot-cpp)
 
+if(MINGW)
+  # Statically fold in libgcc/libstdc++/winpthread so the .dll loads on a Windows box with no
+  # MinGW runtime present (matches the SDL build's zero-DLL policy).
+  target_link_options(dustfall PRIVATE -static -static-libgcc -static-libstdc++)
+endif()
+
 # -> godot/bin/libdustfall.so (Linux) or dustfall.dll (Windows), per dustfall.gdextension.
 set_target_properties(dustfall PROPERTIES
   LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/bin

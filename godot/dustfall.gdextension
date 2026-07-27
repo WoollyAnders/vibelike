@@ -5,5 +5,5 @@ compatibility_minimum = "4.3"
 [libraries]
 linux.debug.x86_64 = "res://bin/libdustfall.so"
 linux.release.x86_64 = "res://bin/libdustfall.so"
-windows.debug.x86_64 = "res://bin/dustfall.dll"
-windows.release.x86_64 = "res://bin/dustfall.dll"
+windows.debug.x86_64 = "res://bin/libdustfall.dll"
+windows.release.x86_64 = "res://bin/libdustfall.dll"
