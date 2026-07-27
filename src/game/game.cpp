@@ -17,6 +17,7 @@
 #include "game/light.h"
 #include "game/tunables.h"
 #include "game/ui.h"
+#include "game/world.h"
 #include "game/worm.h"
 
 namespace {
@@ -185,6 +186,7 @@ struct GameState {
     uint64_t seed = 0;
 
     map::Zone zones[map::kZoneCount];
+    world::Graph graph;   // B1: per-run node graph (built from seed; not yet driving zones)
     uint8_t cur_zone = map::kZoneSietch;
     uint8_t spawned_mask = 0;  // zones whose wildlife has been placed
     int shade_hour = -1;       // hour the shade map was computed for
@@ -2312,6 +2314,7 @@ void game_init(uint64_t seed, const GameServices& services) {
     g.services = services;
     g.seed = seed;
     g.rng.init(seed);
+    g.graph.build(seed);  // B1: build the run's node graph (deterministic from seed)
     meta_load();
 
     int sx, sy;
