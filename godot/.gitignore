@@ -1,0 +1,10 @@
+godot/godot-cpp/
+godot/build/
+godot/build-win/
+godot/build-ext*/
+godot/bin/
+godot/data/
+godot/.godot/
+godot/*.so
+godot/*.dll
+godot/*.uid
