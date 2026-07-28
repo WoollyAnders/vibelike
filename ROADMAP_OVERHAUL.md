@@ -397,17 +397,22 @@ is now a bulwark (higher armor/hp). `shieldtest` retired, **`focustest`** added
 Fedaykin=Conditioning, Saboteur=Versatility, Sayyadina=Awareness; shared Will fuel.
 **Exit:** each corner starts distinct (bruiser / precise-skirmisher / shielded
 spice-caster).
-**Poisons (locked 2026-07-28):** poison/toxin is a **spec axis all three can touch, but
-Sayyadina owns it** — natural proficiency (their "spice/poison mysticism", per the field
-manual). Concretely, when the **combat-poison mechanic** lands (a stacking poison DoT the
-player applies to enemies — the thing D1's inert `AK_POISON` "of Venom" / Poison Damage stat
-scales): Sayyadina gets a **class proficiency bonus** (e.g. flat +poison potency and/or higher
-weight on `of Venom` rolls, and can apply poison innately), while **Saboteur** (already the
-sabotage-toxin user — the `poisons` hold-spoiling consumable) and **Fedaykin** have *access*
-(can equip/use poison gear) but **no proficiency bonus**. Wire the `AK_POISON` scaling + the
-Sayyadina bonus together in that combat-poison pass (D1 left the gear hook ready). NB: today's
-`poisons` consumable is *sabotage* (spoils a spice hold), a separate Saboteur tool — distinct
-from this combat poison.
+**Sayyadina lore (locked 2026-07-28):** Sayyadinas are **pre-Reverend-Mother sietch priestesses**
+who have **prepared to take the Water of Life their whole lives** — which dovetails with the
+campaign frame (runs launch by drinking the Water of Life at Paul). Their identity is
+spice/poison mysticism + the Focus shield.
+
+**Poisons — proficiency comes from TREES, not a flat class bonus (locked 2026-07-28):** poison/
+toxin is a spec axis all three corners can *touch*, but **Sayyadina owns it**. Proficiency is
+**earned**, PoE-style, through a **class-talent tree (an ascendancy-style tree, distinct from the
+C4 passive tree)** + passive-tree pathing — NOT a hardcoded class bonus. So Sayyadina's ascendancy
+holds the poison-mastery nodes (scaling D1's inert `AK_POISON` "of Venom" / Poison Damage once the
+**combat-poison DoT** mechanic lands), while **Saboteur** and **Fedaykin** merely have *access*
+(can equip/use poison gear, path a few generic poison passives) with no ascendancy specialisation.
+The class-talent (ascendancy) tree is a **new system** — details TBD as we design talents. Wire
+`AK_POISON` scaling into those nodes in the combat-poison pass (D1 left the gear hook ready). NB:
+today's `poisons` consumable is separate — Saboteur *sabotage* (spoils a spice hold), not combat
+poison.
 
 ### C4 — Passive skill tree (PoE-style) ⬜
 One shared node graph, class start per corner, adjacency-gated allocation, passive
