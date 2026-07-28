@@ -13,7 +13,8 @@ void DustfallSim::_bind_methods() {
     ClassDB::bind_method(D_METHOD("load_data", "data_dir"), &DustfallSim::load_data);
     ClassDB::bind_method(D_METHOD("init_run", "seed"), &DustfallSim::init_run);
     ClassDB::bind_method(D_METHOD("tick_key", "key", "count"), &DustfallSim::tick_key);
-    ClassDB::bind_method(D_METHOD("tick", "down_keys"), &DustfallSim::tick);
+    ClassDB::bind_method(D_METHOD("tick", "down_keys", "mouse_x", "mouse_y", "mouse_btn_mask"),
+                         &DustfallSim::tick);
     ClassDB::bind_method(D_METHOD("state_hash"), &DustfallSim::state_hash);
     ClassDB::bind_method(D_METHOD("state_hash_hex"), &DustfallSim::state_hash_hex);
     ClassDB::bind_method(D_METHOD("frame_rgba"), &DustfallSim::frame_rgba);
@@ -49,7 +50,7 @@ void DustfallSim::tick_key(int key, int count) {
     }
 }
 
-void DustfallSim::tick(const PackedInt32Array& down_keys) {
+void DustfallSim::tick(const PackedInt32Array& down_keys, int mouse_x, int mouse_y, int mouse_btn_mask) {
     bool now[int(::Key::Count)] = {};
     for (int i = 0; i < down_keys.size(); ++i) {
         const int k = down_keys[i];
@@ -59,8 +60,15 @@ void DustfallSim::tick(const PackedInt32Array& down_keys) {
         in_.pressed[k] = now[k] && !in_.down[k];  // edge = down now, up last frame
         in_.down[k] = now[k];
     }
-    game_update(in_);   // advances a turn only on an action key; always runs the per-frame visual tick
-    in_.end_tick();     // advances held_ticks (drives key-repeat movement), clears pressed
+    in_.mouse_x = mouse_x;
+    in_.mouse_y = mouse_y;
+    for (int b = 0; b < 3; ++b) {
+        const bool bd = ((mouse_btn_mask >> b) & 1) != 0;
+        in_.mouse_pressed[b] = bd && !in_.mouse_down[b];  // edge
+        in_.mouse_down[b] = bd;
+    }
+    game_update(in_);   // advances a turn only on an action; always runs the per-frame visual tick
+    in_.end_tick();     // advances held_ticks (drives key-repeat), clears pressed + mouse_pressed
 }
 
 int64_t DustfallSim::state_hash() const { return int64_t(game_state_hash()); }

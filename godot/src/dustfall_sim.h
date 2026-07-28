@@ -32,10 +32,11 @@ public:
     bool load_data(const godot::String& data_dir);  // load atlas/palette/anims from data/
     void init_run(int64_t seed);                     // game_init(seed) (headless services)
     void tick_key(int key, int count);               // press Key `key` for `count` sim ticks (tests)
-    // Continuous play: `down_keys` = Key ids held THIS frame. The binding derives edges/held,
-    // runs one game_update (advances a turn only on an action; always ticks visuals), and returns
-    // the freshly-rendered frame so per-frame glide/particle animation shows. Call every _process.
-    void tick(const godot::PackedInt32Array& down_keys);
+    // Continuous play: `down_keys` = Key ids held THIS frame; `mouse_x/y` = cursor in framebuffer
+    // coords (-1 outside the world); `mouse_btn_mask` bit0=L bit1=R bit2=M. The binding derives
+    // edges/held, runs one game_update (turn advances only on an action; always ticks visuals).
+    // Call every _process.
+    void tick(const godot::PackedInt32Array& down_keys, int mouse_x, int mouse_y, int mouse_btn_mask);
     int64_t state_hash() const;                      // game_state_hash()
     godot::String state_hash_hex() const;            // 16-char hex (matches the C++ dettest baseline)
     godot::PackedByteArray frame_rgba();             // game_render -> RGBA8 pixels (fb::W x fb::H)

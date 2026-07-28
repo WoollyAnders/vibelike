@@ -40,6 +40,25 @@ func _process(_dt):
     for kc in KEYMAP:
         if Input.is_key_pressed(kc):
             down.append(KEYMAP[kc])
-    sim.tick(down)                       # one game_update this frame (turn advances only on an action)
-    img.set_data(sim.fb_width(), sim.fb_height(), false, Image.FORMAT_RGBA8, sim.frame_rgba())
+    # Map the cursor from control-local coords back to framebuffer pixels (KEEP_ASPECT_CENTERED),
+    # so click-to-move / click-to-interact / the Revelation overlay get the right tile.
+    var fw: int = sim.fb_width()
+    var fh: int = sim.fb_height()
+    var cs: Vector2 = tr.size
+    var scale: float = min(cs.x / float(fw), cs.y / float(fh))
+    if scale <= 0.0:
+        scale = 1.0
+    var off: Vector2 = (cs - Vector2(fw, fh) * scale) * 0.5
+    var lp: Vector2 = tr.get_local_mouse_position()
+    var mx: int = int((lp.x - off.x) / scale)
+    var my: int = int((lp.y - off.y) / scale)
+    if mx < 0 or my < 0 or mx >= fw or my >= fh:
+        mx = -1
+        my = -1
+    var btn: int = 0
+    if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT): btn |= 1
+    if Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT): btn |= 2
+    if Input.is_mouse_button_pressed(MOUSE_BUTTON_MIDDLE): btn |= 4
+    sim.tick(down, mx, my, btn)          # one game_update this frame
+    img.set_data(fw, fh, false, Image.FORMAT_RGBA8, sim.frame_rgba())
     tex.update(img)                      # reuse the texture (no per-frame alloc)
