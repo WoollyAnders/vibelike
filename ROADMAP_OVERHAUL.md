@@ -338,7 +338,18 @@ Rare cave sub-maps + a super-rare legendary Jacurutu hoard as transient sub-zone
 **Exit:** a cave entrance rarely appears → clear it for a dense reward; Jacurutu
 appears once across many runs; deterministic.
 
-### B10 — Sietch cartography (PoE-"maps" replayability) ⬜
+### B10 — The Jihad Table (endgame maps + pinnacle bosses) ⬜
+**Reframed (2026-07-28):** after the campaign (Baron at Awaken 10) the player selects the
+**Chosen Path** — enacting **Paul's Jihad** across the Imperium — which turns the cartography
+table into the **Jihad Table**, the endgame map device. Its **pinnacle bosses** are the powers
+behind the throne, each on a **special map of their homeworld** (PoE-pinnacle-arena style):
+**Bene Gesserit** (Wallach IX — a Reverend Mother) · **Tleilaxu** (a Face-Dancer/Master) ·
+**Ixians** (Ix) · **House Corrino** (Kaitain/Salusa — Shaddam, Irulan, a Sardaukar Bashar) ·
+**Spacing Guild** (Junction — a Navigator). They drop the endgame D2 reagents — the **Ixian
+Mechanism** (Fracturing) and the global-rare **Maker Hide** (Divine) — the true endgame chase,
+distinct from the farmable A1–A10 act bosses. Supersedes the old cartography/Corrino framing
+below (which stays as the mechanical basis for the map/chart machinery).
+
 An in-hub station (a **cartography table** / Fremen route-cache) that gives the endgame
 its own loop on top of the Awaken ladder. The player holds **route-charts** — a
 consumable, craftable item that seeds and modifies a bonus excursion: rolled **modifiers**
@@ -397,6 +408,12 @@ persists across a death.
 Meta talent tree bought with banked spice; Sandcraft + tribe's-blessing tracks;
 currencies stay distinct.
 **Exit:** spend banked spice on a Sietch node → persists across a death.
+**Economy (locked 2026-07-28):** two currencies — **Spice = "gold"** (general trade + crafting
+base cost + undo-Consecration) and **Litrejons = tribal water**, the **sietch-tree currency**
+(spending them = contributing water to the tribe). Litrejons are banked via a new **Deathstill**
+mechanic: slain enemies yield reclaimed water (scaled by the *of the Deathstill* affix
+`AK_WATER_FIND` + enemy size), rendered into litrejons on **extraction** (lost on death — the water
+portion of the run stake). Closes the loop combat → Deathstill → litrejons → sietch upgrades.
 
 ### C6 — Ranged combat (Saboteur maula) ⬜
 Cursor-aimed maula; Bresenham line-of-fire; Lethality-scaled damage; loud.
@@ -418,14 +435,36 @@ the board resets.
 
 ## PHASE D — Itemization, Crafting & Flasks
 
-### D1 — PoE-style affixes ⬜
+### D1 — PoE-style affixes ✅
 Widen `Inst` for item-level + multiple tiered prefixes/suffixes + rarities.
 **Exit:** a rare shows item-level + tiered affixes; deeper runs roll higher tiers;
-the vault round-trips.
+the vault round-trips. **Done:** `Inst` widened (ilvl + rarity + ≤3 prefix/≤3
+suffix `RolledAffix` + reserved `quality`/`enchant`); a **~40-family spec-divergent
+pool** (`kFamilies` in items.h) with **5 Awaken-gated tiers** + PoE **spawn weights**
++ slot-gating; ~28 new `AffixKind`s wired into the derived-stat math (eff-attributes,
+flat+% increases, crit-mult, Siphon/on-hit/on-kill, Life/Focus regen, a live Will
+pool, Fortitude/Block/Deflect, a **4-type resistance system** (Heat/Cold/Storm/Toxin,
+canon non-magical hazards, no casters), Spice/Rarity/XP/Water find, Thrift). On-map
+loot moved to a serialized `g.loot_inst[]` pool (retired the 32-bit entity packing).
+Save `v6→v7`; vault **DME3→DME4** with a legacy converter (banked items survive).
+Generated Fremen rare titles + an in-menu affix detail readout. New tests
+`statmodtest`/`affixtest`/`metamigratetest`; full suite green; dettest rebaselined
+`0bd2007def2ca2bb` (SDL-free spike confirms). *(One stat, AK_POISON outgoing-poison
+potency, is defined but inert — no clean player-poisons-enemy mechanic yet; wire in a
+combat pass.)*
 
-### D2 — Crafting materials + sietch bench ⬜
-Distinct run-found materials + a bench with reroll / add / remove / upgrade-tier /
-upgrade-rarity.
+### D2 — Sietch Crafting Table (D4×PoE blend, canon Fremen materials) ⬜
+A single sietch bench (Diablo-4 place-item UX) that replays **PoE's base crafting
+currencies** — each mapped to a **stillsuit fabrication material** dropped **randomly,
+weighted by rarity**: Osmotic Weave=**Quality** · Fremseal=**Transmute** ·
+Thermofilament=**Augment** · Microsieve Mesh=**Alteration** · Absorbent Matrix=**Alchemy**
+· Duraluminum Fitting=**Regal** · Shigawire Coil=**Chaos** · Precipitator Cell=**Exalt**
+· **Maker Hide**=**Divine** (rarest, Jihad-Table-only global drop) · **Ixian Mechanism**=
+**Fracturing** (lock 1 random affix; from Jihad-Table pinnacle bosses). **Consecration**
+(a Sayyadina rite → the reserved `Inst.enchant`) costs **Spice Essence** to apply / plain
+spice to undo. Crafting is **mostly random + lossy**; the two endgame reagents don't hand
+you BiS; every op is **ilvl-capped** + reforges carry a per-item attempt budget. Reuses
+D1's `RolledAffix`/tier model + `roll_affixes`.
 **Exit:** craft an item's affixes for material cost; a bricked item re-rolls;
 banked materials survive a death.
 

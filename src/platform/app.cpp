@@ -15,6 +15,7 @@
 #include "engine/palette.h"
 #include "engine/wav.h"
 #include "game/game.h"
+#include "game/items.h"
 #include "platform/input.h"
 
 namespace {
@@ -528,6 +529,79 @@ int run_focustest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cm
     return pass ? 0 : 1;
 }
 
+// D1: equipping an affix moves the right derived stat.
+int run_statmodtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(777, services);
+    int hp, leth, sh, will, arm, dodge, cm;
+
+    game_debug_equip_affix(int(items::AK_INC_LIFE), 0);
+    game_debug_derived(&hp, 0, 0, 0, 0, 0, 0); const int hp_base = hp;
+    game_debug_equip_affix(int(items::AK_INC_LIFE), 50);
+    game_debug_derived(&hp, 0, 0, 0, 0, 0, 0);
+    const bool inc_life = hp > hp_base;                         // +50% Life multiplies
+
+    game_debug_equip_affix(int(items::AK_ADD_COND), 0);
+    int hp_c0, leth_c0; game_debug_derived(&hp_c0, &leth_c0, 0, 0, 0, 0, 0);
+    game_debug_equip_affix(int(items::AK_ADD_COND), 20);
+    int hp_c1, leth_c1; game_debug_derived(&hp_c1, &leth_c1, 0, 0, 0, 0, 0);
+    const bool cond = hp_c1 > hp_c0 && leth_c1 > leth_c0;       // Conditioning -> Life AND Lethality
+
+    game_debug_equip_affix(int(items::AK_SHIELD), 0); int sh0; game_debug_derived(0, 0, &sh0, 0, 0, 0, 0);
+    game_debug_equip_affix(int(items::AK_SHIELD), 30); game_debug_derived(0, 0, &sh, 0, 0, 0, 0);
+    const bool focus = sh == sh0 + 30;                          // +flat Focus
+
+    game_debug_equip_affix(int(items::AK_CRIT_MULT), 0); int cm0; game_debug_derived(0, 0, 0, 0, 0, 0, &cm0);
+    game_debug_equip_affix(int(items::AK_CRIT_MULT), 50); game_debug_derived(0, 0, 0, 0, 0, 0, &cm);
+    const bool critm = cm0 == 200 && cm == 250;                 // Vital Strike Damage (base x2 -> +50)
+
+    game_debug_equip_affix(int(items::AK_ADD_ALL), 0); int d0; game_debug_derived(0, 0, 0, 0, 0, &d0, 0);
+    game_debug_equip_affix(int(items::AK_ADD_ALL), 10); game_debug_derived(0, 0, 0, 0, 0, &dodge, 0);
+    (void)will; (void)arm;
+    const bool allattr = dodge > d0;                            // +all attributes -> Versatility -> Flow
+
+    const bool pass = inc_life && cond && focus && critm && allattr;
+    std::printf("statmodtest %s (life %d>%d cond[hp %d>%d leth %d>%d] focus %d=%d cm %d->%d flow %d>%d)\n",
+                pass ? "PASS" : "FAIL", hp, hp_base, hp_c1, hp_c0, leth_c1, leth_c0,
+                sh, sh0 + 30, cm0, cm, dodge, d0);
+    return pass ? 0 : 1;
+}
+
+// D1: item rolls are tiered (deeper->higher), multi-affix at rare, ilvl-gated.
+int run_affixtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(4242, services);
+    const int TOKEN = int(items::Slot::Token);
+    int low_maxT = 0, hi_maxT = 0, best_naffix = 0, rares = 0;
+    for (int i = 0; i < 300; ++i) {
+        int rar, na, mt;
+        game_debug_roll_item(1, 90, TOKEN, &rar, &na, &mt);   // ilvl 1, forced-rare bias
+        if (mt > low_maxT) low_maxT = mt;
+    }
+    for (int i = 0; i < 300; ++i) {
+        int rar, na, mt;
+        game_debug_roll_item(10, 90, TOKEN, &rar, &na, &mt);  // ilvl 10
+        if (mt > hi_maxT) hi_maxT = mt;
+        if (rar == items::R_RARE) { ++rares; if (na > best_naffix) best_naffix = na; }
+    }
+    const bool tier_gate = low_maxT <= 1 && hi_maxT >= 4;   // T1 only at ilvl1; deep reaches high tiers
+    const bool multi = best_naffix >= 3;                    // rares carry 3+ mods
+    const bool got_rares = rares > 0;
+    const bool pass = tier_gate && multi && got_rares;
+    std::printf("affixtest %s (lowMaxT %d hiMaxT %d bestN %d rares %d)\n",
+                pass ? "PASS" : "FAIL", low_maxT, hi_maxT, best_naffix, rares);
+    return pass ? 0 : 1;
+}
+
+// D1: a legacy DME3 vault converts to DME4 without losing banked items or the wallet.
+int run_metamigratetest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    (void)assets; (void)cmaps; (void)mixer;
+    const bool pass = game_debug_meta_migrate_selftest() == 1;
+    std::remove("meta.dat");
+    std::printf("metamigratetest %s\n", pass ? "PASS" : "FAIL");
+    return pass ? 0 : 1;
+}
+
 // A whole season, three ways: win by denials + climax, lose by quota, lose by raid.
 int run_campaigntest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
     GameServices services{&mixer, &assets, &cmaps};
@@ -947,7 +1021,8 @@ int main(int argc, char** argv) {
          optest = false, opdemo = false, uishot = false, focustest = false,
          campaigntest = false, dettest = false, ridetest = false, animdebug = false,
          circledemo = false, fightdemo = false, rpgtest = false, clicktest = false,
-         reveltest = false, gauntlettest = false, extractiontest = false, metatest = false;
+         reveltest = false, gauntlettest = false, extractiontest = false, metatest = false,
+         statmodtest = false, affixtest = false, metamigratetest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
         if (SDL_strcmp(argv[i], "--seamtest") == 0) seamtest = true;
@@ -960,6 +1035,9 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--optest") == 0) optest = true;
         if (SDL_strcmp(argv[i], "--uishot") == 0) uishot = true;
         if (SDL_strcmp(argv[i], "--focustest") == 0) focustest = true;
+        if (SDL_strcmp(argv[i], "--statmodtest") == 0) statmodtest = true;
+        if (SDL_strcmp(argv[i], "--affixtest") == 0) affixtest = true;
+        if (SDL_strcmp(argv[i], "--metamigratetest") == 0) metamigratetest = true;
         if (SDL_strcmp(argv[i], "--campaigntest") == 0) campaigntest = true;
         if (SDL_strcmp(argv[i], "--dettest") == 0) dettest = true;
         if (SDL_strcmp(argv[i], "--ridetest") == 0) ridetest = true;
@@ -993,6 +1071,9 @@ int main(int argc, char** argv) {
     if (wormtest) return run_wormtest(mixer, assets, cmaps);
     if (optest) return run_optest(mixer, assets, cmaps);
     if (focustest) return run_focustest(mixer, assets, cmaps);
+    if (statmodtest) return run_statmodtest(mixer, assets, cmaps);
+    if (affixtest) return run_affixtest(mixer, assets, cmaps);
+    if (metamigratetest) return run_metamigratetest(mixer, assets, cmaps);
     if (campaigntest) return run_campaigntest(mixer, assets, cmaps);
     if (dettest) return run_dettest(mixer, assets, cmaps);
     if (ridetest) return run_ridetest(mixer, assets, cmaps);

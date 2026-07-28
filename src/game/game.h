@@ -84,4 +84,10 @@ int game_debug_char_level();  // B5: persistent character level
 void game_debug_player_stats(int* hp, int* max_hp, int* water, int* max_water, int* level, int* spice);  // G2
 void game_debug_hurt(int dmg);  // C2: apply damage through the shield/Life pipeline (harness only)
 void game_debug_shield_state(int* shield, int* max_shield, int* hp);  // C2: read Focus shield + Life
+void game_debug_equip_affix(int kind, int value);  // D1: equip a synthetic 1-affix carrier
+void game_debug_derived(int* max_hp, int* leth, int* max_shield, int* max_will,
+                        int* armor, int* dodge, int* crit_mult);  // D1: read derived stats
+void game_debug_roll_item(int ilvl, int rarity_bonus, int slot,
+                          int* rarity, int* naffix, int* max_tier);  // D1: roll + report
+int game_debug_meta_migrate_selftest();  // D1: DME3->DME4 vault back-compat self-test
 int game_debug_item_name(int where, int idx, char* out, int cap);  // G2: where 0=inv 1=equip

@@ -37,6 +37,7 @@ inline constexpr int kExposureDamage = 2;
 // unspecced character behaves exactly as before; an Awareness build gets a real buffer.
 inline constexpr int kShieldRechargeDelay = 6;    // quiet turns before the shield refills
 inline constexpr int kShieldRechargePerTurn = 4;  // Focus regained per turn once refilling
+inline constexpr int kWillRegenPerTurn = 2;       // D1: Will regained per turn (abilities spend it in C7)
 
 // --- movement feel (presentation/cadence only; must NOT affect the sim) ---
 // R2: world-pixel space is 2x (iso::kView), so these are doubled to keep the feel.
