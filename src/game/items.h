@@ -28,6 +28,8 @@ enum AffixKind : uint8_t {
     AK_DMG = 0, AK_TOHIT, AK_ARMOR, AK_HP, AK_WATER, AK_NOISE, AK_TOX, AK_DODGE,
     AK_RECLAIM,  // stillsuit water reclamation (reduces thirst drain)
     AK_HEAT,     // heat shielding (reduces sun exposure gain)
+    AK_CRIT,     // C1: crit chance (%). Crit comes from GEAR only now, not attributes.
+    AK_SHIELD,   // C2: bonus Focus (max energy shield) from gear
 };
 
 inline constexpr Def kDefs[] = {
@@ -71,6 +73,8 @@ inline constexpr Def kDefs[] = {
     {"Hawk-bone Token", Slot::Token, 2, AK_TOHIT, 6, 9},
     {"Bone Talisman", Slot::Token, 3, AK_HP, 8, 11},
     {"Vial of Ibad", Slot::Token, 4, AK_TOX, 25, 14},
+    {"Kindjal Charm", Slot::Token, 5, AK_CRIT, 10, 20},    // C1: the gear source of crit
+    {"Sayyadina's Eye", Slot::Token, 6, AK_SHIELD, 14, 30},  // C2: +Focus (energy shield)
 };
 inline constexpr int kDefCount = int(sizeof(kDefs) / sizeof(kDefs[0]));
 

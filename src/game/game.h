@@ -82,4 +82,6 @@ void game_debug_awaken(int* unlocked, int* cleared, int* banked_spice);  // B5: 
 void game_debug_set_awaken_choice(int lvl);  // B5: choose the launch Awaken level
 int game_debug_char_level();  // B5: persistent character level
 void game_debug_player_stats(int* hp, int* max_hp, int* water, int* max_water, int* level, int* spice);  // G2
+void game_debug_hurt(int dmg);  // C2: apply damage through the shield/Life pipeline (harness only)
+void game_debug_shield_state(int* shield, int* max_shield, int* hp);  // C2: read Focus shield + Life
 int game_debug_item_name(int where, int idx, char* out, int cap);  // G2: where 0=inv 1=equip

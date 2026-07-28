@@ -121,8 +121,13 @@ inline constexpr const char* kTalentNames[kTalentCount] = {
     "Spice Economy", "Water Discipline", "Inner Eye",
 };
 
+// C1: the three-attribute ARPG foundation. Each attribute moves a derived PAIR:
+//   Conditioning -> Life + Lethality   (body: how much you take, how hard you hit)
+//   Versatility  -> Precision + Flow   (skill: how often you land, how well you evade)
+//   Awareness    -> Focus + Will-max   (mind: the energy shield, the ability pool)
+// Crit is deliberately NOT an attribute derivation anymore — it comes from gear (AK_CRIT).
 struct CharStats {
-    int16_t str = 12, dex = 12, vit = 12;
+    int16_t cond = 12, vers = 12, awar = 12;  // Conditioning / Versatility / Awareness
     int16_t level = 1, statpts = 0, talentpts = 0;
     int32_t xp = 0;
     uint8_t talents[kTalentCount] = {};
@@ -140,6 +145,8 @@ struct Player {
     int charges = 1;   // demolition
     int poisons = 1;   // hold toxin
     int spice = 0;     // grains
+    int shield = 0;        // C2: current energy shield (Focus) — soaks damage before Life
+    int shield_delay = 0;  // C2: turns until the shield recharges (reset on taking a hit)
     int glowglobes = 2;
     int atk = tune::kPlayerAtk;
     bool maker_hooks = false;  // Honored: the right to ride
@@ -160,7 +167,7 @@ void apply_background(Player& pl, Background bg) {
     pl.background = bg;
     switch (bg) {
         case Background::Fedaykin:
-            pl.st.str += 4;
+            pl.st.cond += 4;
             break;
         case Background::Saboteur:
             pl.charges = 3;
@@ -296,7 +303,8 @@ worm::Tuning worm_tuning() {
 
 // Y3: champions — randomly generated bosses. Entity.data packs
 // (tier | traits<<8); data2 packs (name_a | name_b<<8). Traits are bits:
-inline constexpr uint8_t BT_SHIELDED = 1, BT_SWIFT = 2, BT_BRUTE = 4,
+// C2 retired BT_SHIELDED (the Holtzman slow-blade trait); bit 0 is now reserved/inert.
+inline constexpr uint8_t BT_RESERVED0 = 1, BT_SWIFT = 2, BT_BRUTE = 4,
                          BT_STALWART = 8, BT_TOXIC = 16;
 inline constexpr const char* kBossTitles[8] = {
     "Warmaster", "Executor", "Beast-Handler", "Count", "Whipmaster",
@@ -347,7 +355,7 @@ const Foe* foe_stats(EType t) {
     static constexpr Foe kAdder{2, 72, 1, 2, 4, 15};
     static constexpr Foe kHermit{3, 55, 2, 5, 6, 28};
     static constexpr Foe kTrooper{3, 62, 2, 5, 8, 35};
-    static constexpr Foe kShield{5, 68, 3, 7, 8, 70};
+    static constexpr Foe kShield{5, 68, 4, 9, 14, 80};  // C2: a heavy-armor BULWARK (hard to hit), not a Holtzman shield
     static constexpr Foe kSeeker{4, 88, 4, 4, 22, 40};
     switch (t) {
         case EType::Hound: return &kHound;
@@ -368,8 +376,19 @@ int affix_total(uint8_t kind) {
     return p;
 }
 
-int player_max_hp() {
-    return 10 + g.pl.st.vit * 2 + (g.pl.st.level - 1) * 3 + affix_total(items::AK_HP);
+// C1 derived stats. Conditioning -> Life; Awareness -> Focus (shield) + Will-max.
+int player_max_hp() {  // Life
+    return 10 + g.pl.st.cond * 2 + (g.pl.st.level - 1) * 3 + affix_total(items::AK_HP);
+}
+int player_lethality() {  // Conditioning -> melee damage bonus
+    return g.pl.st.cond / 4 + affix_total(items::AK_DMG);
+}
+int player_max_shield() {  // Focus: only Awareness INVESTED above baseline (+gear) buys a shield,
+    const int focus = g.pl.st.awar > 12 ? (g.pl.st.awar - 12) * 3 : 0;  // so unspecced == 0 (no behavior change)
+    return focus + affix_total(items::AK_SHIELD);
+}
+int player_max_will() {  // Will pool (spent by abilities in C7; displayed now)
+    return 10 + g.pl.st.awar * 2;
 }
 int player_max_water() { return tune::kWaterMax + affix_total(items::AK_WATER); }
 int player_armor() {
@@ -382,22 +401,21 @@ int player_suit_mul4() {
     if (cut > 3) cut = 3;
     return 4 - cut;
 }
-int player_dodge() {
-    return g.pl.st.dex / 2 + affix_total(items::AK_DODGE) + 4 * g.pl.st.talents[8];
+int player_dodge() {  // Flow: Versatility -> evasion
+    return g.pl.st.vers / 2 + affix_total(items::AK_DODGE) + 4 * g.pl.st.talents[8];
 }
 
 // Player melee swing vs a foe. Returns damage dealt (0 = miss); fills crit.
 int player_attack_roll(const Foe& f, bool* crit_out) {
-    const int tohit = 55 + g.pl.st.dex * 2 - f.ac_dodge + affix_total(items::AK_TOHIT);
+    const int tohit = 55 + g.pl.st.vers * 2 - f.ac_dodge + affix_total(items::AK_TOHIT);  // Precision
     const int chance = tohit < 15 ? 15 : tohit > 95 ? 95 : tohit;
     if (int(g.rng.combat.below(100)) >= chance) return 0;
     const items::Inst& w = g.pl.equip[int(items::Slot::Weapon)];
     const int wmin = w.empty() ? 1 : w.d().a;
     const int wmax = w.empty() ? 2 : w.d().b;
-    int dmg = g.rng.combat.range(wmin, wmax) + g.pl.st.str / 4 +
-              affix_total(items::AK_DMG) + 2 * g.pl.st.talents[0];
+    int dmg = g.rng.combat.range(wmin, wmax) + player_lethality() + 2 * g.pl.st.talents[0];  // Lethality
     if (g.pl.sandwalk) dmg += 3 * g.pl.st.talents[1];
-    const int critc = g.pl.st.dex / 2 + 4 * g.pl.st.talents[2];
+    const int critc = affix_total(items::AK_CRIT) + 4 * g.pl.st.talents[2];  // C1: crit from GEAR (+talent), not attributes
     const bool crit = int(g.rng.combat.below(100)) < critc;
     if (crit) dmg *= 2;
     if (crit_out) *crit_out = crit;
@@ -618,7 +636,7 @@ void spawn_op_in(map::Zone& z, uint8_t zone_id, uint8_t mutators) {
             }
     }
 
-    // escort scaled by mutators/alert; elites bring Holtzman shields
+    // escort scaled by mutators/alert; elites bring heavy-armor bulwark troopers
     const bool elite = (mutators & (campaign::MUT_ELITE | campaign::MUT_CLIMAX)) ||
                        g.season.alert >= campaign::kAlertEliteAt;
     const int troopers = (mutators & campaign::MUT_CLIMAX) ? 5 : elite ? 4 : 3;
@@ -628,9 +646,9 @@ void spawn_op_in(map::Zone& z, uint8_t zone_id, uint8_t mutators) {
         const int y = ay + g.rng.world.range(-4, 3);
         if (!z.walkable(x, y) || entity_at(x, y, zone_id) || g.op.tile_on(x, y)) continue;
         if (Entity* e = alloc_entity()) {
-            const bool shielded = i >= troopers;
-            *e = Entity{shielded ? EType::ShieldTrooper : EType::Trooper, Ai::Guard,
-                        zone_id, int16_t(x), int16_t(y), int16_t(shielded ? 10 : 8), 0, 0};
+            const bool bulwark = i >= troopers;
+            *e = Entity{bulwark ? EType::ShieldTrooper : EType::Trooper, Ai::Guard,
+                        zone_id, int16_t(x), int16_t(y), int16_t(bulwark ? 16 : 8), 0, 0};
             ++i;
         }
     }
@@ -689,7 +707,7 @@ void schedule_ops() {
         // freshly spawned around the player: re-block footprint on live zone
     } else if (mut & campaign::MUT_CLIMAX) {
         g.log.push("Scouts running: the GREAT HARVEST deploys in the Deep Pan!");
-        g.log.push("Twin escorts. Shielded blades. End it, Fedaykin.");
+        g.log.push("Twin escorts. Heavy bulwarks. End it, Fedaykin.");
     } else {
         const bool precise = g.season.standing >= 25;
         if (precise)
@@ -962,6 +980,7 @@ void grant_xp(int amount) {
         g.pl.st.statpts += 2;
         ++g.pl.st.talentpts;
         g.pl.hp = player_max_hp();
+        g.pl.shield = player_max_shield();
         g.log.push("LEVEL %d. The desert tempers you. (+2 stats, +1 talent: P)",
                    int(g.pl.st.level));
         flash(240, 220, 120);
@@ -1129,7 +1148,6 @@ void spawn_pinnacle(int awaken) {
         Entity* e = alloc_entity();
         if (!e) return;
         uint8_t traits = BT_BRUTE | BT_STALWART;
-        if (awaken >= 5) traits |= BT_SHIELDED;
         if (awaken >= 7) traits |= BT_SWIFT;
         const int tier = awaken + 2;            // feeds boss_foe's tier scaling
         const int hp = 30 + awaken * 12;
@@ -1195,7 +1213,7 @@ void spawn_boss(bool baron) {
         int16_t name_pack;
         int hp;
         if (baron) {
-            traits = BT_SHIELDED | BT_BRUTE | BT_STALWART;
+            traits = BT_BRUTE | BT_STALWART;
             name_pack = -1;
             hp = 40 + tier * 8;
         } else {
@@ -1209,14 +1227,13 @@ void spawn_boss(bool baron) {
                     int16_t(hp), 0, int16_t(tier | (traits << 8)), name_pack};
         if (baron) {
             g.log.push("A gilded thopter descends. BARON HARKONNEN COMES HIMSELF.");
-            g.log.push("Kill him and the season is yours. (Shielded: slow blade!)");
+            g.log.push("Kill him and the season is yours.");
         } else {
             char nm[80];
             std::snprintf(nm, sizeof nm, "%s %s %s",
                           kBossTitles[name_pack & 7], kBossNames[(name_pack >> 4) & 7],
                           kBossEpithets[(name_pack >> 8) & 7]);
             g.log.push("The Baron's champion answers: %s!", nm);
-            if (traits & BT_SHIELDED) g.log.push("A shield shimmer rides with him.");
         }
         g.services.mixer->push({audio::Cmd::PlaySfx, 0, 220, 120});
         return;
@@ -1336,6 +1353,14 @@ int step_noise(uint8_t floor) {
 }
 
 void damage_player(int dmg, const char* cause) {
+    // C2: the energy shield (Focus) soaks damage before Life, then pauses its recharge.
+    g.pl.shield_delay = tune::kShieldRechargeDelay;
+    if (g.pl.shield > 0 && dmg > 0) {
+        const int soaked = dmg < g.pl.shield ? dmg : g.pl.shield;
+        g.pl.shield -= soaked;
+        dmg -= soaked;
+        if (dmg <= 0) { flash(60, 120, 230); return; }  // fully turned by the shield (a cool flash)
+    }
     g.pl.hp -= dmg;
     flash(220, 30, 20);
     if (g.pl.hp <= 0) die(cause);
@@ -1720,6 +1745,16 @@ void upkeep() {
         g.log.push("Heatstroke! Your vision swims.");
         damage_player(tune::kExposureDamage, "Cooked by the open sun.");
     }
+
+    // C2: energy shield (Focus) recharges once no damage has landed for a short spell.
+    const int shmax = player_max_shield();
+    if (g.pl.shield > shmax) g.pl.shield = shmax;  // gear unequipped -> clamp down
+    if (g.pl.shield_delay > 0) {
+        --g.pl.shield_delay;
+    } else if (g.pl.shield < shmax) {
+        g.pl.shield += tune::kShieldRechargePerTurn;
+        if (g.pl.shield > shmax) g.pl.shield = shmax;
+    }
 }
 
 // The player spent a turn: world advances.
@@ -1749,7 +1784,6 @@ void advance_world() {
         }
         if (e.type == EType::Boss) {
             const uint8_t traits = uint8_t(e.data >> 8);
-            if (traits & BT_SHIELDED) g.noise.add(e.x, e.y, 8);
             e.energy += int16_t((traits & BT_SWIFT) ? 150 : 100);
             while (e.energy >= 100 && !g.pl.dead) {
                 e.energy -= 100;
@@ -1789,7 +1823,7 @@ void advance_world() {
         }
         if (e.type == EType::Trooper || e.type == EType::ShieldTrooper) {
             if (e.type == EType::ShieldTrooper)
-                g.noise.add(e.x, e.y, 8);  // Holtzman fields madden the worm
+                g.noise.add(e.x, e.y, 8);  // heavy armor clatters across the sand
             e.energy += 100;
             while (e.energy >= 100 && !g.pl.dead) {
                 e.energy -= 100;
@@ -2207,7 +2241,7 @@ void try_move(int dx, int dy) {
     if (worm_occupies(nx, ny)) {
         const items::Inst& w0 = g.pl.equip[int(items::Slot::Weapon)];
         const int wavg = w0.empty() ? 2 : (w0.d().a + w0.d().b) / 2;
-        const int dealt = worm::hit(g.wrm, nx, ny, wavg + g.pl.st.str / 4,
+        const int dealt = worm::hit(g.wrm, nx, ny, wavg + player_lethality(),
                                     worm_callbacks());
         if (dealt > 0) g.log.push("Your blade bites the soft flesh of the maw!");
         g.noise.add(p.x, p.y, 12);
@@ -2282,29 +2316,17 @@ void try_move(int dx, int dy) {
     if (!victim) victim = entity_at(nx, ny, g.cur_zone, EType::HunterSeeker);
     if (!victim) victim = entity_at(nx, ny, g.cur_zone, EType::Boss);
     if (victim) {
-        const bool shielded_boss =
-            victim->type == EType::Boss && ((victim->data >> 8) & BT_SHIELDED);
         player_ent().anim.facing = facing_from_tile_delta(dx, dy);
         player_ent().anim.set(anim::State::Attack);
         g.impact_x = int16_t(nx);
         g.impact_y = int16_t(ny);
-        g.impact_kind =
-            (victim->type == EType::ShieldTrooper || shielded_boss) ? 1 : 0;
-        if ((victim->type == EType::ShieldTrooper || shielded_boss) && !g.pl.sandwalk) {
-            g.log.push("Your quick blade GLANCES off the shield shimmer.");
-            g.log.push("The slow blade penetrates. (C: sandwalk, then strike.)");
-            g.noise.add(nx, ny, 10);
-            advance_world();
-            return;
-        }
+        // C2: the bulwark's heavy armor sparks (metal impact fx); no Holtzman shimmer/slow-blade.
+        g.impact_kind = victim->type == EType::ShieldTrooper ? 1 : 0;
         Foe boss_f{};
         if (victim->type == EType::Boss) boss_f = boss_foe(*victim);
         const Foe* foe = victim->type == EType::Boss ? &boss_f : foe_stats(victim->type);
         bool crit = false;
         int dealt = foe ? player_attack_roll(*foe, &crit) : g.pl.atk;
-        if (dealt == 0 && g.pl.sandwalk &&
-            (victim->type == EType::ShieldTrooper || shielded_boss))
-            dealt = 1 + g.pl.st.str / 4;  // slow and true: it always lands
         g.noise.add(nx, ny, victim->type == EType::Spotter ? 4 : 12);  // blades are quiet
         if (dealt == 0) {
             g.log.push("Your blade whispers past. A miss.");
@@ -2351,7 +2373,7 @@ void try_move(int dx, int dy) {
                     g.log.push("The trooper falls. His water belongs to the tribe now.");
                     break;
                 case EType::ShieldTrooper:
-                    g.log.push("Slow and true - the blade slips the field. He falls.");
+                    g.log.push("The bulwark's guard breaks at last. He falls.");
                     break;
                 case EType::Spotter:
                     g.log.push("The spotter crumples. No eyes on the sand now.");
@@ -2632,6 +2654,7 @@ void game_init(uint64_t seed, const GameServices& services) {
         if (!g.choosing) apply_background(g.pl, Background::Fedaykin);
     }
     g.pl.hp = player_max_hp();
+    g.pl.shield = player_max_shield();  // C2: begin a run with a full Focus shield
     g.pl.maker_hooks = true;  // B4: extraction (ride a Maker home) is always available
     g.awaken_choice = services.interactive ? g_meta.awaken_unlocked : 1;  // B5: frontier (headless=1)
     // Interactive launches open on the title menu; headless tests jump into play.
@@ -2864,18 +2887,16 @@ const char* describe_at(int tx, int ty) {
             case EType::HunterSeeker: return "HUNTER-SEEKER";
             case EType::SpiceCache: return "raw spice (G: gather)";
             case EType::Boss: {
-                if (e.data2 == -1) return "BARON HARKONNEN (shielded!)";
+                if (e.data2 == -1) return "BARON HARKONNEN";
                 static char bbuf[96];
                 if (boss_is_pinnacle(e.data2)) {
                     const Pinnacle& p = kPinnacles[boss_pinnacle_idx(e.data2)];
-                    std::snprintf(bbuf, sizeof bbuf, "%s -- %s%s", p.name, p.note,
-                                  ((e.data >> 8) & BT_SHIELDED) ? " (shielded!)" : "");
+                    std::snprintf(bbuf, sizeof bbuf, "%s -- %s", p.name, p.note);
                     return bbuf;
                 }
-                std::snprintf(bbuf, sizeof bbuf, "%s %s %s%s",
+                std::snprintf(bbuf, sizeof bbuf, "%s %s %s",
                               kBossTitles[e.data2 & 7], kBossNames[(e.data2 >> 4) & 7],
-                              kBossEpithets[(e.data2 >> 8) & 7],
-                              ((e.data >> 8) & BT_SHIELDED) ? " (shielded)" : "");
+                              kBossEpithets[(e.data2 >> 8) & 7]);
                 return bbuf;
             }
             case EType::Caravan: return "smuggler caravan (bump: trade)";
@@ -3020,10 +3041,11 @@ bool game_update(const InputState& in) {
             if (in.was_pressed(Key::Cancel)) g.menu_open = 0;
             if (in.was_pressed(Key::Confirm) || mclick) {
                 if (g.menu_sel < 3 && g.pl.st.statpts > 0) {
-                    (g.menu_sel == 0 ? g.pl.st.str
-                     : g.menu_sel == 1 ? g.pl.st.dex : g.pl.st.vit) += 1;
+                    (g.menu_sel == 0 ? g.pl.st.cond
+                     : g.menu_sel == 1 ? g.pl.st.vers : g.pl.st.awar) += 1;
                     --g.pl.st.statpts;
-                    if (g.menu_sel == 2) g.pl.hp = g.pl.hp < player_max_hp()
+                    // Conditioning raises Life; top a little of it up so the point feels good.
+                    if (g.menu_sel == 0) g.pl.hp = g.pl.hp < player_max_hp()
                                                        ? g.pl.hp + 2 : player_max_hp();
                 } else if (g.menu_sel >= 3 && g.menu_sel < 3 + kTalentCount &&
                            g.pl.st.talentpts > 0 &&
@@ -3634,12 +3656,8 @@ void pass_entities(RenderCtx& r) {
                 g.draw_list.add(r.assets->get("glowglobe"), 0, sx, sy + 4 - bob, 31, 1);
                 break;
             }
-            case EType::ShieldTrooper:
+            case EType::ShieldTrooper:  // C2: a heavy-armor bulwark (no Holtzman shimmer)
                 g.draw_list.add(trooper_spr, (g.anim_tick / 8) % 2, sx, sy + 12, light, 1);
-                if (g.anim_tick % 5 == 0)  // Holtzman shimmer
-                    g.particles.spawn(sx - 10 + int(g.rng.fx.below(21)),
-                                      sy - 20 + int(g.rng.fx.below(25)),
-                                      0, -20, 10, 182);
                 break;
             case EType::Paul:  // placeholder sprite until E2 art; distinct via a lit tint
                 g.draw_list.add(r.assets->get("naib"), 0, sx, sy + 12,
@@ -3683,9 +3701,6 @@ void pass_entities(RenderCtx& r) {
                 const bool baron = e.data2 == -1 || pidx == 9;  // the Baron himself
                 g.draw_list.add(r.assets->get(baron ? "baron" : "champion"),
                                 (g.anim_tick / 8) % 2, sx, sy + 12, light, 1);
-                if (((e.data >> 8) & BT_SHIELDED) && g.anim_tick % 4 == 0)
-                    g.particles.spawn(sx - 12 + int(g.rng.fx.below(25)),
-                                      sy - 26 + int(g.rng.fx.below(30)), 0, -20, 10, 182);
                 if (baron && g.anim_tick % 6 == 0)
                     g.particles.spawn(sx - 8 + int(g.rng.fx.below(17)), sy - 40, 0, -15,
                                       14, 230);
@@ -4216,8 +4231,8 @@ void pass_ui(RenderCtx& r) {
                           int(g.pl.st.level), int(g.pl.st.xp), xp_to_level(g.pl.st.level),
                           int(g.pl.st.statpts), int(g.pl.st.talentpts));
             draw_text(ctx, buf, x0 + 24, y0 + 44, 14);
-            const char* rows[3] = {"Ferocity", "Weirding", "Endurance"};
-            const int vals[3] = {g.pl.st.str, g.pl.st.dex, g.pl.st.vit};
+            const char* rows[3] = {"Conditioning", "Versatility", "Awareness"};
+            const int vals[3] = {g.pl.st.cond, g.pl.st.vers, g.pl.st.awar};
             for (int i = 0; i < 3; ++i) {
                 const bool sel = g.menu_sel == i;
                 if (sel) fill_rect(ctx, x0 + 16, y0 + 88 + i * 24 - 2, 728, 22, 4);
@@ -4232,10 +4247,16 @@ void pass_ui(RenderCtx& r) {
                               int(g.pl.st.talents[i]));
                 draw_text(ctx, buf, x0 + 32, y, uint8_t(sel ? 245 : 20));
             }
-            std::snprintf(buf, sizeof buf, "dmg+%d  hit+%d  armor %d  dodge %d",
-                          g.pl.st.str / 4 + affix_total(items::AK_DMG),
-                          affix_total(items::AK_TOHIT), player_armor(), player_dodge());
+            std::snprintf(buf, sizeof buf,
+                          "Life %d  Lethality+%d  Precision+%d  Flow(dodge) %d  armor %d",
+                          player_max_hp(), player_lethality(),
+                          affix_total(items::AK_TOHIT) + g.pl.st.vers * 2, player_dodge(),
+                          player_armor());
             draw_text(ctx, buf, x0 + 24, y0 + 420, 136);
+            std::snprintf(buf, sizeof buf, "Focus (shield) %d/%d   Will %d   crit %d%%",
+                          g.pl.shield, player_max_shield(), player_max_will(),
+                          affix_total(items::AK_CRIT) + 4 * g.pl.st.talents[2]);
+            draw_text(ctx, buf, x0 + 24, y0 + 440, 136);
             draw_text(ctx, g.menu_sel == 12 ? "> Close" : "  Close", x0 + 32, y0 + 460,
                       uint8_t(g.menu_sel == 12 ? 245 : 20));
         } else if (g.menu_open == 6) {
@@ -4753,6 +4774,12 @@ void game_debug_player_stats(int* hp, int* max_hp, int* water, int* max_water, i
     if (level) *level = g.pl.st.level;
     if (spice) *spice = g.pl.spice;
 }
+void game_debug_hurt(int dmg) { damage_player(dmg, "Struck down in the harness."); }
+void game_debug_shield_state(int* shield, int* max_shield, int* hp) {
+    if (shield) *shield = g.pl.shield;
+    if (max_shield) *max_shield = player_max_shield();
+    if (hp) *hp = g.pl.hp;
+}
 // where: 0 = inventory[idx] (0..11), 1 = equipment[slot] (0..Slot::Count). Fills the item's
 // full display name into `out`; returns 1 if the slot holds an item, 0 if empty/out of range.
 int game_debug_item_name(int where, int idx, char* out, int cap) {
@@ -4845,10 +4872,11 @@ void game_debug_warp_to_boss(int* atk_dx, int* atk_dy) {
 const char* game_debug_death_cause() { return g_last_death; }
 
 void game_debug_buff() {  // harness only: end fights before the worm arrives
-    g.pl.st.str = 60;
-    g.pl.st.dex = 40;
-    g.pl.st.vit = 30;
+    g.pl.st.cond = 60;
+    g.pl.st.vers = 40;
+    g.pl.st.awar = 30;
     g.pl.hp = player_max_hp();
+    g.pl.shield = player_max_shield();
 }
 
 bool game_debug_boss_is_baron() {
@@ -4894,6 +4922,7 @@ void game_debug_kill_spotters() {
 void game_debug_refill() {
     g.pl.water = player_max_water();
     g.pl.hp = player_max_hp();
+    g.pl.shield = player_max_shield();
     g.pl.exposure = 0;
 }
 
@@ -4907,9 +4936,10 @@ uint64_t game_state_hash() {
     mix(uint64_t(uint32_t(g.pl.water)));
     mix(uint64_t(uint32_t(g.pl.exposure)));
     mix(uint64_t(uint32_t(g.pl.turn)));
+    mix(uint64_t(uint32_t(g.pl.shield)) | (uint64_t(uint32_t(g.pl.shield_delay)) << 32));  // C2
     mix(uint64_t(uint8_t(g.pl.background)) | (uint64_t(uint32_t(g.pl.atk)) << 8));
     mix(uint64_t(uint16_t(g.pl.st.level)) | (uint64_t(uint32_t(g.pl.st.xp)) << 16) |
-        (uint64_t(uint16_t(g.pl.st.str)) << 48));
+        (uint64_t(uint16_t(g.pl.st.cond)) << 48));  // C1: Conditioning (was str)
     mix(uint64_t(uint32_t(g.season.shipped)) | (uint64_t(uint32_t(g.season.denied)) << 16) |
         (uint64_t(uint32_t(g.season.alert)) << 32) |
         (uint64_t(uint32_t(g.season.standing)) << 48));

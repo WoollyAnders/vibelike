@@ -32,6 +32,12 @@ inline constexpr int kExposureSlow = 50;          // moves cost 1.5 turns of ene
 inline constexpr int kExposureCollapse = 90;      // damage per turn
 inline constexpr int kExposureDamage = 2;
 
+// C2: Energy Shield (Focus, from Awareness) — a buffer that soaks damage before
+// Life, then recharges after a quiet spell. Base (uninvested) Focus is 0, so an
+// unspecced character behaves exactly as before; an Awareness build gets a real buffer.
+inline constexpr int kShieldRechargeDelay = 6;    // quiet turns before the shield refills
+inline constexpr int kShieldRechargePerTurn = 4;  // Focus regained per turn once refilling
+
 // --- movement feel (presentation/cadence only; must NOT affect the sim) ---
 // R2: world-pixel space is 2x (iso::kView), so these are doubled to keep the feel.
 inline constexpr int kStepBufferPx = 36;      // held walking re-steps this close to touchdown

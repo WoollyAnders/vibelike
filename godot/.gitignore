@@ -1,10 +1,14 @@
-godot/godot-cpp/
-godot/build/
-godot/build-win/
-godot/build-ext*/
-godot/bin/
-godot/data/
-godot/.godot/
-godot/*.so
-godot/*.dll
-godot/*.uid
+# Paths are relative to THIS file's dir (godot/). Do NOT prefix with "godot/"
+# (a nested .gitignore's patterns are already scoped to its own directory).
+godot-cpp/
+build/
+build-win/
+build-ext*/
+bin/
+data/
+.godot/
+*.so
+*.dll
+*.uid
+*.png
+*.png.import

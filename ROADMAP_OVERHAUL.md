@@ -361,17 +361,26 @@ charts; deterministic across save/load.
 
 ## PHASE C — Character Systems
 
-### C1 — Three-attribute foundation ⬜
+### C1 — Three-attribute foundation ✅
 Conditioning / Versatility / Awareness → Life+Lethality / Precision+Flow /
 Focus+Will-max; crit → gear only.
 **Exit:** allocate the three attributes; each moves its derived pair; crit from
-gear only.
+gear only. **Done:** `CharStats{str,dex,vit}` renamed to `{cond,vers,awar}`;
+`player_max_hp`(Life)/`player_lethality`/`player_dodge`(Flow)/Precision-tohit all
+re-sourced; new `player_max_shield`(Focus)/`player_max_will`; crit now `AK_CRIT`
+(gear) + talent, never an attribute (added a Kindjal Charm token). Char sheet +
+level-up allocator relabelled Conditioning/Versatility/Awareness.
 
-### C2 — Energy Shield (Focus) + retire Holtzman ⬜
+### C2 — Energy Shield (Focus) + retire Holtzman ✅
 PoE-style shield buffer over Life (absorbs all, recharges); ShieldTrooper →
 heavy-armor bulwark; slow-blade rule + shieldtest retired.
 **Exit:** an Awareness build soaks hits on the shield; it recharges; no Holtzman
-anywhere.
+anywhere. **Done:** `pl.shield`/`shield_delay`, `damage_player` soaks then Life,
+recharge in `upkeep` (base Focus 0 so unspecced play is unchanged); slow-blade
+branch + `BT_SHIELDED` + shimmer FX + "shielded" labels all removed; ShieldTrooper
+is now a bulwark (higher armor/hp). `shieldtest` retired, **`focustest`** added
+(soak → recharge → spill). Full SDL suite green; dettest rebaselined
+`d9a06b6d27ca7e33` (confirmed via the SDL-free spike too).
 
 ### C3 — Class identities (three corners) ⬜
 Fedaykin=Conditioning, Saboteur=Versatility, Sayyadina=Awareness; shared Will fuel.

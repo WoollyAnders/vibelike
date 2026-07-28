@@ -4,3 +4,6 @@ compile_commands.json
 assets_src/indexed/
 .env
 __pycache__/
+
+# Local MCP config — contains an API token; never commit
+.mcp.json
