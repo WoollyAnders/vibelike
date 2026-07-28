@@ -147,6 +147,7 @@ struct Player {
     int spice = 0;     // grains
     int shield = 0;        // C2: current energy shield (Focus) — soaks damage before Life
     int shield_delay = 0;  // C2: turns until the shield recharges (reset on taking a hit)
+    int will = 0;          // D1: current Will (ability fuel); regens + siphons now, spent in C7
     int glowglobes = 2;
     int atk = tune::kPlayerAtk;
     bool maker_hooks = false;  // Honored: the right to ride
@@ -207,6 +208,7 @@ struct GameState {
     int shade_hour = -1;       // hour the shade map was computed for
 
     Entity ents[kMaxEnts];  // ents[0] = player
+    items::Inst loot_inst[kMaxEnts];  // D1: full item for each EType::Loot entity (by slot index)
     Player pl;
 
     worm::Worm wrm;
@@ -376,38 +378,49 @@ int affix_total(uint8_t kind) {
     return p;
 }
 
-// C1 derived stats. Conditioning -> Life; Awareness -> Focus (shield) + Will-max.
+// D1 effective attributes: base + flat attribute affixes (+all-attribute).
+int eff_cond() { return g.pl.st.cond + affix_total(items::AK_ADD_COND) + affix_total(items::AK_ADD_ALL); }
+int eff_vers() { return g.pl.st.vers + affix_total(items::AK_ADD_VERS) + affix_total(items::AK_ADD_ALL); }
+int eff_awar() { return g.pl.st.awar + affix_total(items::AK_ADD_AWAR) + affix_total(items::AK_ADD_ALL); }
+// flat first, then scale by an "increased %" affix.
+int with_inc(int base, uint8_t inc_kind) { return base * (100 + affix_total(inc_kind)) / 100; }
+
+// C1/D1 derived stats. Conditioning -> Life+Lethality; Versatility -> Precision+Flow;
+// Awareness -> Focus+Will. Each = flat (attr + AK_* adds), then ×(increased %).
 int player_max_hp() {  // Life
-    return 10 + g.pl.st.cond * 2 + (g.pl.st.level - 1) * 3 + affix_total(items::AK_HP);
+    const int base = 10 + eff_cond() * 2 + (g.pl.st.level - 1) * 3 + affix_total(items::AK_HP);
+    return with_inc(base, items::AK_INC_LIFE);
 }
-int player_lethality() {  // Conditioning -> melee damage bonus
-    return g.pl.st.cond / 4 + affix_total(items::AK_DMG);
+int player_lethality() {  // melee damage bonus
+    return with_inc(eff_cond() / 4 + affix_total(items::AK_DMG), items::AK_INC_DMG);
 }
-int player_max_shield() {  // Focus: only Awareness INVESTED above baseline (+gear) buys a shield,
-    const int focus = g.pl.st.awar > 12 ? (g.pl.st.awar - 12) * 3 : 0;  // so unspecced == 0 (no behavior change)
-    return focus + affix_total(items::AK_SHIELD);
+int player_max_shield() {  // Focus: only Awareness INVESTED above baseline (+gear) buys a shield
+    const int focus = eff_awar() > 12 ? (eff_awar() - 12) * 3 : 0;  // unspecced == 0 (no behavior change)
+    return with_inc(focus + affix_total(items::AK_SHIELD), items::AK_INC_FOCUS);
 }
-int player_max_will() {  // Will pool (spent by abilities in C7; displayed now)
-    return 10 + g.pl.st.awar * 2;
+int player_max_will() {  // Will pool (spent by abilities in C7; live/regen/siphon in D1)
+    return 10 + eff_awar() * 2 + affix_total(items::AK_WILL);
 }
 int player_max_water() { return tune::kWaterMax + affix_total(items::AK_WATER); }
 int player_armor() {
-    return affix_total(items::AK_ARMOR);  // Body's intrinsic armor + any Guarded affixes
+    return with_inc(affix_total(items::AK_ARMOR), items::AK_INC_ARMOR);  // Guarded/implicit + Plated %
 }
-// B2a: thirst multiplier (x/4) derived from summed stillsuit reclamation (AK_RECLAIM),
-// replacing the old single Suit slot. 4 = no reclaim ... 1 = a full, sealed stillsuit.
+// B2a: thirst multiplier (x/4) from summed stillsuit reclamation (AK_RECLAIM).
+// 4 = no reclaim ... 1 = a full, sealed stillsuit.
 int player_suit_mul4() {
     int cut = affix_total(items::AK_RECLAIM) / 2;
     if (cut > 3) cut = 3;
     return 4 - cut;
 }
 int player_dodge() {  // Flow: Versatility -> evasion
-    return g.pl.st.vers / 2 + affix_total(items::AK_DODGE) + 4 * g.pl.st.talents[8];
+    const int base = eff_vers() / 2 + affix_total(items::AK_DODGE) + 4 * g.pl.st.talents[8];
+    return with_inc(base, items::AK_INC_DODGE);
 }
 
 // Player melee swing vs a foe. Returns damage dealt (0 = miss); fills crit.
 int player_attack_roll(const Foe& f, bool* crit_out) {
-    const int tohit = 55 + g.pl.st.vers * 2 - f.ac_dodge + affix_total(items::AK_TOHIT);  // Precision
+    const int acc = with_inc(55 + eff_vers() * 2 + affix_total(items::AK_TOHIT), items::AK_INC_TOHIT);  // Precision
+    const int tohit = acc - f.ac_dodge;
     const int chance = tohit < 15 ? 15 : tohit > 95 ? 95 : tohit;
     if (int(g.rng.combat.below(100)) >= chance) return 0;
     const items::Inst& w = g.pl.equip[int(items::Slot::Weapon)];
@@ -415,9 +428,9 @@ int player_attack_roll(const Foe& f, bool* crit_out) {
     const int wmax = w.empty() ? 2 : w.d().b;
     int dmg = g.rng.combat.range(wmin, wmax) + player_lethality() + 2 * g.pl.st.talents[0];  // Lethality
     if (g.pl.sandwalk) dmg += 3 * g.pl.st.talents[1];
-    const int critc = affix_total(items::AK_CRIT) + 4 * g.pl.st.talents[2];  // C1: crit from GEAR (+talent), not attributes
+    const int critc = affix_total(items::AK_CRIT) + 4 * g.pl.st.talents[2];  // crit from GEAR (+talent), not attributes
     const bool crit = int(g.rng.combat.below(100)) < critc;
-    if (crit) dmg *= 2;
+    if (crit) dmg = dmg * (200 + affix_total(items::AK_CRIT_MULT)) / 100;  // Vital Strike Damage (base x2)
     if (crit_out) *crit_out = crit;
     return dmg;
 }
@@ -913,22 +926,41 @@ struct Meta {
 };
 Meta g_meta;
 
+inline constexpr uint32_t kMetaV4 = 0x34454D44u;  // 'DME4' (D1: widened Inst)
 inline constexpr uint32_t kMetaV3 = 0x33454D44u;  // 'DME3'
 inline constexpr uint32_t kMetaV2 = 0x32454D44u;  // 'DME2'
 inline constexpr uint32_t kMetaV1 = 0x54454D44u;  // 'DMET'
+
+// D1 back-compat: the pre-D1 4-byte item + the old fixed prefix/suffix tables (kind,power),
+// baked in here so a DME2/DME3 vault converts to the widened Inst without losing banked stats.
+struct LegacyInst { uint8_t def, prefix, suffix, rarity; };
+items::Inst convert_legacy(const LegacyInst& L) {
+    items::Inst it;
+    if (L.def == 0xFF || L.def >= items::kDefCount) return it;
+    static const struct { uint8_t k; int16_t p; } OP[8] = {
+        {items::AK_DMG, 2}, {items::AK_ARMOR, 2}, {items::AK_WATER, 150}, {items::AK_TOHIT, 8},
+        {items::AK_NOISE, 3}, {items::AK_HP, 6}, {items::AK_RECLAIM, 1}, {items::AK_HEAT, 1}};
+    static const struct { uint8_t k; int16_t p; } OS[8] = {
+        {items::AK_TOHIT, 10}, {items::AK_NOISE, 4}, {items::AK_TOX, 20}, {items::AK_DODGE, 8},
+        {items::AK_WATER, 250}, {items::AK_HP, 10}, {items::AK_RECLAIM, 1}, {items::AK_HEAT, 1}};
+    it.def = L.def;
+    it.rarity = L.rarity <= items::R_RARE ? L.rarity : items::R_COMMON;
+    it.ilvl = uint8_t(it.d().level < 1 ? 1 : it.d().level);
+    if (L.prefix < 8) { it.pre[0] = {OP[L.prefix].k, 1, OP[L.prefix].p}; it.nprefix = 1; }
+    if (L.suffix < 8) { it.suf[0] = {OS[L.suffix].k, 1, OS[L.suffix].p}; it.nsuffix = 1; }
+    return it;
+}
 
 void meta_load() {
     FILE* f = std::fopen("meta.dat", "rb");
     if (!f) return;
     uint32_t magic = 0;
     if (std::fread(&magic, 4, 1, f) == 1) {
-        if (magic == kMetaV3 || magic == kMetaV2) {  // v2 + v3 share the leading fields
+        if (magic == kMetaV4) {  // native widened-Inst format
             (void)!std::fread(&g_meta.runs, 4, 1, f);
             (void)!std::fread(&g_meta.endings_seen, 1, 1, f);
             (void)!std::fread(&g_meta.stash_count, 1, 1, f);
             (void)!std::fread(g_meta.stash, sizeof g_meta.stash, 1, f);
-        }
-        if (magic == kMetaV3) {  // + the Awaken ladder, wallet, and persistent character
             (void)!std::fread(&g_meta.awaken_unlocked, 1, 1, f);
             (void)!std::fread(&g_meta.awaken_cleared, 1, 1, f);
             (void)!std::fread(&g_meta.has_char, 1, 1, f);
@@ -936,6 +968,25 @@ void meta_load() {
             (void)!std::fread(&g_meta.st, sizeof g_meta.st, 1, f);
             (void)!std::fread(g_meta.equip, sizeof g_meta.equip, 1, f);
             (void)!std::fread(g_meta.inv, sizeof g_meta.inv, 1, f);
+        } else if (magic == kMetaV3 || magic == kMetaV2) {  // legacy 4-byte items -> convert
+            (void)!std::fread(&g_meta.runs, 4, 1, f);
+            (void)!std::fread(&g_meta.endings_seen, 1, 1, f);
+            (void)!std::fread(&g_meta.stash_count, 1, 1, f);
+            LegacyInst ls[24] = {};
+            (void)!std::fread(ls, sizeof ls, 1, f);
+            for (int i = 0; i < 24; ++i) g_meta.stash[i] = convert_legacy(ls[i]);
+            if (magic == kMetaV3) {
+                (void)!std::fread(&g_meta.awaken_unlocked, 1, 1, f);
+                (void)!std::fread(&g_meta.awaken_cleared, 1, 1, f);
+                (void)!std::fread(&g_meta.has_char, 1, 1, f);
+                (void)!std::fread(&g_meta.banked_spice, 4, 1, f);
+                (void)!std::fread(&g_meta.st, sizeof g_meta.st, 1, f);
+                LegacyInst le[int(items::Slot::Count)] = {}, li[12] = {};
+                (void)!std::fread(le, sizeof le, 1, f);
+                (void)!std::fread(li, sizeof li, 1, f);
+                for (int i = 0; i < int(items::Slot::Count); ++i) g_meta.equip[i] = convert_legacy(le[i]);
+                for (int i = 0; i < 12; ++i) g_meta.inv[i] = convert_legacy(li[i]);
+            }
         } else if (magic == kMetaV1) {  // v1: carry runs/endings forward only
             (void)!std::fread(&g_meta.runs, 4, 1, f);
             (void)!std::fread(&g_meta.endings_seen, 1, 1, f);
@@ -947,7 +998,7 @@ void meta_load() {
 void meta_save() {
     FILE* f = std::fopen("meta.dat", "wb");
     if (!f) return;
-    std::fwrite(&kMetaV3, 4, 1, f);
+    std::fwrite(&kMetaV4, 4, 1, f);
     std::fwrite(&g_meta.runs, 4, 1, f);
     std::fwrite(&g_meta.endings_seen, 1, 1, f);
     std::fwrite(&g_meta.stash_count, 1, 1, f);
@@ -973,6 +1024,7 @@ void persist_character() {
 
 void grant_xp(int amount) {
     if (g.pl.st.level >= 30) return;
+    amount = amount * (100 + affix_total(items::AK_XP)) / 100;  // D1: Experience Gain
     g.pl.st.xp += amount;
     while (g.pl.st.xp >= xp_to_level(g.pl.st.level)) {
         g.pl.st.xp -= xp_to_level(g.pl.st.level);
@@ -981,6 +1033,7 @@ void grant_xp(int amount) {
         ++g.pl.st.talentpts;
         g.pl.hp = player_max_hp();
         g.pl.shield = player_max_shield();
+        g.pl.will = player_max_will();
         g.log.push("LEVEL %d. The desert tempers you. (+2 stats, +1 talent: P)",
                    int(g.pl.st.level));
         flash(240, 220, 120);
@@ -992,50 +1045,98 @@ void grant_xp(int amount) {
 // the loot tables. Risk feeds reward.
 int run_difficulty() { return g.season.denied + g.season.alert / 25; }
 
+// D1: item level of a drop = the current graph node's Awaken level (1..10). Deeper runs roll
+// higher tiers. run_difficulty() still feeds the rarity bonus.
+int drop_ilvl() {
+    int a = 1;
+    if (g.cur_node >= 0 && g.cur_node < world::kMaxNodes) a = g.graph.nodes[g.cur_node].awaken;
+    return a < 1 ? 1 : a > 10 ? 10 : a;
+}
+
+// Weighted draw on the loot stream (PoE-style spawn weights).
+int weighted_pick(const int* w, int n) {
+    int total = 0;
+    for (int i = 0; i < n; ++i) total += w[i];
+    if (total <= 0) return int(g.rng.loot.below(uint32_t(n)));
+    int r = int(g.rng.loot.below(uint32_t(total)));
+    for (int i = 0; i < n; ++i) { if (r < w[i]) return i; r -= w[i]; }
+    return n - 1;
+}
+
+// Roll `count` distinct affixes of one side (prefix/suffix) onto `it`, respecting slot-gating,
+// ilvl-gated + weighted tiers, and no duplicate kinds.
+void roll_one_side(items::Inst& it, int ilvl, bool prefix_side, int count) {
+    const items::Slot slot = it.d().slot;
+    for (int c = 0; c < count; ++c) {
+        int fam_idx[items::kFamilyCount], fam_w[items::kFamilyCount], n = 0;
+        for (int i = 0; i < items::kFamilyCount; ++i) {
+            const items::AffixFamily& f = items::kFamilies[i];
+            if (f.prefix != prefix_side || !(f.slots & items::sm(slot))) continue;
+            bool dup = false;
+            for (int p = 0; p < it.nprefix; ++p) if (it.pre[p].kind == f.kind) dup = true;
+            for (int s = 0; s < it.nsuffix; ++s) if (it.suf[s].kind == f.kind) dup = true;
+            if (dup) continue;
+            fam_idx[n] = i; fam_w[n] = f.weight; ++n;
+        }
+        if (!n) return;
+        const items::AffixFamily& f = items::kFamilies[fam_idx[weighted_pick(fam_w, n)]];
+        int t_idx[items::kMaxTier], t_w[items::kMaxTier], tn = 0;
+        for (int t = 0; t < items::kMaxTier; ++t)
+            if (items::kTierMinIlvl[t] <= ilvl) { t_idx[tn] = t; t_w[tn] = items::kTierWeight[t]; ++tn; }
+        const int t = t_idx[weighted_pick(t_w, tn)];
+        items::RolledAffix ra;
+        ra.kind = f.kind;
+        ra.tier = uint8_t(t + 1);
+        ra.value = int16_t(g.rng.loot.range(f.lo[t], f.hi[t]));
+        if (prefix_side) it.pre[it.nprefix++] = ra; else it.suf[it.nsuffix++] = ra;
+    }
+}
+
+// Assign rarity + roll the explicit affixes for an item already holding a `def`.
+void roll_affixes(items::Inst& it, int ilvl, int rarity_bonus) {
+    if (ilvl < 1) ilvl = 1;
+    it.ilvl = uint8_t(ilvl > 255 ? 255 : ilvl);
+    it.nprefix = it.nsuffix = 0;
+    const int r = int(g.rng.loot.below(100)) - rarity_bonus;
+    it.rarity = r < 10 ? items::R_RARE : r < 40 ? items::R_MAGIC : items::R_COMMON;
+    if (it.rarity == items::R_MAGIC) {
+        roll_one_side(it, ilvl, true, 1);
+        roll_one_side(it, ilvl, false, 1);
+    } else if (it.rarity == items::R_RARE) {
+        const int np = 1 + int(g.rng.loot.below(items::kMaxPrefix));
+        const int ns = 1 + int(g.rng.loot.below(items::kMaxSuffix));
+        roll_one_side(it, ilvl, true, np);
+        roll_one_side(it, ilvl, false, ns);
+        it.rare_name = uint8_t(int(g.rng.loot.below(8)) | (int(g.rng.loot.below(8)) << 4));
+    }
+}
+
 items::Inst roll_item(int item_level, int rarity_bonus) {
-    int candidates[items::kDefCount];
-    int n = 0;
+    int candidates[items::kDefCount], n = 0;
     for (int i = 0; i < items::kDefCount; ++i)
-        if (items::kDefs[i].level <= item_level + 1 &&
-            items::kDefs[i].level + 3 >= item_level)
+        if (items::kDefs[i].level <= item_level + 1 && items::kDefs[i].level + 3 >= item_level)
             candidates[n++] = i;
     items::Inst it;
     if (!n) return it;
     it.def = uint8_t(candidates[g.rng.loot.below(uint32_t(n))]);
-    const int r = int(g.rng.loot.below(100)) - rarity_bonus;
-    it.rarity = r < 10 ? 2 : r < 40 ? 1 : 0;
-    if (it.rarity >= 1) {
-        if (g.rng.loot.chance(1, 2) || it.rarity == 2)
-            it.prefix = uint8_t(g.rng.loot.below(items::kPrefixCount));
-        if (it.prefix == 0xFF || it.rarity == 2)
-            it.suffix = uint8_t(g.rng.loot.below(items::kSuffixCount));
-    }
+    roll_affixes(it, drop_ilvl(), rarity_bonus);
     return it;
 }
 
-// B2b: slot-locked roll for a Revelation offer (mirrors roll_item + a slot predicate).
+// B2b: slot-locked roll for a Revelation offer.
 items::Inst roll_item_for_slot(int item_level, int rarity_bonus, items::Slot s) {
-    int candidates[items::kDefCount];
-    int n = 0;
+    int candidates[items::kDefCount], n = 0;
     for (int i = 0; i < items::kDefCount; ++i)
         if (items::kDefs[i].slot == s && items::kDefs[i].level <= item_level + 2 &&
             items::kDefs[i].level + 4 >= item_level)
             candidates[n++] = i;
     items::Inst it;
-    if (!n) {  // widen if the level window yielded nothing of this slot
+    if (!n)
         for (int i = 0; i < items::kDefCount; ++i)
             if (items::kDefs[i].slot == s) candidates[n++] = i;
-    }
     if (!n) return it;
     it.def = uint8_t(candidates[g.rng.loot.below(uint32_t(n))]);
-    const int r = int(g.rng.loot.below(100)) - rarity_bonus;
-    it.rarity = r < 10 ? 2 : r < 40 ? 1 : 0;
-    if (it.rarity >= 1) {
-        if (g.rng.loot.chance(1, 2) || it.rarity == 2)
-            it.prefix = uint8_t(g.rng.loot.below(items::kPrefixCount));
-        if (it.prefix == 0xFF || it.rarity == 2)
-            it.suffix = uint8_t(g.rng.loot.below(items::kSuffixCount));
-    }
+    roll_affixes(it, drop_ilvl(), rarity_bonus);
     return it;
 }
 
@@ -1049,27 +1150,25 @@ void maybe_drop_loot(EType t, int x, int y) {
     if (int(g.rng.loot.below(100)) >= chance) return;
 
     const int diff = run_difficulty();
-    items::Inst it = roll_item(f->level + diff / 2,
-                               diff * 6 + (t == EType::Boss ? 60 : 0));
-    for (Entity& e : g.ents)
-        if (e.type == EType::None) {
-            e = Entity{EType::Loot, Ai::Idle, g.cur_zone, int16_t(x), int16_t(y), 1, 0,
-                       int16_t(it.def | (it.prefix << 8)),
-                       int16_t(it.suffix | (it.rarity << 8))};
+    items::Inst it = roll_item(f->level + diff / 2, diff * 6 + (t == EType::Boss ? 60 : 0));
+    if (t == EType::Boss) it.ilvl = uint8_t(it.ilvl < 10 ? it.ilvl + 1 : 10);  // bosses drop a touch higher
+    for (int i = 1; i < kMaxEnts; ++i)
+        if (g.ents[i].type == EType::None) {
+            g.ents[i] = Entity{EType::Loot, Ai::Idle, g.cur_zone, int16_t(x), int16_t(y), 1, 0,
+                               int16_t(it.def), 0};
+            g.loot_inst[i] = it;  // D1: the full item lives in the parallel loot pool (by slot)
             char nm[64];
             it.full_name(nm, sizeof nm);
-            g.log.push("%s dropped: %s", it.rarity == 2 ? "RARE" : it.rarity ? "Fine" : "Gear", nm);
+            g.log.push("%s dropped: %s",
+                       it.rarity == items::R_RARE ? "RARE" : it.rarity ? "Magic" : "Gear", nm);
             return;
         }
 }
 
 items::Inst loot_of(const Entity& e) {
-    items::Inst it;
-    it.def = uint8_t(e.data & 0xFF);
-    it.prefix = uint8_t((e.data >> 8) & 0xFF);
-    it.suffix = uint8_t(e.data2 & 0xFF);
-    it.rarity = uint8_t((e.data2 >> 8) & 0xFF);
-    return it;
+    const int idx = int(&e - &g.ents[0]);
+    if (idx >= 0 && idx < kMaxEnts) return g.loot_inst[idx];
+    return items::Inst{};
 }
 
 const char* g_last_death = "";
@@ -1352,19 +1451,59 @@ int step_noise(uint8_t floor) {
     return n;
 }
 
-void damage_player(int dmg, const char* cause) {
-    // C2: the energy shield (Focus) soaks damage before Life, then pauses its recharge.
-    g.pl.shield_delay = tune::kShieldRechargeDelay;
+// D1 damage types (all canon, non-magical). DT_PHYS = enemy blade/hunter-seeker (blockable);
+// the elementals map to Arrakis hazards; DT_TRUE = internal (thirst) — bypasses mitigation.
+enum DmgType : uint8_t { DT_PHYS, DT_HEAT, DT_COLD, DT_STORM, DT_TOX, DT_TRUE };
+uint8_t res_kind_for(DmgType t) {
+    switch (t) {
+        case DT_HEAT: return items::AK_HEAT;
+        case DT_COLD: return items::AK_RES_COLD;
+        case DT_STORM: return items::AK_RES_STORM;
+        case DT_TOX: return items::AK_RES_TOX;
+        default: return 0xFF;
+    }
+}
+
+void damage_player(int dmg, const char* cause, DmgType type = DT_PHYS) {
+    g.pl.shield_delay = tune::kShieldRechargeDelay;  // any hit pauses the shield recharge
+    // Block: enemy physical only — a chance to turn the blow entirely. (No draw unless geared, so
+    // determinism baselines are unaffected for characters without a block affix.)
+    if (type == DT_PHYS) {
+        const int blk = affix_total(items::AK_BLOCK);
+        if (blk > 0 && int(g.rng.combat.below(100)) < blk) { flash(180, 180, 60); return; }
+    }
+    // Resistance (typed hazards): reduce by the matching resist, 75% cap.
+    const uint8_t rk = res_kind_for(type);
+    if (rk != 0xFF && dmg > 0) {
+        int res = affix_total(rk); if (res > 75) res = 75; if (res < 0) res = 0;
+        dmg = dmg * (100 - res) / 100;
+    }
+    // Fortitude: flat % reduced incoming (all but true damage), 75% cap.
+    if (type != DT_TRUE && dmg > 0) {
+        int dr = affix_total(items::AK_DR); if (dr > 75) dr = 75;
+        dmg = dmg * (100 - dr) / 100;
+    }
+    if ((rk != 0xFF || affix_total(items::AK_DR) > 0) && dmg < 1) dmg = 1;  // mitigation never fully negates
+    // Energy shield (Focus) soaks before Life.
     if (g.pl.shield > 0 && dmg > 0) {
         const int soaked = dmg < g.pl.shield ? dmg : g.pl.shield;
         g.pl.shield -= soaked;
         dmg -= soaked;
-        if (dmg <= 0) { flash(60, 120, 230); return; }  // fully turned by the shield (a cool flash)
+        if (dmg <= 0) { flash(60, 120, 230); return; }  // fully turned by the shield
     }
     g.pl.hp -= dmg;
     flash(220, 30, 20);
     if (g.pl.hp <= 0) die(cause);
 }
+// Deflect (thorns): a melee attacker takes returned damage. Called at melee-hit sites.
+void reflect_thorns(Entity* attacker) {
+    const int t = affix_total(items::AK_THORNS);
+    if (t > 0 && attacker && attacker->hp > 0) attacker->hp = int16_t(attacker->hp - t);
+}
+// D1 clamped restores (on-hit/on-kill/leech).
+void gain_hp(int amt) { if (amt <= 0) return; const int m = player_max_hp(); if ((g.pl.hp += amt) > m) g.pl.hp = m; }
+void gain_shield(int amt) { if (amt <= 0) return; const int m = player_max_shield(); if ((g.pl.shield += amt) > m) g.pl.shield = m; }
+void gain_will(int amt) { if (amt <= 0) return; const int m = player_max_will(); if ((g.pl.will += amt) > m) g.pl.will = m; }
 
 // ---- world turn --------------------------------------------------------------
 
@@ -1393,6 +1532,7 @@ void trooper_act(Entity& e) {
             }
             g.log.push("The trooper's blade finds you for %d.", dmg);
             damage_player(dmg, "Cut down by Harkonnen steel.");
+            reflect_thorns(&e);  // D1: Deflect
             return;
         }
         int best_x = e.x, best_y = e.y;
@@ -1549,7 +1689,7 @@ void critter_act(Entity& e) {
     if (e.type == EType::PanAdder) {
         if (pdist == 1 && g.rng.combat.chance(2, 3)) {
             g.log.push("The pan adder STRIKES - venom burns in your blood.");
-            damage_player(1, "Venom in the blood, sand in the mouth.");
+            damage_player(1, "Venom in the blood, sand in the mouth.", DT_TOX);
             g.poison_turns = 20;
         }
         return;  // ambusher: it does not chase
@@ -1628,6 +1768,7 @@ void hound_act(Entity& e) {
             }
             g.log.push("The dust hound bites you for %d.", dmg);
             damage_player(dmg, "Torn apart by dust hounds.");
+            reflect_thorns(&e);  // D1: Deflect
             return;
         }
         // roll downhill on the dijkstra map
@@ -1670,12 +1811,14 @@ void upkeep() {
     const int amb = ambient_now();
     int drain = base * tune::kThirstHeatMul4[amb] * player_suit_mul4() / 16;
     drain = drain * (8 - g.pl.st.talents[7]) / 8;  // Water Discipline
+    if (int th = affix_total(items::AK_THRIFT); th > 0)  // D1: Reduced Water Use
+        drain = drain * (100 - (th > 75 ? 75 : th)) / 100;
     if (g.pl.tox > 60) drain = drain * 3 / 2;  // the spice burns water
     if (base > 0 && drain < 1) drain = 1;
     g.pl.water -= drain;
     if (g.pl.water < 0) g.pl.water = 0;
     if (g.pl.water == 0) {
-        damage_player(tune::kDehydrateDamage, "Died of thirst in the Tanzerouft.");
+        damage_player(tune::kDehydrateDamage, "Died of thirst in the Tanzerouft.", DT_TRUE);
         if ((g.pl.turn % 5) == 0) g.log.push("Your throat is cracked glass. Water. Water.");
     } else if (g.pl.water == 100) {
         g.log.push("Your water is nearly gone.");
@@ -1743,17 +1886,44 @@ void upkeep() {
     if (g.pl.exposure > 100) g.pl.exposure = 100;
     if (g.pl.exposure >= tune::kExposureCollapse) {
         g.log.push("Heatstroke! Your vision swims.");
-        damage_player(tune::kExposureDamage, "Cooked by the open sun.");
+        damage_player(tune::kExposureDamage, "Cooked by the open sun.", DT_HEAT);
+    }
+
+    // D1: deep-desert typed hazards. Awaken-scaled (env/3), so shallow runs (all current tests,
+    // which never go deep) take zero — only lategame demands Storm/Cold resistance.
+    const int env = drop_ilvl();
+    if (env >= 3 && !sheltered && !g.pl.dead) {
+        if (g.storm_turns > 0)
+            damage_player(env / 3, "Flayed by the Coriolis storm.", DT_STORM);
+        else if (amb <= tune::kExposureHotThreshold / 2)
+            damage_player(env / 3, "The desert night leaches your heat.", DT_COLD);
     }
 
     // C2: energy shield (Focus) recharges once no damage has landed for a short spell.
+    // D1: AK_FOCUS_REGEN (Focus Recharge %) speeds the refill rate.
     const int shmax = player_max_shield();
     if (g.pl.shield > shmax) g.pl.shield = shmax;  // gear unequipped -> clamp down
     if (g.pl.shield_delay > 0) {
         --g.pl.shield_delay;
     } else if (g.pl.shield < shmax) {
-        g.pl.shield += tune::kShieldRechargePerTurn;
+        g.pl.shield += tune::kShieldRechargePerTurn * (100 + affix_total(items::AK_FOCUS_REGEN)) / 100;
         if (g.pl.shield > shmax) g.pl.shield = shmax;
+    }
+
+    // D1: Life regen (Recovery) per turn.
+    const int hpmax = player_max_hp();
+    const int regen = affix_total(items::AK_LIFE_REGEN);
+    if (regen > 0 && g.pl.hp > 0 && g.pl.hp < hpmax) {
+        g.pl.hp += regen;
+        if (g.pl.hp > hpmax) g.pl.hp = hpmax;
+    }
+
+    // D1: the Will pool regenerates toward its max (spent by abilities in C7).
+    const int wmax = player_max_will();
+    if (g.pl.will > wmax) g.pl.will = wmax;
+    else if (g.pl.will < wmax) {
+        g.pl.will += tune::kWillRegenPerTurn;
+        if (g.pl.will > wmax) g.pl.will = wmax;
     }
 }
 
@@ -1802,6 +1972,7 @@ void advance_world() {
                     g.log.push("The champion strikes you for %d.", dmg);
                     damage_player(dmg, e.data2 == -1 ? "Slain by the Baron himself."
                                                      : "Cut down by the Baron's champion.");
+                    reflect_thorns(&e);  // D1: Deflect
                 } else {
                     int best_x = e.x, best_y = e.y;
                     int16_t best = pdist >= 0 ? pdist : INT16_MAX;
@@ -2334,10 +2505,18 @@ void try_move(int dx, int dy) {
             return;
         }
         victim->hp -= int16_t(dealt);
+        // D1 on-hit sustain: Siphon (% of damage dealt), flat Life on Hit, Will Siphon.
+        if (int lch = affix_total(items::AK_LEECH); lch > 0)
+            gain_hp(dealt * lch / 100);
+        if (int loh = affix_total(items::AK_LIFE_ON_HIT); loh > 0) gain_hp(loh);
+        if (int ws = affix_total(items::AK_WILL_SIPHON); ws > 0) gain_will(ws);
         if (crit) g.log.push("CRIT - %d! The blade finds the seam.", dealt);
         else g.log.push("You hit for %d.", dealt);
         if (victim->hp <= 0) {
             g.hitstop = 3;  // the world holds its breath
+            // D1 on-kill: Life on Kill + Focus on Kill.
+            gain_hp(affix_total(items::AK_LIFE_ON_KILL));
+            gain_shield(affix_total(items::AK_FOCUS_ON_KILL));
             if (foe) {
                 int xp = foe->xp;
                 if (g.pl.st.level > foe->level + 2) xp /= 2;
@@ -2558,7 +2737,8 @@ void try_harvest() {
     // stealing from the crawler hold takes priority when adjacent to it
     if (player_adjacent_op() && g.op.hold >= 15) {
         g.op.hold = int16_t(g.op.hold - 15);
-        g.pl.spice += (g.op.mutators & campaign::MUT_SLOPPY) ? 8 : 5;
+        g.pl.spice += (((g.op.mutators & campaign::MUT_SLOPPY) ? 8 : 5)
+                       * (100 + affix_total(items::AK_SPICE_FIND)) / 100);  // D1: Spice Find
         g.op.stolen = true;
         g.noise.add(p.x, p.y, 8);
         g.log.push("You scoop raw spice from the hold. +5 grains.");
@@ -2583,7 +2763,7 @@ void try_harvest() {
     }
     if (Entity* cache = entity_at(p.x, p.y, g.cur_zone, EType::SpiceCache)) {
         p.anim.set(anim::State::Use);
-        g.pl.spice += cache->data;
+        g.pl.spice += cache->data * (100 + affix_total(items::AK_SPICE_FIND)) / 100;  // D1: Spice Find
         g.log.push("You scoop %d grains of raw spice from the sand.", int(cache->data));
         cache->type = EType::None;
         g.noise.add(p.x, p.y, 6);
@@ -2593,7 +2773,7 @@ void try_harvest() {
     }
     if (Entity* c = entity_at(p.x, p.y, g.cur_zone, EType::Corpse)) {
         p.anim.set(anim::State::Use);
-        g.pl.water += c->data;
+        g.pl.water += c->data * (100 + affix_total(items::AK_WATER_FIND)) / 100;  // D1: Water Find (Deathstill)
         if (g.pl.water > player_max_water()) g.pl.water = player_max_water();
         g.log.push("The deathstill takes its due. +%d water.", int(c->data));
         c->type = EType::None;
@@ -2655,6 +2835,7 @@ void game_init(uint64_t seed, const GameServices& services) {
     }
     g.pl.hp = player_max_hp();
     g.pl.shield = player_max_shield();  // C2: begin a run with a full Focus shield
+    g.pl.will = player_max_will();
     g.pl.maker_hooks = true;  // B4: extraction (ride a Maker home) is always available
     g.awaken_choice = services.interactive ? g_meta.awaken_unlocked : 1;  // B5: frontier (headless=1)
     // Interactive launches open on the title menu; headless tests jump into play.
@@ -4280,6 +4461,20 @@ void pass_ui(RenderCtx& r) {
                                     : g.pl.inv[i].rarity == 1 ? 230 : 20;
                 draw_text(ctx, nm, x0 + 32, y, uint8_t(sel ? 245 : col));
             }
+            // D1: affix detail (item level + tiered mods) for the highlighted pack item.
+            if (g.menu_sel >= 0 && g.menu_sel < 12 && !g.pl.inv[g.menu_sel].empty()) {
+                char det[256];
+                g.pl.inv[g.menu_sel].describe(det, sizeof det);
+                int dy = y0 + 212;
+                for (char* line = det; *line;) {
+                    char* nl = std::strchr(line, '\n');
+                    if (nl) *nl = 0;
+                    draw_text(ctx, line, x0 + 400, dy, 200);
+                    dy += 16;
+                    if (!nl) break;
+                    line = nl + 1;
+                }
+            }
             draw_text(ctx, g.menu_sel == 12 ? "> Close" : "  Close", x0 + 32, y0 + 460,
                       uint8_t(g.menu_sel == 12 ? 245 : 20));
         } else {
@@ -4499,6 +4694,9 @@ void game_serialize(SaveWriter& w) {
     w.i32(g.pl.spice);
     w.i32(g.pl.glowglobes);
     w.i32(g.pl.atk);
+    w.i32(g.pl.shield);        // C2
+    w.i32(g.pl.shield_delay);  // C2
+    w.i32(g.pl.will);          // D1
     w.u8(g.pl.maker_hooks ? 1 : 0);
     w.u8(g.pl.riding ? 1 : 0);
     w.i32(g.pl.ride_turns);
@@ -4534,6 +4732,7 @@ void game_serialize(SaveWriter& w) {
     w.i32(g.thopter_y);
     w.i32(g.thopter_dx);
     w.bytes(g.ents, sizeof g.ents);
+    w.bytes(g.loot_inst, sizeof g.loot_inst);  // D1: on-map loot pool (parallel to ents)
     w.bytes(&g.rng.world, sizeof g.rng.world);
     w.bytes(&g.rng.combat, sizeof g.rng.combat);
     w.bytes(&g.rng.loot, sizeof g.rng.loot);
@@ -4566,6 +4765,9 @@ bool game_deserialize(SaveReader& r) {
     pl.spice = r.i32();
     pl.glowglobes = r.i32();
     pl.atk = r.i32();
+    pl.shield = r.i32();        // C2
+    pl.shield_delay = r.i32();  // C2
+    pl.will = r.i32();          // D1
     pl.maker_hooks = r.u8() != 0;
     pl.riding = r.u8() != 0;
     pl.ride_turns = r.i32();
@@ -4605,6 +4807,8 @@ bool game_deserialize(SaveReader& r) {
     const int thopter_dx = r.i32();
     Entity ents[kMaxEnts];
     r.bytes(ents, sizeof ents);
+    static items::Inst loot_inst[kMaxEnts];
+    r.bytes(loot_inst, sizeof loot_inst);  // D1: on-map loot pool
     Pcg32 world, combat, loot;
     r.bytes(&world, sizeof world);
     r.bytes(&combat, sizeof combat);
@@ -4651,6 +4855,7 @@ bool game_deserialize(SaveReader& r) {
     g.thopter_y = int16_t(thopter_y);
     g.thopter_dx = int8_t(thopter_dx);
     std::memcpy(g.ents, ents, sizeof g.ents);
+    std::memcpy(g.loot_inst, loot_inst, sizeof g.loot_inst);
     g.rng.world = world;
     g.rng.combat = combat;
     g.rng.loot = loot;
@@ -4780,6 +4985,73 @@ void game_debug_shield_state(int* shield, int* max_shield, int* hp) {
     if (max_shield) *max_shield = player_max_shield();
     if (hp) *hp = g.pl.hp;
 }
+// D1 harness: clear equipment, then equip a synthetic Dust Knife carrying one affix {kind,value}
+// (a Weapon has no implicit, so affix_total isolates the mod). Lets statmodtest probe each stat.
+void game_debug_equip_affix(int kind, int value) {
+    for (auto& e : g.pl.equip) e = items::Inst{};
+    items::Inst it;
+    it.def = 0;  // Dust Knife (Weapon, no implicit affix)
+    it.rarity = items::R_MAGIC;
+    it.pre[0] = {uint8_t(kind), 1, int16_t(value)};
+    it.nprefix = 1;
+    g.pl.equip[int(items::Slot::Weapon)] = it;
+    g.pl.hp = player_max_hp();
+    g.pl.shield = player_max_shield();
+    g.pl.will = player_max_will();
+}
+void game_debug_derived(int* max_hp, int* leth, int* max_shield, int* max_will,
+                        int* armor, int* dodge, int* crit_mult) {
+    if (max_hp) *max_hp = player_max_hp();
+    if (leth) *leth = player_lethality();
+    if (max_shield) *max_shield = player_max_shield();
+    if (max_will) *max_will = player_max_will();
+    if (armor) *armor = player_armor();
+    if (dodge) *dodge = player_dodge();
+    if (crit_mult) *crit_mult = 200 + affix_total(items::AK_CRIT_MULT);
+}
+// D1 harness: write a legacy DME3 meta.dat, load it, and verify the DME3->DME4 conversion kept the
+// banked items (with ilvl + affixes) and the wallet/ladder. Returns 1 on success.
+int game_debug_meta_migrate_selftest() {
+    {
+        FILE* f = std::fopen("meta.dat", "wb");
+        if (!f) return 0;
+        std::fwrite(&kMetaV3, 4, 1, f);
+        uint32_t runs = 3; std::fwrite(&runs, 4, 1, f);
+        uint8_t endings = 1, sc = 2; std::fwrite(&endings, 1, 1, f); std::fwrite(&sc, 1, 1, f);
+        LegacyInst ls[24]; std::memset(ls, 0xFF, sizeof ls);
+        ls[0] = {17, 0, 0, 2};       // Patched Suit-body, legacy prefix#0 + suffix#0, rare
+        ls[1] = {4, 0xFF, 0xFF, 0};  // Crysknife, common
+        std::fwrite(ls, sizeof ls, 1, f);
+        uint8_t au = 5, ac = 4, hc = 1; std::fwrite(&au, 1, 1, f); std::fwrite(&ac, 1, 1, f); std::fwrite(&hc, 1, 1, f);
+        int32_t bs = 1234; std::fwrite(&bs, 4, 1, f);
+        CharStats st{}; std::fwrite(&st, sizeof st, 1, f);
+        LegacyInst le[int(items::Slot::Count)]; std::memset(le, 0xFF, sizeof le);
+        LegacyInst li[12]; std::memset(li, 0xFF, sizeof li);
+        std::fwrite(le, sizeof le, 1, f); std::fwrite(li, sizeof li, 1, f);
+        std::fclose(f);
+    }
+    g_meta = Meta{};
+    meta_load();
+    return (g_meta.stash_count == 2 && g_meta.banked_spice == 1234 && g_meta.awaken_unlocked == 5 &&
+            !g_meta.stash[0].empty() && g_meta.stash[0].ilvl >= 1 &&
+            (g_meta.stash[0].nprefix + g_meta.stash[0].nsuffix) >= 2 && g_meta.stash[1].rarity == items::R_COMMON)
+               ? 1 : 0;
+}
+// D1 harness: roll an item of `slot` at a forced item level; report rarity, affix count, top tier.
+void game_debug_roll_item(int ilvl, int rarity_bonus, int slot,
+                          int* rarity, int* naffix, int* max_tier) {
+    items::Inst it;
+    for (int i = 0; i < items::kDefCount; ++i)
+        if (int(items::kDefs[i].slot) == slot) { it.def = uint8_t(i); break; }
+    if (it.empty()) it.def = 0;
+    roll_affixes(it, ilvl, rarity_bonus);
+    if (rarity) *rarity = it.rarity;
+    if (naffix) *naffix = it.nprefix + it.nsuffix;
+    int mt = 0;
+    for (int i = 0; i < it.nprefix; ++i) if (it.pre[i].tier > mt) mt = it.pre[i].tier;
+    for (int i = 0; i < it.nsuffix; ++i) if (it.suf[i].tier > mt) mt = it.suf[i].tier;
+    if (max_tier) *max_tier = mt;
+}
 // where: 0 = inventory[idx] (0..11), 1 = equipment[slot] (0..Slot::Count). Fills the item's
 // full display name into `out`; returns 1 if the slot holds an item, 0 if empty/out of range.
 int game_debug_item_name(int where, int idx, char* out, int cap) {
@@ -4877,6 +5149,7 @@ void game_debug_buff() {  // harness only: end fights before the worm arrives
     g.pl.st.awar = 30;
     g.pl.hp = player_max_hp();
     g.pl.shield = player_max_shield();
+    g.pl.will = player_max_will();
 }
 
 bool game_debug_boss_is_baron() {
@@ -4923,6 +5196,7 @@ void game_debug_refill() {
     g.pl.water = player_max_water();
     g.pl.hp = player_max_hp();
     g.pl.shield = player_max_shield();
+    g.pl.will = player_max_will();
     g.pl.exposure = 0;
 }
 
@@ -4937,6 +5211,7 @@ uint64_t game_state_hash() {
     mix(uint64_t(uint32_t(g.pl.exposure)));
     mix(uint64_t(uint32_t(g.pl.turn)));
     mix(uint64_t(uint32_t(g.pl.shield)) | (uint64_t(uint32_t(g.pl.shield_delay)) << 32));  // C2
+    mix(uint64_t(uint32_t(g.pl.will)));  // D1
     mix(uint64_t(uint8_t(g.pl.background)) | (uint64_t(uint32_t(g.pl.atk)) << 8));
     mix(uint64_t(uint16_t(g.pl.st.level)) | (uint64_t(uint32_t(g.pl.st.xp)) << 16) |
         (uint64_t(uint16_t(g.pl.st.cond)) << 48));  // C1: Conditioning (was str)
