@@ -397,6 +397,17 @@ is now a bulwark (higher armor/hp). `shieldtest` retired, **`focustest`** added
 Fedaykin=Conditioning, Saboteur=Versatility, Sayyadina=Awareness; shared Will fuel.
 **Exit:** each corner starts distinct (bruiser / precise-skirmisher / shielded
 spice-caster).
+**Poisons (locked 2026-07-28):** poison/toxin is a **spec axis all three can touch, but
+Sayyadina owns it** — natural proficiency (their "spice/poison mysticism", per the field
+manual). Concretely, when the **combat-poison mechanic** lands (a stacking poison DoT the
+player applies to enemies — the thing D1's inert `AK_POISON` "of Venom" / Poison Damage stat
+scales): Sayyadina gets a **class proficiency bonus** (e.g. flat +poison potency and/or higher
+weight on `of Venom` rolls, and can apply poison innately), while **Saboteur** (already the
+sabotage-toxin user — the `poisons` hold-spoiling consumable) and **Fedaykin** have *access*
+(can equip/use poison gear) but **no proficiency bonus**. Wire the `AK_POISON` scaling + the
+Sayyadina bonus together in that combat-poison pass (D1 left the gear hook ready). NB: today's
+`poisons` consumable is *sabotage* (spoils a spice hold), a separate Saboteur tool — distinct
+from this combat poison.
 
 ### C4 — Passive skill tree (PoE-style) ⬜
 One shared node graph, class start per corner, adjacency-gated allocation, passive
