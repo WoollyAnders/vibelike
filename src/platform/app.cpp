@@ -485,32 +485,46 @@ int run_optest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps
     return pass ? 0 : 1;
 }
 
-// Holtzman shield rule: the quick blade glances, the slow blade penetrates.
-int run_shieldtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+// C2: the Energy Shield (Focus). An Awareness build soaks a hit on the shield (Life
+// untouched), then the shield recharges after a quiet spell. (Replaces the retired
+// Holtzman shieldtest — there is no slow-blade rule anymore.)
+int run_focustest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
     GameServices services{&mixer, &assets, &cmaps};
     game_init(777, services);
 
     InputState in;
-    auto tick_with = [&](Key k) {
-        in.pressed[int(k)] = true;
-        game_update(in);
-        in.end_tick();
-    };
+    auto wait = [&]() { in.pressed[int(Key::Wait)] = true; game_update(in); in.end_tick(); };
 
-    game_debug_warp(1, 30, 30);
-    int hp0 = 0;
-    game_debug_spawn_shield_adjacent(&hp0);
-    if (hp0 <= 0) { std::printf("shieldtest FAIL (no spawn)\n"); return 1; }
+    game_debug_clear_hostiles();  // isolate the shield, not a fight
+    game_debug_buff();            // Awareness 30 -> a real Focus pool; fills shield to max
+    game_debug_refill();
 
-    tick_with(Key::Right);  // quick blade: must glance off
-    const int hp_fast = game_debug_shield_hp();
-    tick_with(Key::Sandwalk);
-    tick_with(Key::Right);  // slow blade: must penetrate
-    const int hp_slow = game_debug_shield_hp();
+    int shield0 = 0, shmax = 0, hp0 = 0;
+    game_debug_shield_state(&shield0, &shmax, &hp0);
+    const bool has_focus = shmax > 0 && shield0 == shmax;   // an Awareness build has a full shield
 
-    std::printf("shield hp: %d -> fast %d -> slow %d\n", hp0, hp_fast, hp_slow);
-    const bool pass = hp_fast == hp0 && (hp_slow < hp_fast || hp_slow == -1);
-    std::printf("shieldtest %s\n", pass ? "PASS" : "FAIL");
+    // a hit smaller than the shield: Life must be untouched, the shield must drop
+    game_debug_hurt(shmax / 2);
+    int shield1 = 0, hp1 = 0;
+    game_debug_shield_state(&shield1, nullptr, &hp1);
+    const bool soaked = hp1 == hp0 && shield1 < shield0 && shield1 >= 0;
+
+    // wait out the delay + recharge: the shield climbs back toward full
+    for (int i = 0; i < 40; ++i) wait();
+    int shield2 = 0, hp2 = 0;
+    game_debug_shield_state(&shield2, nullptr, &hp2);
+    const bool recharged = shield2 > shield1 && hp2 == hp0;
+
+    // a hit bigger than the shield spills into Life
+    game_debug_shield_state(&shield2, nullptr, &hp2);
+    game_debug_hurt(shield2 + 5);
+    int shield3 = 0, hp3 = 0;
+    game_debug_shield_state(&shield3, nullptr, &hp3);
+    const bool spilled = shield3 == 0 && hp3 == hp2 - 5;
+
+    const bool pass = has_focus && soaked && recharged && spilled;
+    std::printf("focustest %s (max %d soak %d->%d recharge ->%d spill hp %d->%d)\n",
+                pass ? "PASS" : "FAIL", shmax, shield0, shield1, shield2, hp2, hp3);
     return pass ? 0 : 1;
 }
 
@@ -751,7 +765,7 @@ int run_rpgtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmap
     };
 
     game_debug_warp(1, 30, 30);
-    tick_with(Key::Sandwalk);  // the slow blade never whiffs on shields
+    tick_with(Key::Sandwalk);  // fight from the sandwalk stance (bulwarks have no slow-blade rule now)
 
     int level = 0, inv = 0, stash = 0;
     for (int kills = 0; kills < 8; ++kills) {
@@ -847,7 +861,7 @@ int run_gauntlettest(audio::Mixer& mixer, const Assets& assets, const Colormaps&
     const bool is_baron = game_debug_boss_is_baron();
 
     game_debug_buff();                          // end the fight before the worm intervenes
-    tick_with(Key::Sandwalk);                   // the slow blade defeats the Baron's shield
+    tick_with(Key::Sandwalk);                   // sandwalk stance (the Baron has no Holtzman shield now)
     int atkx = 0, atky = 0, guard = 0;
     while (game_debug_boss_alive() && guard++ < 800) {
         game_debug_refill();
@@ -930,7 +944,7 @@ int main(int argc, char** argv) {
     if (!audio_load(mixer)) return 1;
 
     bool seamtest = false, slicetest = false, wormtest = false, autodemo = false,
-         optest = false, opdemo = false, uishot = false, shieldtest = false,
+         optest = false, opdemo = false, uishot = false, focustest = false,
          campaigntest = false, dettest = false, ridetest = false, animdebug = false,
          circledemo = false, fightdemo = false, rpgtest = false, clicktest = false,
          reveltest = false, gauntlettest = false, extractiontest = false, metatest = false;
@@ -945,7 +959,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--fightdemo") == 0) { autodemo = true; fightdemo = true; }
         if (SDL_strcmp(argv[i], "--optest") == 0) optest = true;
         if (SDL_strcmp(argv[i], "--uishot") == 0) uishot = true;
-        if (SDL_strcmp(argv[i], "--shieldtest") == 0) shieldtest = true;
+        if (SDL_strcmp(argv[i], "--focustest") == 0) focustest = true;
         if (SDL_strcmp(argv[i], "--campaigntest") == 0) campaigntest = true;
         if (SDL_strcmp(argv[i], "--dettest") == 0) dettest = true;
         if (SDL_strcmp(argv[i], "--ridetest") == 0) ridetest = true;
@@ -978,7 +992,7 @@ int main(int argc, char** argv) {
     if (slicetest) return run_slicetest(mixer, assets, cmaps);
     if (wormtest) return run_wormtest(mixer, assets, cmaps);
     if (optest) return run_optest(mixer, assets, cmaps);
-    if (shieldtest) return run_shieldtest(mixer, assets, cmaps);
+    if (focustest) return run_focustest(mixer, assets, cmaps);
     if (campaigntest) return run_campaigntest(mixer, assets, cmaps);
     if (dettest) return run_dettest(mixer, assets, cmaps);
     if (ridetest) return run_ridetest(mixer, assets, cmaps);

@@ -1,6 +1,6 @@
 // Godot-spike step 0: prove the DUSTFALL sim runs deterministically as a plain, SDL-free
 // C++ library (no platform/app.cpp, no SDL). Replicates run_dettest's sequence and prints the
-// hash; it must equal the SDL build's baseline b583a955958b6341. If it does, the sim ports to a
+// hash; it must equal the SDL build's baseline d9a06b6d27ca7e33. If it does, the sim ports to a
 // GDExtension cleanly (this harness IS the GDExtension's core, minus godot-cpp).
 #include <cstdio>
 #include <string>
@@ -49,7 +49,7 @@ int main(int argc, char** argv) {
         hashes[run] = game_state_hash();
     }
     const bool det = hashes[0] == hashes[1];
-    std::printf("sim_dettest %s  hash=%016llx  (baseline b583a955958b6341)\n",
+    std::printf("sim_dettest %s  hash=%016llx  (baseline d9a06b6d27ca7e33)\n",
                 det ? "DETERMINISTIC" : "NONDETERMINISTIC", (unsigned long long)hashes[0]);
     return det ? 0 : 1;
 }
