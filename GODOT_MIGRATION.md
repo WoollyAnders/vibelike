@@ -37,11 +37,13 @@ hostiles/use_door/warp_node`), a Godot project blitting the framebuffer, a headl
   all `Key`s **and the mouse** (`mouse_x/y`, `mouse_pressed/down[]`) which the click-to-move / click
   interactions and the Revelation overlay already read. `main.gd` maps Godot input → the sim's
   `InputState` each `_process`.
-- **Port the 13 headless tests** to run through the extension (`godot --headless --script tests/*.gd`,
-  or one driver script): `dettest`/`clicktest` assert the SAME hashes; `seamtest/wormtest/optest/
-  slicetest/rpgtest/campaigntest/ridetest/reveltest/gauntlettest/extractiontest/metatest` assert their
-  outcomes via the debug hooks (expose the remaining `game_debug_*` through the binding). This carries
-  the determinism discipline into Godot. A `godot/run_tests.sh` runs them in WSL headless.
+- **Test discipline during the migration (done ✅):** the **SDL build stays the full 13-test harness**
+  (it compiles the *identical* sim; untouched on `main`) — so coverage never lapses through G1–G2. The
+  Godot side gets a **boundary gate** (`godot/run_tests.sh`): `determinism.gd` (asserts the exact
+  `dettest` hash through the extension), `play_check.gd` (keyboard + mouse click-to-move advance the
+  game), `smoke.gd` (escort spawns in a field node + the Baron in the pinnacle node — combat content
+  through the binding). Full per-subsystem harnesses are ported to a **native test runner** (generalize
+  the `sim_dettest` pattern — links the sim, no Godot needed) at **G3**, when SDL is retired.
 - World still renders via the **framebuffer blit**; the game is fully playable in Godot 4.7.
 - **Exit:** the game runs in Godot (blit) with real keyboard+mouse input; all 13 tests pass headless
   through the extension; `dettest` == baseline. SDL is no longer needed to *play* (kept only as the
