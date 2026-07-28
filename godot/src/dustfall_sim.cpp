@@ -13,6 +13,7 @@ void DustfallSim::_bind_methods() {
     ClassDB::bind_method(D_METHOD("load_data", "data_dir"), &DustfallSim::load_data);
     ClassDB::bind_method(D_METHOD("init_run", "seed"), &DustfallSim::init_run);
     ClassDB::bind_method(D_METHOD("tick_key", "key", "count"), &DustfallSim::tick_key);
+    ClassDB::bind_method(D_METHOD("tick", "down_keys"), &DustfallSim::tick);
     ClassDB::bind_method(D_METHOD("state_hash"), &DustfallSim::state_hash);
     ClassDB::bind_method(D_METHOD("state_hash_hex"), &DustfallSim::state_hash_hex);
     ClassDB::bind_method(D_METHOD("frame_rgba"), &DustfallSim::frame_rgba);
@@ -46,6 +47,20 @@ void DustfallSim::tick_key(int key, int count) {
         game_update(in_);
         in_.end_tick();
     }
+}
+
+void DustfallSim::tick(const PackedInt32Array& down_keys) {
+    bool now[int(::Key::Count)] = {};
+    for (int i = 0; i < down_keys.size(); ++i) {
+        const int k = down_keys[i];
+        if (k >= 0 && k < int(::Key::Count)) now[k] = true;
+    }
+    for (int k = 0; k < int(::Key::Count); ++k) {
+        in_.pressed[k] = now[k] && !in_.down[k];  // edge = down now, up last frame
+        in_.down[k] = now[k];
+    }
+    game_update(in_);   // advances a turn only on an action key; always runs the per-frame visual tick
+    in_.end_tick();     // advances held_ticks (drives key-repeat movement), clears pressed
 }
 
 int64_t DustfallSim::state_hash() const { return int64_t(game_state_hash()); }

@@ -85,11 +85,15 @@ Art now targets Godot resources (`SpriteFrames`/`AnimatedSprite2D`, `TileSet`). 
 3. **Import** the frames as Godot `SpriteFrames` (`AnimatedSprite2D`) or a sheet + `AnimationPlayer`.
 This replaces `animsynth.py`'s procedural walk-derivation with AI-authored animation, and is *far*
 easier than hand-authoring frames.
-> **Honesty note:** I don't have God Mode AI's API from training, so wiring it needs its endpoint +
-> docs + an API key (like the OpenAI key genart uses). Plan: a `tools/godmode_animate.py` stage
-> (input still PNG → output frame sequence) invoked after genart; until the API is provided, keep
-> `animsynth.py` as the fallback so the pipeline still runs. Confirm licensing/terms for shipping
-> AI-animated assets.
+> **Integration (user-provided):** God Mode AI ships an **MCP server** + a client config the user can
+> add, and an **agent skill** documenting the flow — pick a valid *action* + *camera view*, upload the
+> image, run the *async* generation, poll for the result. It works standalone against the **REST API**
+> or via the **MCP server**. So the DUSTFALL side is: `genart.py` OpenAI still → invoke God Mode AI
+> (MCP tool, or a `tools/godmode_animate.py` REST client following the skill) → frame sequence →
+> import as Godot `SpriteFrames`. When the MCP config + skill are added they surface here (MCP tools
+> load on demand via ToolSearch; the skill via the Skill tool) — I'll follow the skill to self-teach
+> the action/camera/upload/async flow. `animsynth.py` stays as the offline fallback. Confirm the
+> licensing/terms for shipping AI-animated assets.
 - **Exit:** named bosses, Paul + the growing hub cast, and per-biome tiles authored via
   OpenAI → God Mode AI → Godot animation resources; no missing-asset fallbacks.
 
