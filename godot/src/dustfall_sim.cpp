@@ -1,6 +1,7 @@
 #include "dustfall_sim.h"
 
 #include <cstdio>
+#include <string>
 
 #include <godot_cpp/core/class_db.hpp>
 
@@ -24,12 +25,12 @@ void DustfallSim::_bind_methods() {
 }
 
 bool DustfallSim::load_data(const String& data_dir) {
-    const CharString d = data_dir.utf8();
-    const String pal = data_dir + "/palette.pal";
-    if (!palette_load(pal.utf8().get_data(), master_)) master_ = palette_make_default();
+    const std::string base = data_dir.utf8().get_data();  // godot String -> C string
+    const std::string pal = base + "/palette.pal";
+    if (!palette_load(pal.c_str(), master_)) master_ = palette_make_default();
     colormaps_build(master_, cmaps_);
-    loaded_ = assets_.load_all(d.get_data());
-    anims_.load(d.get_data(), assets_);
+    loaded_ = assets_.load_all(base.c_str());
+    anims_.load(base.c_str(), assets_);
     return loaded_;
 }
 
@@ -41,7 +42,7 @@ void DustfallSim::init_run(int64_t seed) {
 
 void DustfallSim::tick_key(int key, int count) {
     for (int i = 0; i < count; ++i) {
-        if (key >= 0 && key < int(Key::Count)) in_.pressed[key] = true;
+        if (key >= 0 && key < int(::Key::Count)) in_.pressed[key] = true;  // ::Key (ours) vs godot::Key
         game_update(in_);
         in_.end_tick();
     }
