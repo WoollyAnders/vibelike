@@ -4743,6 +4743,26 @@ void game_debug_awaken(int* unlocked, int* cleared, int* banked_spice) {  // B5:
 }
 void game_debug_set_awaken_choice(int lvl) { g.awaken_choice = lvl; }  // B5: pick the launch level
 int game_debug_char_level() { return g.pl.st.level; }
+
+// G2: read-only UI query surface for native Godot HUD/inventory (determinism-safe).
+void game_debug_player_stats(int* hp, int* max_hp, int* water, int* max_water, int* level, int* spice) {
+    if (hp) *hp = g.pl.hp;
+    if (max_hp) *max_hp = player_max_hp();
+    if (water) *water = g.pl.water;
+    if (max_water) *max_water = player_max_water();
+    if (level) *level = g.pl.st.level;
+    if (spice) *spice = g.pl.spice;
+}
+// where: 0 = inventory[idx] (0..11), 1 = equipment[slot] (0..Slot::Count). Fills the item's
+// full display name into `out`; returns 1 if the slot holds an item, 0 if empty/out of range.
+int game_debug_item_name(int where, int idx, char* out, int cap) {
+    const items::Inst* it = nullptr;
+    if (where == 0 && idx >= 0 && idx < 12) it = &g.pl.inv[idx];
+    else if (where == 1 && idx >= 0 && idx < int(items::Slot::Count)) it = &g.pl.equip[idx];
+    if (!it) { if (cap > 0) out[0] = 0; return 0; }
+    it->full_name(out, cap);
+    return it->empty() ? 0 : 1;
+}
 int game_debug_hostile_count() {
     int n = 0;
     for (const Entity& e : g.ents)

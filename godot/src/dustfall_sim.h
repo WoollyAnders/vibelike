@@ -3,8 +3,10 @@
 // Godot drives it (init/tick/queries) and presents its software framebuffer as a texture; the
 // determinism-proven C++ logic is unchanged.
 #include <godot_cpp/classes/node.hpp>
+#include <godot_cpp/variant/dictionary.hpp>
 #include <godot_cpp/variant/packed_byte_array.hpp>
 #include <godot_cpp/variant/packed_int32_array.hpp>
+#include <godot_cpp/variant/packed_string_array.hpp>
 #include <godot_cpp/variant/string.hpp>
 
 #include "engine/animator.h"
@@ -44,6 +46,9 @@ public:
     int fb_height() const { return fb::H; }
     int cur_node() const;
     int hostiles() const;
+    godot::Dictionary player_stats() const;          // G2: {hp,max_hp,water,max_water,level,spice}
+    godot::PackedStringArray inventory() const;      // G2: 12 pack slots ("-" if empty)
+    godot::PackedStringArray equipment() const;      // G2: the 10 Fremen paperdoll slots
     void use_door();                                 // headless door/ritual trigger
     void warp_node(int idx);                         // jump to a graph node
 };

@@ -81,3 +81,5 @@ int game_debug_hostile_count();  // B3: hostiles in the resident zone
 void game_debug_awaken(int* unlocked, int* cleared, int* banked_spice);  // B5: Awaken ladder + wallet
 void game_debug_set_awaken_choice(int lvl);  // B5: choose the launch Awaken level
 int game_debug_char_level();  // B5: persistent character level
+void game_debug_player_stats(int* hp, int* max_hp, int* water, int* max_water, int* level, int* spice);  // G2
+int game_debug_item_name(int where, int idx, char* out, int cap);  // G2: where 0=inv 1=equip

@@ -22,6 +22,9 @@ void DustfallSim::_bind_methods() {
     ClassDB::bind_method(D_METHOD("fb_height"), &DustfallSim::fb_height);
     ClassDB::bind_method(D_METHOD("cur_node"), &DustfallSim::cur_node);
     ClassDB::bind_method(D_METHOD("hostiles"), &DustfallSim::hostiles);
+    ClassDB::bind_method(D_METHOD("player_stats"), &DustfallSim::player_stats);
+    ClassDB::bind_method(D_METHOD("inventory"), &DustfallSim::inventory);
+    ClassDB::bind_method(D_METHOD("equipment"), &DustfallSim::equipment);
     ClassDB::bind_method(D_METHOD("use_door"), &DustfallSim::use_door);
     ClassDB::bind_method(D_METHOD("warp_node", "idx"), &DustfallSim::warp_node);
 }
@@ -97,5 +100,25 @@ PackedByteArray DustfallSim::frame_rgba() {
 
 int DustfallSim::cur_node() const { return game_debug_cur_node(); }
 int DustfallSim::hostiles() const { return game_debug_hostile_count(); }
+
+Dictionary DustfallSim::player_stats() const {
+    int hp = 0, mh = 0, w = 0, mw = 0, lv = 0, sp = 0;
+    game_debug_player_stats(&hp, &mh, &w, &mw, &lv, &sp);
+    Dictionary d;
+    d["hp"] = hp; d["max_hp"] = mh; d["water"] = w; d["max_water"] = mw;
+    d["level"] = lv; d["spice"] = sp;
+    return d;
+}
+static PackedStringArray names_of(int where, int n) {
+    PackedStringArray out;
+    char buf[64];
+    for (int i = 0; i < n; ++i) {
+        game_debug_item_name(where, i, buf, sizeof buf);
+        out.push_back(String(buf));
+    }
+    return out;
+}
+PackedStringArray DustfallSim::inventory() const { return names_of(0, 12); }
+PackedStringArray DustfallSim::equipment() const { return names_of(1, 10); }  // items::Slot::Count
 void DustfallSim::use_door() { game_debug_use_door(); }
 void DustfallSim::warp_node(int idx) { game_debug_warp_to_node(idx); }
