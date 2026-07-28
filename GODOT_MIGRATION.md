@@ -49,7 +49,15 @@ hostiles/use_door/warp_node`), a Godot project blitting the framebuffer, a headl
   through the extension; `dettest` == baseline. SDL is no longer needed to *play* (kept only as the
   fallback build until G3).
 
-## G2 — Native Godot UI (the payoff)
+> **STATUS (2026-07-28): G2 native-UI build is SHELVED until a dedicated UI-rework phase.** The
+> *foundation* is done and stands: G1 (Godot plays kbd+mouse, deterministic, gated) + G2.1 (the
+> query surface) + a G2.2 text-only proof that native `Control` UI reads live sim state (press I).
+> The user wants the actual UI (icons, paperdoll silhouette, drag-drop, HUD, passive tree, crafting)
+> done *cohesively with visuals* in one focused pass, not piecemeal/blind. **Until then, work shifts
+> to sim-side content** (`ROADMAP_OVERHAUL.md` B6→ / C / D) — engine-agnostic, headless-verifiable,
+> shared by both the SDL and Godot builds; each system gets its native screen during the UI rework.
+
+## G2 — Native Godot UI (the payoff)  *(deferred — see STATUS above)*
 Replace the framebuffer-drawn overlays with native `Control` scenes that read sim state (queries) and
 issue commands (the sim stays the model). Order by value:
 - **HUD** (life/water orbs, wormsign, thermometer, log) → `Control` + `TextureProgressBar`.
