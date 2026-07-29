@@ -32,6 +32,13 @@ inline constexpr int kStunChanceNum    = 2;    // chance% = (ratioPct - threshol
 inline constexpr int kStunMinTicks = secs_to_ticks(0.2);  // 1 tick
 inline constexpr int kStunMaxTicks = secs_to_ticks(1.5);  // 10 ticks
 
+// C3 (defensive half): deep runs make enemy hits ELEMENTAL — a chance (scaling with Awaken depth)
+// to inflict a random element's ailment on the player, each mitigated by the matching gear
+// resistance. Gated so shallow runs (depth < kElemEnemyMinAwaken) never roll — early/headless play
+// stays plain physical and deterministic. So every deep build must cap its resistances.
+inline constexpr int kElemEnemyMinAwaken = 3;      // elemental enemy hits begin at Awaken 3
+inline constexpr int kElemEnemyChancePerDepth = 6; // +6% chance per Awaken level above the threshold
+
 // --- player ---
 inline constexpr int kPlayerHpMax = 20;
 inline constexpr int kPlayerAtk = 3;

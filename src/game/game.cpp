@@ -1618,6 +1618,7 @@ void freeze_entity(Entity& e, int turns) { if (turns > e.frozen_turns) e.frozen_
 void blind_player(int turns) { if (turns > g.pl.ail_blind_turns) g.pl.ail_blind_turns = turns; }
 void stun_entity(Entity& e, int turns) { if (turns > e.stun_turns) e.stun_turns = int16_t(turns); }
 void stun_player(int turns) { if (turns > g.pl.ail_stun_turns) g.pl.ail_stun_turns = turns; }
+void freeze_player(int turns) { if (turns > g.pl.ail_frozen_turns) g.pl.ail_frozen_turns = turns; }
 
 // RT2: Freeze duration (world-tick count) scaled by a cold hit vs the target's eff-max-Life,
 // clamped to [0.3, 3.0] s. Below the 0.3 s floor -> 0 (no freeze). Pure integer math (firewall).
@@ -1671,11 +1672,51 @@ int roll_stun_ticks(int hit_dmg, int max_life, int mult_pct, int reduce_pct) {
 // RT2: an enemy melee/ranged hit on the player — applies damage, then rolls Stun (hit vs player
 // eff-max-Life, lowered by the player's Stun Reduction). Environment/DoT damage does NOT route
 // through here, so only real hits can stun. Two-way with the player-stuns-foe path in try_move.
+void roll_enemy_element_on_player(int dmg);  // fwd (defined just below)
 void foe_hit_player(int dmg, const char* cause, DmgType type = DT_PHYS) {
     damage_player(dmg, cause, type);
     if (g.pl.dead || dmg <= 0) return;
     if (int st = roll_stun_ticks(dmg, player_max_hp(), 0, affix_total(items::AK_STUN_REDUCE)); st > 0)
         stun_player(st);
+    roll_enemy_element_on_player(dmg);  // C3: deep-run hits can also inflict an elemental ailment
+}
+
+// C3 (defensive half of the two-way ailment system): the chance a deep-run enemy hit turns
+// elemental. Deterministic (depth in), 0 below the Awaken gate — so shallow/headless hits never
+// draw the RNG and stay baseline.
+int enemy_element_chance(int depth) {
+    if (depth < tune::kElemEnemyMinAwaken) return 0;
+    int c = (depth - tune::kElemEnemyMinAwaken + 1) * tune::kElemEnemyChancePerDepth;
+    return c > 100 ? 100 : c;
+}
+// Apply one element's ailment to the player. Deterministic. DoTs (Scorch/Poison) route their tick
+// damage through damage_player, which already applies the matching resist; the effect ailments
+// (Blind/Freeze) have the matching resist reduce their DURATION here.
+void inflict_element_on_player(int elem, int mag) {
+    auto res = [](uint8_t k) { int r = affix_total(k); return r < 0 ? 0 : r > 75 ? 75 : r; };
+    switch (elem) {
+        case 0: scorch_player(mag, tune::secs_to_ticks(2.0)); break;                     // Heat  -> Heat Resist
+        case 3: poison_player(mag, tune::secs_to_ticks(2.5)); break;                     // Toxin -> Toxin Resist
+        case 2: {  // Storm -> Blind, duration cut by Storm Resist
+            int t = tune::secs_to_ticks(1.5) * (100 - res(items::AK_RES_STORM)) / 100;
+            if (t > 0) blind_player(t);
+            break;
+        }
+        case 1: {  // Cold -> Freeze, scaled vs player Life, duration cut by Cold Resist
+            int t = freeze_ticks_for(mag * 2, player_max_hp()) * (100 - res(items::AK_RES_COLD)) / 100;
+            if (t > 0) freeze_player(t);
+            break;
+        }
+        default: break;
+    }
+}
+// A deep-run enemy hit rolls (combat RNG, only above the Awaken gate) to inflict a random element.
+void roll_enemy_element_on_player(int dmg) {
+    if (g.pl.dead || dmg <= 0) return;
+    const int chance = enemy_element_chance(drop_ilvl());
+    if (chance <= 0 || int(g.rng.combat.below(100)) >= chance) return;
+    const int elem = int(g.rng.combat.below(4));   // 0 Heat / 1 Cold / 2 Storm / 3 Toxin
+    inflict_element_on_player(elem, 1 + dmg / 3 + drop_ilvl() / 2);
 }
 
 // C3: the player's ascendancy stamps its signature ailment on a landed melee hit — the OFFENSE
@@ -5339,6 +5380,10 @@ void game_debug_class(int* base, int* asc) {
 }
 void game_debug_unlock_awaken(int lvl) { g_meta.awaken_unlocked = uint8_t(lvl); }  // gate the rite
 int game_debug_ascend(int asc) { return ascend(Ascendancy(asc)) ? 1 : 0; }
+// C3 enemy-element (defensive half) hooks.
+int game_debug_enemy_element_chance(int depth) { return enemy_element_chance(depth); }
+void game_debug_inflict_element(int elem, int mag) { inflict_element_on_player(elem, mag); }
+int game_debug_player_frozen_turns() { return g.pl.ail_frozen_turns; }
 void game_debug_meta_reload_class(int* base, int* asc) {  // prove the DME5 write->read round-trip
     g_meta = Meta{};
     meta_load();

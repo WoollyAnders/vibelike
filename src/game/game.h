@@ -109,5 +109,8 @@ void game_debug_apply_base(int bc);      // C3: set the base class (classtest)
 void game_debug_class(int* base, int* asc);           // C3: read live base class + ascendancy
 void game_debug_unlock_awaken(int lvl);  // C3: set meta awaken_unlocked (gate the rite)
 int game_debug_ascend(int asc);          // C3: ascend into ascendancy `asc` (1 = success)
+int game_debug_enemy_element_chance(int depth);   // C3: elemental enemy-hit chance% at an Awaken depth
+void game_debug_inflict_element(int elem, int mag);  // C3: inflict element (0 Heat/1 Cold/2 Storm/3 Toxin)
+int game_debug_player_frozen_turns();     // C3: player's remaining Freeze ticks
 void game_debug_meta_reload_class(int* base, int* asc);  // C3: reload meta.dat + report persisted class
 int game_debug_item_name(int where, int idx, char* out, int cap);  // G2: where 0=inv 1=equip

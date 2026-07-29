@@ -728,12 +728,30 @@ int run_ailmenttest(audio::Mixer& mixer, const Assets& assets, const Colormaps& 
     const int fz1 = game_debug_enemy_frozen_turns();
     const bool freeze_works = fz0 == 3 && fz1 == 2;  // the frozen enemy skipped its turn (counter ticked)
 
+    // (G) C3 enemy-element roll (defensive half): elemental enemy hits are GATED by Awaken depth,
+    // and a rolled element inflicts its ailment on the player, mitigated by the matching resist.
+    const bool elem_gate = game_debug_enemy_element_chance(1) == 0 &&
+                           game_debug_enemy_element_chance(2) == 0 &&   // below the Awaken-3 gate
+                           game_debug_enemy_element_chance(3) > 0 &&
+                           game_debug_enemy_element_chance(10) > game_debug_enemy_element_chance(3);
+    game_init(780, services);
+    game_debug_clear_hostiles();
+    game_debug_equip_affix(int(items::AK_HP), 0);  // clean, no Cold Resist
+    game_debug_inflict_element(1 /*Cold*/, 10);
+    const int fz_noR = game_debug_player_frozen_turns();
+    game_init(780, services);
+    game_debug_clear_hostiles();
+    game_debug_equip_affix(int(items::AK_RES_COLD), 75);  // 75% Cold Resist shortens the Freeze
+    game_debug_inflict_element(1 /*Cold*/, 10);
+    const int fz_R = game_debug_player_frozen_turns();
+    const bool elem_route = fz_noR > 0 && fz_R > 0 && fz_R < fz_noR;
+
     const bool pass = inflicted && enemy_dot && resisted && scorch_resisted &&
-                      bleed_bypasses_shield && blind_works && freeze_works;
+                      bleed_bypasses_shield && blind_works && freeze_works && elem_gate && elem_route;
     std::printf("ailmenttest %s (poison %d/%d scorch %d/%d bleed[hp %d->%d sh %d->%d] "
-                "blind tohit %d->%d freeze %d->%d)\n",
+                "blind tohit %d->%d freeze %d->%d elem gate%d route[%d>%d])\n",
                 pass ? "PASS" : "FAIL", lost_noR, lost_R, sc_lost_noR, sc_lost_R,
-                bhp, bhp2, bsh, bsh2, th0, th1, fz0, fz1);
+                bhp, bhp2, bsh, bsh2, th0, th1, fz0, fz1, elem_gate, fz_noR, fz_R);
     (void)hp_a; (void)inflicted; (void)enemy_dot;
     return pass ? 0 : 1;
 }

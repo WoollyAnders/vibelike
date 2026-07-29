@@ -411,8 +411,13 @@ ReverendMother→Freeze(scaled), Fedaykin→innate Block; Saboteur/Wayfinder/Spi
 traps/ranged/abilities (C6/C7). New `classtest`; full 21-test suite green; dettest rebaselined
 `f445f960b04db58d`. **Deferred:** the ascendancy *talent tree* (its own system, nodes "as we go")
 and the in-game sietch-rite *UI trigger* (UI phase) — ascension is mechanic+debug-hook for now.
-**Still open (enemy side):** the enemy-element roll that inflicts ailments on the player so gear
-resistances matter defensively (Stun is already two-way; elemental enemy sources are next).
+**Enemy-element roll DONE** (the defensive half): deep-run enemy hits (Awaken >= `kElemEnemyMinAwaken`
+3, +`kElemEnemyChancePerDepth` 6%/level) roll a random element and inflict its ailment on the
+player — Heat→Scorch, Toxin→Poison (DoTs resisted in `damage_player`), Storm→Blind, Cold→Freeze
+(effect durations cut by the matching resist). Gated so shallow/headless runs stay baseline
+(dettest/clicktest unchanged). `ailmenttest` part G proves the gate + routing + resist. The
+two-way ailment system is now complete: ascendancies inflict on foes, enemies inflict on you, gear
+resistances defend. (Per-hit random element; a per-enemy affinity could refine it later.)
 
 **Groundwork IMPLEMENTED (2026-07-29, on main):** (1) **combat-ailment system — the DoT family
 (Poison / Scorch / Bleed) is done.** Per-entity + per-player timers; ticked each world turn via
