@@ -45,6 +45,8 @@ struct Entity {
     int16_t vpx = 0, vpy = 0;   // visual world-pixel position (glides)
     anim::Animator anim;
     uint8_t hurt_flash = 0;     // G3: bright flinch frames remaining
+    int16_t poison_dmg = 0;     // C3: combat-poison ailment — damage per world turn
+    int16_t poison_turns = 0;   // C3: remaining poison ticks
 };
 
 // Sietch furniture/decor: static props placed in the hub chambers. Regenerated
@@ -148,6 +150,8 @@ struct Player {
     int shield = 0;        // C2: current energy shield (Focus) — soaks damage before Life
     int shield_delay = 0;  // C2: turns until the shield recharges (reset on taking a hit)
     int will = 0;          // D1: current Will (ability fuel); regens + siphons now, spent in C7
+    int ail_poison_dmg = 0;    // C3: combat-poison on the player — damage/turn (DT_TOX, resisted)
+    int ail_poison_turns = 0;  // C3: remaining poison ticks on the player
     int glowglobes = 2;
     int atk = tune::kPlayerAtk;
     bool maker_hooks = false;  // Honored: the right to ride
@@ -168,7 +172,7 @@ void apply_background(Player& pl, Background bg) {
     pl.background = bg;
     switch (bg) {
         case Background::Fedaykin:
-            pl.st.cond += 4;
+            // C3: classes start with 0 additional attributes — no starting stat bonus.
             break;
         case Background::Saboteur:
             pl.charges = 3;
@@ -338,7 +342,7 @@ inline bool boss_is_pinnacle(int16_t data2) { return data2 <= kPinnacleTag && da
 inline int boss_pinnacle_idx(int16_t data2) { return int(kPinnacleTag - data2); }
 
 // X2: Diablo-style enemy statlines.
-struct Foe { uint8_t level, tohit, dmin, dmax, ac_dodge; uint16_t xp; };
+struct Foe { uint8_t level, tohit, dmin, dmax, ac_dodge; uint16_t xp; uint16_t hp; };
 Foe boss_foe(const Entity& e) {
     const int tier = e.data & 0xFF;
     const uint8_t traits = uint8_t(e.data >> 8);
@@ -353,12 +357,13 @@ Foe boss_foe(const Entity& e) {
 }
 
 const Foe* foe_stats(EType t) {
-    static constexpr Foe kHound{1, 60, 1, 3, 8, 12};
-    static constexpr Foe kAdder{2, 72, 1, 2, 4, 15};
-    static constexpr Foe kHermit{3, 55, 2, 5, 6, 28};
-    static constexpr Foe kTrooper{3, 62, 2, 5, 8, 35};
-    static constexpr Foe kShield{5, 68, 4, 9, 14, 80};  // C2: a heavy-armor BULWARK (hard to hit), not a Holtzman shield
-    static constexpr Foe kSeeker{4, 88, 4, 4, 22, 40};
+    //                    level tohit dmin dmax ac_dodge  xp   hp   (hp = base Life at Awaken 1)
+    static constexpr Foe kHound{1, 60, 1, 3, 8, 12, 14};
+    static constexpr Foe kAdder{2, 72, 1, 2, 4, 15, 10};
+    static constexpr Foe kHermit{3, 55, 2, 5, 6, 28, 20};
+    static constexpr Foe kTrooper{3, 62, 2, 5, 8, 35, 24};
+    static constexpr Foe kShield{5, 68, 4, 9, 14, 80, 48};  // heavy-armor BULWARK (tanky)
+    static constexpr Foe kSeeker{4, 88, 4, 4, 22, 40, 12};
     switch (t) {
         case EType::Hound: return &kHound;
         case EType::PanAdder: return &kAdder;
@@ -368,6 +373,17 @@ const Foe* foe_stats(EType t) {
         case EType::HunterSeeker: return &kSeeker;
         default: return nullptr;
     }
+}
+
+// C3: a foe's spawn Life, scaled by the run's Awaken depth (deeper = tankier). Replaces the
+// ad-hoc per-site hp literals so mobs have real, scaling HP (players' Life scales via player_max_hp).
+int foe_hp(EType t) {
+    const Foe* f = foe_stats(t);
+    if (!f) return 1;
+    int awk = 1;
+    if (g.cur_node >= 0 && g.cur_node < world::kMaxNodes) awk = g.graph.nodes[g.cur_node].awaken;
+    if (awk < 1) awk = 1;
+    return f->hp + f->hp * (awk - 1) / 4;  // +25% of base per Awaken level of depth
 }
 
 Entity& player_ent() { return g.ents[0]; }
@@ -387,8 +403,8 @@ int with_inc(int base, uint8_t inc_kind) { return base * (100 + affix_total(inc_
 
 // C1/D1 derived stats. Conditioning -> Life+Lethality; Versatility -> Precision+Flow;
 // Awareness -> Focus+Will. Each = flat (attr + AK_* adds), then ×(increased %).
-int player_max_hp() {  // Life
-    const int base = 10 + eff_cond() * 2 + (g.pl.st.level - 1) * 3 + affix_total(items::AK_HP);
+int player_max_hp() {  // Life — flat per-level (class-agnostic) + Conditioning + gear
+    const int base = 10 + eff_cond() * 2 + (g.pl.st.level - 1) * tune::kLifePerLevel + affix_total(items::AK_HP);
     return with_inc(base, items::AK_INC_LIFE);
 }
 int player_lethality() {  // melee damage bonus
@@ -398,8 +414,8 @@ int player_max_shield() {  // Focus: only Awareness INVESTED above baseline (+ge
     const int focus = eff_awar() > 12 ? (eff_awar() - 12) * 3 : 0;  // unspecced == 0 (no behavior change)
     return with_inc(focus + affix_total(items::AK_SHIELD), items::AK_INC_FOCUS);
 }
-int player_max_will() {  // Will pool (spent by abilities in C7; live/regen/siphon in D1)
-    return 10 + eff_awar() * 2 + affix_total(items::AK_WILL);
+int player_max_will() {  // Will — flat per-level (class-agnostic) + Awareness + gear
+    return 10 + eff_awar() * 2 + (g.pl.st.level - 1) * tune::kWillPerLevel + affix_total(items::AK_WILL);
 }
 int player_max_water() { return tune::kWaterMax + affix_total(items::AK_WATER); }
 int player_armor() {
@@ -567,7 +583,7 @@ void spawn_zone_wildlife(map::Zone& z, uint8_t zone_id) {
         Entity* e = alloc_entity();
         if (!e) break;
         *e = Entity{EType::Hound, Ai::Wander, zone_id,
-                    int16_t(x), int16_t(y), tune::kHoundHp, 0, 0};
+                    int16_t(x), int16_t(y), int16_t(foe_hp(EType::Hound)), 0, 0};
         ++placed;
     }
     // ambush adders (wormier zones have more) and the odd spice-mad hermit
@@ -577,7 +593,7 @@ void spawn_zone_wildlife(map::Zone& z, uint8_t zone_id) {
         const int y = g.rng.world.range(2, map::H - 2);
         if (!z.walkable(x, y) || entity_at(x, y, zone_id)) continue;
         if (Entity* e = alloc_entity()) {
-            *e = Entity{EType::PanAdder, Ai::Idle, zone_id, int16_t(x), int16_t(y), 3, 0, 0};
+            *e = Entity{EType::PanAdder, Ai::Idle, zone_id, int16_t(x), int16_t(y), int16_t(foe_hp(EType::PanAdder)), 0, 0};
             ++i;
         }
     }
@@ -588,7 +604,7 @@ void spawn_zone_wildlife(map::Zone& z, uint8_t zone_id) {
             if (!z.walkable(x, y) || entity_at(x, y, zone_id)) continue;
             if (Entity* e = alloc_entity())
                 *e = Entity{EType::Hermit, Ai::Wander, zone_id, int16_t(x), int16_t(y),
-                            8, 0, int16_t(g.rng.world.range(5, 8))};
+                            int16_t(foe_hp(EType::Hermit)), 0, int16_t(g.rng.world.range(5, 8))};
             break;
         }
 }
@@ -661,7 +677,8 @@ void spawn_op_in(map::Zone& z, uint8_t zone_id, uint8_t mutators) {
         if (Entity* e = alloc_entity()) {
             const bool bulwark = i >= troopers;
             *e = Entity{bulwark ? EType::ShieldTrooper : EType::Trooper, Ai::Guard,
-                        zone_id, int16_t(x), int16_t(y), int16_t(bulwark ? 16 : 8), 0, 0};
+                        zone_id, int16_t(x), int16_t(y),
+                        int16_t(foe_hp(bulwark ? EType::ShieldTrooper : EType::Trooper)), 0, 0};
             ++i;
         }
     }
@@ -1504,6 +1521,26 @@ void reflect_thorns(Entity* attacker) {
 void gain_hp(int amt) { if (amt <= 0) return; const int m = player_max_hp(); if ((g.pl.hp += amt) > m) g.pl.hp = m; }
 void gain_shield(int amt) { if (amt <= 0) return; const int m = player_max_shield(); if ((g.pl.shield += amt) > m) g.pl.shield = m; }
 void gain_will(int amt) { if (amt <= 0) return; const int m = player_max_will(); if ((g.pl.will += amt) > m) g.pl.will = m; }
+// C3 combat-poison ailment: refresh to the stronger tick + the longer duration (stacks don't add).
+void poison_entity(Entity& e, int dmg_per_turn, int turns) {
+    if (dmg_per_turn > e.poison_dmg) e.poison_dmg = int16_t(dmg_per_turn);
+    if (turns > e.poison_turns) e.poison_turns = int16_t(turns);
+}
+void poison_player(int dmg_per_turn, int turns) {
+    if (dmg_per_turn > g.pl.ail_poison_dmg) g.pl.ail_poison_dmg = dmg_per_turn;
+    if (turns > g.pl.ail_poison_turns) g.pl.ail_poison_turns = turns;
+}
+// C3: poisoned enemies bleed hp each world turn; a poison kill leaves a corpse (water, no loot/xp).
+void tick_enemy_poison() {
+    for (int i = 1; i < kMaxEnts; ++i) {
+        Entity& e = g.ents[i];
+        if (e.poison_turns <= 0 || e.hp <= 0) continue;
+        --e.poison_turns;
+        e.hp = int16_t(e.hp - e.poison_dmg);
+        if (e.hp <= 0)
+            e = Entity{EType::Corpse, Ai::Idle, e.zone, e.x, e.y, 0, 0, int16_t(60)};
+    }
+}
 
 // ---- world turn --------------------------------------------------------------
 
@@ -1667,6 +1704,7 @@ void critter_act(Entity& e) {
         if (pdist == 1) {
             g.log.push("The sliver strikes like a wasp - and spends itself.");
             damage_player(4, "A hunter-seeker found its mark.");
+            poison_player(2, 4);  // C3: the needle is envenomed (Toxin — Toxin Resistance mitigates the ticks)
             e.type = EType::None;
             return;
         }
@@ -1925,11 +1963,19 @@ void upkeep() {
         g.pl.will += tune::kWillRegenPerTurn;
         if (g.pl.will > wmax) g.pl.will = wmax;
     }
+
+    // C3: the combat-poison ailment ticks as Toxin damage (Toxin Resistance mitigates it in
+    // damage_player). This is the payoff hook for D1's AK_RES_TOX ("of the Antidote").
+    if (g.pl.ail_poison_turns > 0 && !g.pl.dead) {
+        --g.pl.ail_poison_turns;
+        if (g.pl.ail_poison_dmg > 0) damage_player(g.pl.ail_poison_dmg, "The venom takes you.", DT_TOX);
+    }
 }
 
 // The player spent a turn: world advances.
 void advance_world() {
     upkeep();
+    tick_enemy_poison();  // C3: DoT on poisoned foes
     if (g.pl.dead) return;
 
     // transient light flashes decay
@@ -2510,6 +2556,9 @@ void try_move(int dx, int dy) {
             gain_hp(dealt * lch / 100);
         if (int loh = affix_total(items::AK_LIFE_ON_HIT); loh > 0) gain_hp(loh);
         if (int ws = affix_total(items::AK_WILL_SIPHON); ws > 0) gain_will(ws);
+        // C3: AK_POISON (of Venom / Poison Damage) applies a Poison DoT — activates the D1 stat.
+        if (int ap = affix_total(items::AK_POISON); ap > 0 && victim->hp > 0)
+            poison_entity(*victim, 1 + ap / 20, 5);
         if (crit) g.log.push("CRIT - %d! The blade finds the seam.", dealt);
         else g.log.push("You hit for %d.", dealt);
         if (victim->hp <= 0) {
@@ -4697,6 +4746,8 @@ void game_serialize(SaveWriter& w) {
     w.i32(g.pl.shield);        // C2
     w.i32(g.pl.shield_delay);  // C2
     w.i32(g.pl.will);          // D1
+    w.i32(g.pl.ail_poison_dmg);    // C3
+    w.i32(g.pl.ail_poison_turns);  // C3
     w.u8(g.pl.maker_hooks ? 1 : 0);
     w.u8(g.pl.riding ? 1 : 0);
     w.i32(g.pl.ride_turns);
@@ -4768,6 +4819,8 @@ bool game_deserialize(SaveReader& r) {
     pl.shield = r.i32();        // C2
     pl.shield_delay = r.i32();  // C2
     pl.will = r.i32();          // D1
+    pl.ail_poison_dmg = r.i32();    // C3
+    pl.ail_poison_turns = r.i32();  // C3
     pl.maker_hooks = r.u8() != 0;
     pl.riding = r.u8() != 0;
     pl.ride_turns = r.i32();
@@ -4905,7 +4958,7 @@ void game_debug_spawn_shield_adjacent(int* hp_out) {
         for (Entity& e : g.ents)
             if (e.type == EType::None) {
                 e = Entity{EType::ShieldTrooper, Ai::Idle, g.cur_zone,
-                           int16_t(p.x + dx), int16_t(p.y + dy), 10, 0, 0};
+                           int16_t(p.x + dx), int16_t(p.y + dy), int16_t(foe_hp(EType::ShieldTrooper)), 0, 0};
                 if (hp_out) *hp_out = e.hp;
                 return;
             }
@@ -4980,6 +5033,13 @@ void game_debug_player_stats(int* hp, int* max_hp, int* water, int* max_water, i
     if (spice) *spice = g.pl.spice;
 }
 void game_debug_hurt(int dmg) { damage_player(dmg, "Struck down in the harness."); }
+void game_debug_poison_player(int dmg, int turns) { poison_player(dmg, turns); }  // C3
+int game_debug_enemy_poison_turns() {  // C3: poison turns on the first ShieldTrooper in the zone
+    for (int i = 1; i < kMaxEnts; ++i)
+        if (g.ents[i].type == EType::ShieldTrooper && g.ents[i].zone == g.cur_zone)
+            return g.ents[i].poison_turns;
+    return -1;
+}
 void game_debug_shield_state(int* shield, int* max_shield, int* hp) {
     if (shield) *shield = g.pl.shield;
     if (max_shield) *max_shield = player_max_shield();
@@ -5212,6 +5272,7 @@ uint64_t game_state_hash() {
     mix(uint64_t(uint32_t(g.pl.turn)));
     mix(uint64_t(uint32_t(g.pl.shield)) | (uint64_t(uint32_t(g.pl.shield_delay)) << 32));  // C2
     mix(uint64_t(uint32_t(g.pl.will)));  // D1
+    mix(uint64_t(uint32_t(g.pl.ail_poison_dmg)) | (uint64_t(uint32_t(g.pl.ail_poison_turns)) << 32));  // C3
     mix(uint64_t(uint8_t(g.pl.background)) | (uint64_t(uint32_t(g.pl.atk)) << 8));
     mix(uint64_t(uint16_t(g.pl.st.level)) | (uint64_t(uint32_t(g.pl.st.xp)) << 16) |
         (uint64_t(uint16_t(g.pl.st.cond)) << 48));  // C1: Conditioning (was str)
