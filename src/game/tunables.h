@@ -99,4 +99,16 @@ inline constexpr int kHoundCount = 7;
 // --- corpses ---
 inline constexpr int kCorpseWaterHound = 60;
 
+// --- B6: the Guild tithe (an OPTIONAL, player-controlled difficulty/reward dial) ---
+// Withholding the tithe (guild_debt) makes the world harder AND richer; paying the Guild grinds it
+// down. Withholding is the aspirational path (harder + better loot; canonically "starving the
+// Guild"). The campaign caps the debt low; killing the Guild Navigator (endgame) raises the cap.
+// Debt defaults 0, so a character who never engages plays at the baseline — determinism unaffected.
+inline constexpr int kGuildDebtPerRun = 1;        // debt gained per extracted run (the Guild's cut)
+inline constexpr int kGuildBribeReduce = 2;       // debt removed per tithe payment
+inline constexpr int kGuildDebtCampaignCap = 5;   // campaign difficulty tops out here
+inline constexpr int kGuildDebtEndgameCap = 15;   // raised once the Guild Navigator falls (guild_broken)
+inline constexpr int kGuildHpPerDebt = 12;        // +12% mob HP per debt level
+inline constexpr int kGuildMobDiv = 2;            // +1 escort mob per this many debt levels
+
 }  // namespace tune

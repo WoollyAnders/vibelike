@@ -73,6 +73,12 @@ void game_debug_worm_pos(int* x, int* y);
 void game_debug_player_pos(int* x, int* y);
 void game_debug_click(int tx, int ty);  // A4: headless click-to-move goal
 void game_debug_use_door();  // headless: leave the sietch (doors are click-only now)
+int game_debug_guild_debt();          // B6: current Guild tithe debt
+int game_debug_guild_difficulty();    // B6: effective tithe difficulty (debt clamped to cap)
+void game_debug_add_guild_debt(int n);  // B6: accrue n unpaid runs
+void game_debug_pay_guild(int reduce);  // B6: pay the tithe down
+void game_debug_break_guild();          // B6: Guild Navigator falls -> raise the cap
+int game_debug_foe_hp(int etype);       // B6: scaled foe HP at the current depth + tithe
 void game_debug_revelation(int* stage, int* inv_count);  // B2b: Revelation stage + inv item count
 void game_debug_revelation_pick(int idx);  // B2b: choose row idx + confirm the Revelation
 int game_debug_cur_node();  // B1.3: current graph node index

@@ -1235,6 +1235,56 @@ int run_metatest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cma
     return pass ? 0 : 1;
 }
 
+// B6: the Guild tithe difficulty dial. Withholding the tithe (unpaid runs) makes mobs tougher +
+// richer; paying the Guild grinds it down; the campaign caps it, and breaking the Guild (endgame)
+// raises the cap. Persists across a meta.dat DME6 round-trip. Debt defaults 0 (baseline).
+int run_guildtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    std::remove("meta.dat");  // fresh: paid up (debt 0)
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(777, services);
+
+    const bool fresh = game_debug_guild_debt() == 0 && game_debug_guild_difficulty() == 0;
+
+    // baseline scaled mob HP at a field spot (find one where a bulwark can spawn adjacent)
+    int hp0 = -1;
+    for (int sx = 18; sx <= 46 && hp0 <= 0; sx += 4) {
+        game_debug_warp(1, sx, 30);
+        game_debug_clear_hostiles();
+        game_debug_spawn_shield_adjacent(&hp0);
+    }
+
+    // (A) withhold the tithe -> harder mobs + higher difficulty (which also feeds richer loot)
+    game_debug_add_guild_debt(4);
+    const int diff4 = game_debug_guild_difficulty();
+    game_debug_clear_hostiles();
+    int hp4 = -1; game_debug_spawn_shield_adjacent(&hp4);
+    const bool harder = diff4 == 4 && hp0 > 0 && hp4 > hp0;
+
+    // (B) pay the Guild -> difficulty drops back down
+    game_debug_pay_guild(3);
+    const bool paid = game_debug_guild_debt() == 1 && game_debug_guild_difficulty() == 1;
+
+    // (C) campaign cap clamps the difficulty
+    game_debug_add_guild_debt(50);
+    const bool camp_capped = game_debug_guild_difficulty() == tune::kGuildDebtCampaignCap;
+
+    // (D) breaking the Guild Navigator raises the cap; more debt now climbs past the campaign cap
+    game_debug_break_guild();
+    game_debug_add_guild_debt(50);
+    const bool end_capped = game_debug_guild_difficulty() == tune::kGuildDebtEndgameCap;
+
+    // (E) the tithe + broken flag survive a meta.dat DME6 round-trip
+    int mb = 0, ma = 0; game_debug_meta_reload_class(&mb, &ma);  // reloads meta.dat into g_meta
+    const bool persisted = game_debug_guild_debt() == tune::kGuildDebtEndgameCap &&
+                           game_debug_guild_difficulty() == tune::kGuildDebtEndgameCap;  // broken persisted
+
+    const bool pass = fresh && harder && paid && camp_capped && end_capped && persisted;
+    std::printf("guildtest %s (fresh %d hp %d->%d diff4 %d paid %d camp %d end %d persist %d)\n",
+                pass ? "PASS" : "FAIL", fresh, hp0, hp4, diff4, paid, camp_capped, end_capped, persisted);
+    std::remove("meta.dat");
+    return pass ? 0 : 1;
+}
+
 // A4: click-to-move pathfinds to the goal and is deterministic across runs.
 int run_clicktest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
     GameServices services{&mixer, &assets, &cmaps};
@@ -1272,7 +1322,7 @@ int main(int argc, char** argv) {
          circledemo = false, fightdemo = false, rpgtest = false, clicktest = false,
          reveltest = false, gauntlettest = false, extractiontest = false, metatest = false,
          statmodtest = false, affixtest = false, metamigratetest = false, ailmenttest = false,
-         rttest = false, stuntest = false, classtest = false;
+         rttest = false, stuntest = false, classtest = false, guildtest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
         if (SDL_strcmp(argv[i], "--seamtest") == 0) seamtest = true;
@@ -1294,6 +1344,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--rttest") == 0) rttest = true;
         if (SDL_strcmp(argv[i], "--stuntest") == 0) stuntest = true;
         if (SDL_strcmp(argv[i], "--classtest") == 0) classtest = true;
+        if (SDL_strcmp(argv[i], "--guildtest") == 0) guildtest = true;
         if (SDL_strcmp(argv[i], "--animdebug") == 0) animdebug = true;
         if (SDL_strcmp(argv[i], "--rpgtest") == 0) rpgtest = true;
         if (SDL_strcmp(argv[i], "--clicktest") == 0) clicktest = true;
@@ -1333,6 +1384,7 @@ int main(int argc, char** argv) {
     if (rttest) return run_rttest(mixer, assets, cmaps);
     if (stuntest) return run_stuntest(mixer, assets, cmaps);
     if (classtest) return run_classtest(mixer, assets, cmaps);
+    if (guildtest) return run_guildtest(mixer, assets, cmaps);
     if (rpgtest) return run_rpgtest(mixer, assets, cmaps);
     if (reveltest) return run_reveltest(mixer, assets, cmaps);
     if (gauntlettest) return run_gauntlettest(mixer, assets, cmaps);

@@ -408,13 +408,17 @@ const Foe* foe_stats(EType t) {
 
 // C3: a foe's spawn Life, scaled by the run's Awaken depth (deeper = tankier). Replaces the
 // ad-hoc per-site hp literals so mobs have real, scaling HP (players' Life scales via player_max_hp).
+int guild_difficulty();  // B6 fwd (defined after g_meta); the Guild-tithe difficulty level
+
 int foe_hp(EType t) {
     const Foe* f = foe_stats(t);
     if (!f) return 1;
     int awk = 1;
     if (g.cur_node >= 0 && g.cur_node < world::kMaxNodes) awk = g.graph.nodes[g.cur_node].awaken;
     if (awk < 1) awk = 1;
-    return f->hp + f->hp * (awk - 1) / 4;  // +25% of base per Awaken level of depth
+    int hp = f->hp + f->hp * (awk - 1) / 4;  // +25% of base per Awaken level of depth
+    hp += hp * guild_difficulty() * tune::kGuildHpPerDebt / 100;  // B6: unpaid tithe -> tougher mobs
+    return hp;
 }
 
 Entity& player_ent() { return g.ents[0]; }
@@ -976,9 +980,21 @@ struct Meta {
     // --- C3 (DME5) --- base class + ascendancy persist across death (character identity)
     uint8_t base_class = 0;        // BaseClass
     uint8_t ascendancy = 0;        // Ascendancy (0 = None until the rite)
+    // --- B6 (DME6) --- the Guild tithe: an optional difficulty/reward dial
+    uint8_t guild_debt = 0;        // how overdue the tithe is (0 = paid up; higher = harder + richer)
+    uint8_t guild_broken = 0;      // 1 once the Guild Navigator falls -> raises the debt cap
 };
 Meta g_meta;
 
+// B6: the Guild-tithe difficulty level = the overdue debt, clamped to the active cap (campaign, or a
+// higher endgame cap once the Guild Navigator has fallen). 0 = baseline (no scaling; determinism-safe).
+int guild_difficulty() {
+    const int cap = g_meta.guild_broken ? tune::kGuildDebtEndgameCap : tune::kGuildDebtCampaignCap;
+    int d = g_meta.guild_debt;
+    return d < 0 ? 0 : d > cap ? cap : d;
+}
+
+inline constexpr uint32_t kMetaV6 = 0x36454D44u;  // 'DME6' (B6: + guild tithe debt / broken)
 inline constexpr uint32_t kMetaV5 = 0x35454D44u;  // 'DME5' (C3: + base class / ascendancy)
 inline constexpr uint32_t kMetaV4 = 0x34454D44u;  // 'DME4' (D1: widened Inst)
 inline constexpr uint32_t kMetaV3 = 0x33454D44u;  // 'DME3'
@@ -1010,7 +1026,7 @@ void meta_load() {
     if (!f) return;
     uint32_t magic = 0;
     if (std::fread(&magic, 4, 1, f) == 1) {
-        if (magic == kMetaV5 || magic == kMetaV4) {  // native widened-Inst format (V5 = + class fields)
+        if (magic == kMetaV6 || magic == kMetaV5 || magic == kMetaV4) {  // native widened-Inst format
             (void)!std::fread(&g_meta.runs, 4, 1, f);
             (void)!std::fread(&g_meta.endings_seen, 1, 1, f);
             (void)!std::fread(&g_meta.stash_count, 1, 1, f);
@@ -1022,9 +1038,13 @@ void meta_load() {
             (void)!std::fread(&g_meta.st, sizeof g_meta.st, 1, f);
             (void)!std::fread(g_meta.equip, sizeof g_meta.equip, 1, f);
             (void)!std::fread(g_meta.inv, sizeof g_meta.inv, 1, f);
-            if (magic == kMetaV5) {  // C3: base class + ascendancy (DME4 leaves them at 0/None)
+            if (magic == kMetaV5 || magic == kMetaV6) {  // C3: base class + ascendancy (DME4 -> 0/None)
                 (void)!std::fread(&g_meta.base_class, 1, 1, f);
                 (void)!std::fread(&g_meta.ascendancy, 1, 1, f);
+            }
+            if (magic == kMetaV6) {  // B6: guild tithe (DME5/DME4 leave them at 0)
+                (void)!std::fread(&g_meta.guild_debt, 1, 1, f);
+                (void)!std::fread(&g_meta.guild_broken, 1, 1, f);
             }
         } else if (magic == kMetaV3 || magic == kMetaV2) {  // legacy 4-byte items -> convert
             (void)!std::fread(&g_meta.runs, 4, 1, f);
@@ -1056,7 +1076,7 @@ void meta_load() {
 void meta_save() {
     FILE* f = std::fopen("meta.dat", "wb");
     if (!f) return;
-    std::fwrite(&kMetaV5, 4, 1, f);
+    std::fwrite(&kMetaV6, 4, 1, f);
     std::fwrite(&g_meta.runs, 4, 1, f);
     std::fwrite(&g_meta.endings_seen, 1, 1, f);
     std::fwrite(&g_meta.stash_count, 1, 1, f);
@@ -1070,6 +1090,8 @@ void meta_save() {
     std::fwrite(g_meta.inv, sizeof g_meta.inv, 1, f);
     std::fwrite(&g_meta.base_class, 1, 1, f);  // C3 (DME5)
     std::fwrite(&g_meta.ascendancy, 1, 1, f);  // C3 (DME5)
+    std::fwrite(&g_meta.guild_debt, 1, 1, f);    // B6 (DME6)
+    std::fwrite(&g_meta.guild_broken, 1, 1, f);  // B6 (DME6)
     std::fclose(f);
 }
 
@@ -1081,6 +1103,19 @@ void persist_character() {
     g_meta.ascendancy = uint8_t(g.pl.ascendancy);
     std::memcpy(g_meta.equip, g.pl.equip, sizeof g_meta.equip);
     std::memcpy(g_meta.inv, g.pl.inv, sizeof g_meta.inv);
+    meta_save();
+}
+
+// B6: the Guild tithe. Accrue on each extracted run (the Guild takes its cut of every haul); pay it
+// down at the Guild rep (field envoy) or by signalling the Guild from the sietch hub.
+void guild_tithe_accrue() {  // called from extract_run; persist_character() saves meta right after
+    const int cap = g_meta.guild_broken ? tune::kGuildDebtEndgameCap : tune::kGuildDebtCampaignCap;
+    int d = int(g_meta.guild_debt) + tune::kGuildDebtPerRun;
+    g_meta.guild_debt = uint8_t(d > cap ? cap : d);
+}
+void guild_tithe_pay(int reduce) {
+    int d = int(g_meta.guild_debt) - reduce;
+    g_meta.guild_debt = uint8_t(d < 0 ? 0 : d);
     meta_save();
 }
 
@@ -1119,7 +1154,7 @@ void grant_xp(int amount) {
 
 // Y2: run difficulty — each denied harvester and every tier of alert deepens
 // the loot tables. Risk feeds reward.
-int run_difficulty() { return g.season.denied + g.season.alert / 25; }
+int run_difficulty() { return g.season.denied + g.season.alert / 25 + guild_difficulty(); }  // B6: unpaid tithe -> richer loot
 
 // D1: item level of a drop = the current graph node's Awaken level (1..10). Deeper runs roll
 // higher tiers. run_difficulty() still feeds the rarity bonus.
@@ -1337,7 +1372,7 @@ void spawn_pinnacle(int awaken) {
 
 // B3: an elite Harkonnen escort guards each field node's objective (count scales with Awaken).
 void spawn_escort(int awaken) {
-    const int want = 2 + awaken / 2;            // 2..7 troopers
+    const int want = 2 + awaken / 2 + guild_difficulty() / tune::kGuildMobDiv;  // B6: unpaid tithe -> more troopers
     const Entity& p = player_ent();
     int placed = 0;
     for (int tries = 0; tries < 3000 && placed < want; ++tries) {
@@ -2370,7 +2405,8 @@ void extract_run() {
     g.log.push("You let Muad'Dib's vision fade. The desert releases you toward home.");
     g.log.push("The Fremen forge what the vision showed. Your haul is made real.");
     g_meta.banked_spice = g.pl.spice;  // B5: the whole run's spice is now safe (banked)
-    persist_character();               // gear + progress made real
+    guild_tithe_accrue();              // B6: the Guild expects its cut of every haul (debt creeps up)
+    persist_character();               // gear + progress made real (saves meta, incl. the tithe)
     enter_node(0);      // wake in the sietch hub
     refresh_fov_and_paths();  // RT1.2: settle FOV/paths after the transition (world runs on its timer)
 }
@@ -2729,8 +2765,9 @@ void try_move(int dx, int dy) {
             g.pl.spice -= bribe;
             g.season.alert = g.season.alert > 25 ? g.season.alert - 25 : 0;
             g.season.discovery = 0;
+            guild_tithe_pay(tune::kGuildBribeReduce);  // B6: paying the Guild also cools the tithe
             g.log.push("The Guildsman weighs %d grains. 'The surveys will... err.'", bribe);
-            g.log.push("The Guild's blindness is bought. Discovery resets.");
+            g.log.push("The Guild's blindness is bought. The tithe eases; discovery resets.");
             env->type = EType::None;
             g.sideobj_kind = 0;
         } else {
@@ -5248,6 +5285,17 @@ void game_debug_click(int tx, int ty) {  // A4: set a click-to-move goal (headle
 }
 
 void game_debug_use_door() { use_door(); }  // headless: leave the sietch (doors are click-only)
+
+// B6: Guild tithe hooks (guildtest).
+int game_debug_guild_debt() { return g_meta.guild_debt; }
+int game_debug_guild_difficulty() { return guild_difficulty(); }
+void game_debug_add_guild_debt(int n) {  // simulate n unpaid runs, honoring the active cap
+    for (int i = 0; i < n; ++i) guild_tithe_accrue();
+    meta_save();
+}
+void game_debug_pay_guild(int reduce) { guild_tithe_pay(reduce); }  // pay the tithe down
+void game_debug_break_guild() { g_meta.guild_broken = 1; meta_save(); }  // Guild Navigator falls (B10)
+int game_debug_foe_hp(int etype) { return foe_hp(EType(etype)); }  // scaled HP at the current depth+tithe
 
 void game_debug_revelation(int* stage, int* inv_count) {
     if (stage) *stage = g.revelation_stage;
