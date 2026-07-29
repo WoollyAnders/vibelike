@@ -93,5 +93,9 @@ int game_debug_meta_migrate_selftest();  // D1: DME3->DME4 vault back-compat sel
 void game_debug_poison_player(int dmg, int turns);  // C3: apply a poison ailment to the player
 void game_debug_scorch_player(int dmg, int turns);  // C3: apply a Scorch (Heat) DoT to the player
 void game_debug_bleed_player(int dmg, int turns);   // C3: apply a Bleed (physical) DoT to the player
+void game_debug_blind_player(int turns);            // C3: apply Blind to the player
+int game_debug_player_tohit(int ac);                // C3: deterministic player to-hit vs ac_dodge
+void game_debug_freeze_first_enemy(int turns);      // C3: freeze the first spawned ShieldTrooper
+int game_debug_enemy_frozen_turns();                // C3: frozen turns on the first ShieldTrooper
 int game_debug_enemy_poison_turns();  // C3: poison turns on the first spawned ShieldTrooper
 int game_debug_item_name(int where, int idx, char* out, int cap);  // G2: where 0=inv 1=equip

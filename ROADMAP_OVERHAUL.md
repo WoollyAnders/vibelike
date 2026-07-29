@@ -403,11 +403,15 @@ Shared Will fuel. Full design record: the approved plan
 (Poison / Scorch / Bleed) is done.** Per-entity + per-player timers; ticked each world turn via
 `damage_player` with the matching `DmgType`: **Poison** (`AK_POISON` on hit; hunter-seeker inflicts
 it; `DT_TOX` → Toxin Resistance), **Scorch** (`DT_HEAT` → Heat Resistance), **Bleed** (`DT_BLEED` —
-physical, **bypasses armor AND the Focus shield**, only Fortitude/life mitigates). Two-way (player
-inflicts / enemies inflict); `ailmenttest` proves each mitigation. **Remaining:** the effect-based
-ailments **Blind** (accuracy debuff, Storm) and **Slow/Freeze** (turn control, Cold), plus in-game
-Scorch/Bleed *sources* (currently debug-hooked; the Sunwalker/Water-Reaver ascendancies + an
-enemy-element roll supply them). (2) **Mob HP** — added `hp`
+physical, **bypasses armor AND the Focus shield**, only Fortitude/life mitigates). Plus the
+effect-based ailments: **Blind** (Storm) cuts accuracy both ways — the player's (`player_attack_roll`)
+and the attacking foe's (`foe_attack_roll(f, attacker_blind)`); **Freeze** (Cold) makes a frozen enemy
+skip its turn (the Reverend-Mother control marquee). Two-way throughout; the full `ailmenttest` proves
+every mitigation/effect (poison 15/6, scorch 15/6, bleed bypasses shield, blind 71→31 to-hit, freeze
+skip 3→2). **Remaining:** player-side **Freeze** (a player turn-skip intercept — a small dedicated
+slice; the field `ail_frozen_turns` is reserved), and the in-game *sources* for
+Scorch/Bleed/Blind/Freeze (debug-hooked now; delivered by the Sunwalker/Desert-Ghost/Reverend-Mother
+ascendancies + an enemy-element roll). (2) **Mob HP** — added `hp`
 to `Foe` + `foe_hp(EType)` scaling by Awaken depth; all spawn sites use it (mobs were ~1–10 hp, now
 real/scaling). (3) **Class start = 0 additional attributes** (dropped the Fedaykin bonus) + **flat
 per-level Life & Will** (`kLifePerLevel`/`kWillPerLevel`, class-agnostic). New `ailmenttest`; suite
