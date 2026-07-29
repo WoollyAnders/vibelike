@@ -393,26 +393,54 @@ is now a bulwark (higher armor/hp). `shieldtest` retired, **`focustest`** added
 (soak → recharge → spill). Full SDL suite green; dettest rebaselined
 `d9a06b6d27ca7e33` (confirmed via the SDL-free spike too).
 
-### C3 — Class identities (three corners) ⬜
-Fedaykin=Conditioning, Saboteur=Versatility, Sayyadina=Awareness; shared Will fuel.
-**Exit:** each corner starts distinct (bruiser / precise-skirmisher / shielded
-spice-caster).
-**Sayyadina lore (locked 2026-07-28):** Sayyadinas are **pre-Reverend-Mother sietch priestesses**
-who have **prepared to take the Water of Life their whole lives** — which dovetails with the
-campaign frame (runs launch by drinking the Water of Life at Paul). Their identity is
-spice/poison mysticism + the Focus shield.
+### C3 — Base classes + branching ascendancies (PoE-style) ⬜
+**Reworked (2026-07-29) — approved design:** three *basic* Fremen **base classes** (one per
+attribute) that **ascend** into one of **three ascendancies** each (PoE base→ascendancy, branching).
+Shared Will fuel. Full design record: the approved plan
+`/root/.claude/plans/this-project-is-to-nested-planet.md`.
 
-**Poisons — proficiency comes from TREES, not a flat class bonus (locked 2026-07-28):** poison/
-toxin is a spec axis all three corners can *touch*, but **Sayyadina owns it**. Proficiency is
-**earned**, PoE-style, through a **class-talent tree (an ascendancy-style tree, distinct from the
-C4 passive tree)** + passive-tree pathing — NOT a hardcoded class bonus. So Sayyadina's ascendancy
-holds the poison-mastery nodes (scaling D1's inert `AK_POISON` "of Venom" / Poison Damage once the
-**combat-poison DoT** mechanic lands), while **Saboteur** and **Fedaykin** merely have *access*
-(can equip/use poison gear, path a few generic poison passives) with no ascendancy specialisation.
-The class-talent (ascendancy) tree is a **new system** — details TBD as we design talents. Wire
-`AK_POISON` scaling into those nodes in the combat-poison pass (D1 left the gear hook ready). NB:
-today's `poisons` consumable is separate — Saboteur *sabotage* (spoils a spice hold), not combat
-poison.
+| Attribute | Base | Ascendancies (element → ailment) |
+|---|---|---|
+| Conditioning | **Knifehand** | **Fedaykin** (tank: Block/Counter/durability) · **Desert Ghost** (Storm Lethality → **Blind** + Evasion/Stealth) · **Water Reaver** (**Bleed** Lethality, bypasses armor + Siphon) |
+| Versatility | **Wanderer** | **Saboteur** (traps/demolition) · **Wayfinder** (long-range weapons) · **Sunwalker** (**Scorch** — Heat DoT) |
+| Awareness | **Oracle** | **Sayyadina** (**Poison** DoT + Focus) · **Reverend Mother** (control/Focus — Cold → **Slow/Freeze**) · **Spiceweaver** (Will nuker — more Will spent = more Lethality) |
+
+**Ascension trigger (canon):** NOT the player drinking the Water of Life — that is **Paul's** alone
+(how *he* gets the visions the player enacts). Ascension is a **sietch rite of passage** (riding the
+maker / earning a crysknife / the naming), gated by the Awaken ladder; Paul's prescience marks the
+path. Pick an ascendancy for your base at the rite.
+
+**Ailment system (two-way, PoE-style) — the spine of the ascendancy design:** each element has a
+status effect. Ascendancies grant **offensive** mastery (more elemental damage + inflict the
+ailment), NOT resistance; **gear resistances (D1) are the defense**; and **enemies randomly roll
+these elements** and inflict the ailments on the player, so every build needs resistance.
+- **Scorch** (Heat, `DT_HEAT`) burning DoT — Sunwalker ↔ Heat Resist (`AK_HEAT`)
+- **Slow/Freeze** (Cold, `DT_COLD`) control — Reverend Mother ↔ Cold Resist (`AK_RES_COLD`)
+- **Blind** (Storm, `DT_STORM`) enemy accuracy down — Desert Ghost ↔ Storm Resist (`AK_RES_STORM`)
+- **Poison** (Toxin, `AK_POISON`) DoT — Sayyadina ↔ Toxin Resist (`AK_RES_TOX`)
+- **Bleed** (physical) DoT that **bypasses armor/Toughness** (only Fortitude/life mitigates) — Water Reaver + Siphon
+Reuses D1's `DmgType` plumbing + the inert `AK_POISON`; the **combat-ailment pass** adds ailment
+status timers on `Entity` + the enemy-rolls-an-element hook, and wires the ascendancy nodes.
+
+**Proficiency comes from the ascendancy tree, not flat class bonuses** — a PoE-ascendancy-style tree
+(new system, distinct from the C4 passive tree; talent nodes TBD "as we go"). Poison-mastery lives on
+**Sayyadina**; other classes only have generic gear access. Today's `poisons` consumable is separate
+(Saboteur *sabotage* — spoils a spice hold).
+
+**Bene Gesserit vocabulary:** *Reverend Mother* is fair game for Fremen (canon Fremen RMs exist). A
+future **Bene Gesserit class** stays distinct via ascendancies named for the box-tests — **Agony ·
+Euphoria · Time**; keep *Acolyte / Truthsayer / Kwisatz Haderach* reserved for BG. `Sandrider` is
+freed (worm-riding is universal via `maker_hooks`, not a class).
+
+**Implementation scope (when C3 is built, per D1 patterns):** split `enum class Background` →
+`enum class BaseClass { Knifehand, Wanderer, Oracle }` + `enum class Ascendancy { None, Fedaykin,
+DesertGhost, WaterReaver, Saboteur, Wayfinder, Sunwalker, Sayyadina, ReverendMother, Spiceweaver }`;
+rename `apply_background`→`apply_base_class`; update the char-create menu (`Background::Count` sites)
++ `meta.dat`/`save.dat` persistence (new field, magic/version bump with back-compat). Ascendancy
+tree + sietch-rite ascension UI are their own systems. Verify with a `classtest` (create each base,
+ascend each, `meta.dat` round-trip) + the full suite/determinism baseline.
+**Exit:** each base starts distinct; ascension at the sietch rite grants an ascendancy that persists
+across a death.
 
 ### C4 — Passive skill tree (PoE-style) ⬜
 One shared node graph, class start per corner, adjacency-gated allocation, passive
