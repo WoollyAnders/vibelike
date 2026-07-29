@@ -7,7 +7,7 @@ tooling-heavy (paperdoll, a 50–80-node passive tree, crafting bench, boards) �
 hand-rolled software-framebuffer UI is expensive and **Godot 4** is cheap. A de-risking **spike**
 (now merged in `godot/`) proved the migration is a *port, not a rewrite*: the SDL-free, deterministic
 C++ **sim** (`src/game/*` + `src/engine/*`) compiles into a **GDExtension** (`DustfallSim` node),
-runs from GDScript, and reproduces the exact `dettest` hash `5dc9443f6cf23331` **through Godot 4.7.1**
+runs from GDScript, and reproduces the exact `dettest` hash `98fc831712d57739` **through Godot 4.7.1**
 headless. Target engine: **Godot 4.7** (extension `compatibility_minimum` ~4.4, built against
 `godot-cpp` `master` — no per-minor branch past 4.5).
 
@@ -128,5 +128,5 @@ in the GDExtension; presentation + data in Godot.
 
 ## Verification (every phase)
 Build the extension (`.so` + `.dll`); run `godot/run_tests.sh` headless in WSL (all 13 pass, `dettest`
-== `5dc9443f6cf23331` until a legit sim change rebaselines it); open the project in the Godot 4.7
+== `98fc831712d57739` until a legit sim change rebaselines it); open the project in the Godot 4.7
 editor for a visual smoke test; export a Windows build for the user's playtest.
