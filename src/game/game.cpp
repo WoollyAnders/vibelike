@@ -210,6 +210,8 @@ struct GameState {
     map::Zone zone_;      // B1.2: the single resident zone (regenerated on node entry)
     world::Graph graph;   // B1: per-run node graph (built from run seed)
     int cur_node = 0;     // B1.3: current graph node (0 = sietch hub); drives the resident zone
+    uint32_t sim_clock = 0;  // RT1: monotonic sim-tick counter (fixed timestep); the real-time clock
+    int world_accum = 0;     // RT1: ticks since the last world step (drives world_tick from RT1.2)
     uint8_t cur_zone = map::kZoneSietch;  // derived from the current node's Stage (biome/membership tag)
     // B2b: the Revelation (a prescient gear suggestion at each forward door). Transient (reset on load).
     int awaken_choice = 1;                 // B5: Awaken level to launch (1..meta.awaken_unlocked)
@@ -3262,6 +3264,7 @@ bool game_update(const InputState& in) {
         return true;
     }
     ++g.anim_tick;
+    ++g.sim_clock;  // RT1: the fixed-timestep sim clock advances every game_update tick
     // Front-end screens: the world is paused; they run their own input + render.
     if (g.screen == GameState::Screen::Menu) return update_menu(in);
     if (g.screen == GameState::Screen::Options) { update_options(in); return true; }
@@ -4784,6 +4787,8 @@ void game_serialize(SaveWriter& w) {
     w.u64(g.seed);
     w.u8(g.cur_zone);
     w.i32(g.cur_node);                                  // B1.3: current graph node
+    w.u32(g.sim_clock);                                 // RT1: real-time sim clock
+    w.i32(g.world_accum);                               // RT1: world-step accumulator
     w.i32(g.graph.count);                               // + per-node flags (graph rebuilds from seed)
     for (int i = 0; i < g.graph.count; ++i) w.u8(g.graph.nodes[i].flags);
     w.i32(g.pl.hp);
@@ -4860,6 +4865,8 @@ bool game_deserialize(SaveReader& r) {
     const uint64_t seed = r.u64();
     const uint8_t cur = r.u8();
     const int cur_node = r.i32();                       // B1.3: current graph node
+    const uint32_t sim_clock = r.u32();                 // RT1: real-time sim clock
+    const int world_accum = r.i32();                    // RT1: world-step accumulator
     const int gcount = r.i32();                         // + per-node flags
     static uint8_t node_flags[world::kMaxNodes];
     const int gclamp = (gcount >= 0 && gcount <= world::kMaxNodes) ? gcount : 0;
@@ -4950,6 +4957,8 @@ bool game_deserialize(SaveReader& r) {
     g.graph.build(seed);                               // B1.3: rebuild the run graph from the seed
     for (int i = 0; i < gclamp && i < g.graph.count; ++i) g.graph.nodes[i].flags = node_flags[i];
     g.cur_node = (cur_node < g.graph.count) ? cur_node : 0;
+    g.sim_clock = sim_clock;    // RT1
+    g.world_accum = world_accum;  // RT1
     g.revelation_stage = 0;  // B2b: transient modal — never mid-pick after a load
     g.cur_zone = cur;
     g.pl = pl;

@@ -5,6 +5,12 @@ namespace tune {
 
 // --- time ---
 inline constexpr int kTurnsPerDay = 300;
+// RT1 (real-time conversion): the sim runs at kTickHz (60) fixed ticks/sec. A "world tick"
+// (the old per-turn upkeep+AI step) fires every kWorldStepTicks sim-ticks; the player may take a
+// grid action at most every kPlayerActionTicks. (Used from RT1.2 onward; defined here now.)
+inline constexpr int kTickHz = 60;
+inline constexpr int kWorldStepTicks = 9;    // ~0.15 s per world tick
+inline constexpr int kPlayerActionTicks = 7; // ~0.12 s player action cooldown
 
 // --- player ---
 inline constexpr int kPlayerHpMax = 20;
