@@ -16,7 +16,15 @@
 #include "engine/wav.h"
 #include "game/game.h"
 #include "game/items.h"
+#include "game/tunables.h"
 #include "platform/input.h"
+
+// RT1.2: the world is real-time now — it advances on a fixed sim-clock timer, not once per
+// player action. So a headless test "turn" is kWorldStepTicks fixed frames (== exactly one world
+// tick, regardless of phase); a player grid-action fires at most once per kPlayerActionTicks. The
+// harness helpers below step whole frame-blocks accordingly. Combat loops instead step single
+// frames with a large frame budget (an attack lands every kPlayerActionTicks frames).
+namespace { constexpr int kWorldStep = tune::kWorldStepTicks; }
 
 namespace {
 
@@ -319,10 +327,14 @@ int run_seamtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cma
     const uint64_t h_loaded = game_state_hash();
 
     // Re-init from the same seed and replay the pre-save inputs: determinism.
+    // RT1.2: sim_clock is now hashed, and the Save above consumed one frame (advancing the clock
+    // + one world-timer step), so the replay must consume a matching frame to land on the same
+    // clock/world state — a no-op Wait frame does exactly that.
     game_init(12345, services);
     game_debug_use_door();
     tick_with(Key::Right, 3);
     tick_with(Key::Down, 2);
+    tick_with(Key::Wait, 1);  // mirror the Save frame's clock/world-timer advance
     const uint64_t h_replayed = game_state_hash();
 
     std::printf("saved    %016llx\ndiverged %016llx\nloaded   %016llx\nreplayed %016llx\n",
@@ -401,10 +413,12 @@ int run_wormtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cma
     game_init(4242, services);
 
     InputState in;
-    auto tick_with = [&](Key k) {
-        in.pressed[int(k)] = true;
-        game_update(in);
-        in.end_tick();
+    auto tick_with = [&](Key k) {  // RT1.2: one world tick == kWorldStep frames (+~1-2 grid actions)
+        for (int f = 0; f < kWorldStep; ++f) {
+            in.pressed[int(k)] = true;
+            game_update(in);
+            in.end_tick();
+        }
     };
 
     game_debug_use_door();                               // out of the sietch (click-only doors)
@@ -414,7 +428,7 @@ int run_wormtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cma
 
     int max_state = 0;
     int turns = 0;
-    while (turns < 120 && !game_is_dead()) {
+    while (turns < 240 && !game_is_dead()) {
         tick_with(Key::Wait);
         if (game_worm_state() > max_state) {
             max_state = game_worm_state();
@@ -494,7 +508,12 @@ int run_focustest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cm
     game_init(777, services);
 
     InputState in;
-    auto wait = [&]() { in.pressed[int(Key::Wait)] = true; game_update(in); in.end_tick(); };
+    // RT1.2: one world tick == kWorldStep frames (the shield recharges per world tick).
+    auto wait = [&]() {
+        for (int f = 0; f < kWorldStep; ++f) {
+            in.pressed[int(Key::Wait)] = true; game_update(in); in.end_tick();
+        }
+    };
 
     game_debug_clear_hostiles();  // isolate the shield, not a fight
     game_debug_buff();            // Awareness 30 -> a real Focus pool; fills shield to max
@@ -599,8 +618,15 @@ int run_ailmenttest(audio::Mixer& mixer, const Assets& assets, const Colormaps& 
     GameServices services{&mixer, &assets, &cmaps};
     game_init(777, services);
     InputState in;
+    // RT1.2: tick_with is a single frame (attacks land every kPlayerActionTicks frames, so combat
+    // loops step frame-by-frame with a large guard); wait() is one full world tick (DoTs/freeze
+    // tick once per world tick), == kWorldStep frames.
     auto tick_with = [&](Key k) { in.pressed[int(k)] = true; game_update(in); in.end_tick(); };
-    auto wait = [&]() { in.pressed[int(Key::Wait)] = true; game_update(in); in.end_tick(); };
+    auto wait = [&]() {
+        for (int f = 0; f < kWorldStep; ++f) {
+            in.pressed[int(Key::Wait)] = true; game_update(in); in.end_tick();
+        }
+    };
 
     // (A) player inflicts Poison via AK_POISON on a landed hit -> enemy takes a DoT.
     // (mirror rpgtest's warm-up: an initial warp + a tick settles the resident zone before spawns.)
@@ -614,7 +640,7 @@ int run_ailmenttest(audio::Mixer& mixer, const Assets& assets, const Colormaps& 
         game_debug_spawn_shield_adjacent(&hp0);
     }
     int guard = 0;
-    while (game_debug_enemy_poison_turns() <= 0 && game_debug_shield_hp() > 0 && guard++ < 40) {
+    while (game_debug_enemy_poison_turns() <= 0 && game_debug_shield_hp() > 0 && guard++ < 160) {
         game_debug_refill();
         tick_with(Key::Right);  // attack the adjacent bulwark until a hit lands + poisons it
     }
@@ -725,10 +751,14 @@ int run_metamigratetest(audio::Mixer& mixer, const Assets& assets, const Colorma
 int run_campaigntest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
     GameServices services{&mixer, &assets, &cmaps};
     InputState in;
+    // RT1.2: the season paces on world ticks, so one loop step == one world tick == kWorldStep
+    // frames. (Boss re-warps every call and lands ~1-2 attacks per block — fine for a flow test.)
     auto tick_with = [&](Key k) {
-        in.pressed[int(k)] = true;
-        game_update(in);
-        in.end_tick();
+        for (int f = 0; f < kWorldStep; ++f) {
+            in.pressed[int(k)] = true;
+            game_update(in);
+            in.end_tick();
+        }
     };
 
     // Leg 1: deny everything -> climax -> victory
@@ -829,6 +859,37 @@ int run_campaigntest(audio::Mixer& mixer, const Assets& assets, const Colormaps&
     return pass ? 0 : 1;
 }
 
+// RT1.2: the defining real-time behavior — the world advances on its own fixed clock even when
+// the player takes NO action. Stand in a field node (outdoors) with an EMPTY input for many
+// frames; upkeep must run (thirst drains) while the player never moves. Proves the world tick is
+// driven by the sim clock, not by player input (the whole point of the real-time conversion).
+int run_rttest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(777, services);
+
+    game_debug_warp(1, 30, 30);       // a field node: outdoors, so thirst accrues per world tick
+    game_debug_clear_hostiles();      // isolate the clock from a fight
+    game_debug_refill();              // full water/Life
+
+    int w0 = 0, hp0 = 0, px0 = 0, py0 = 0;
+    game_debug_player_stats(&hp0, nullptr, &w0, nullptr, nullptr, nullptr);
+    game_debug_player_pos(&px0, &py0);
+
+    InputState idle;                  // EMPTY — no key ever pressed or held
+    for (int f = 0; f < kWorldStep * 20; ++f) { game_update(idle); idle.end_tick(); }
+
+    int w1 = 0, hp1 = 0, px1 = 0, py1 = 0;
+    game_debug_player_stats(&hp1, nullptr, &w1, nullptr, nullptr, nullptr);
+    game_debug_player_pos(&px1, &py1);
+
+    const bool world_ticked = w1 < w0;                  // upkeep ran with NO player input
+    const bool player_idle = px1 == px0 && py1 == py0;  // no input -> the player never acted
+    const bool pass = world_ticked && player_idle && !game_is_dead();
+    std::printf("rttest %s (water %d->%d moved %d dead %d)\n", pass ? "PASS" : "FAIL",
+                w0, w1, player_idle ? 0 : 1, game_is_dead() ? 1 : 0);
+    return pass ? 0 : 1;
+}
+
 // Determinism: the same seed and input script twice must reach the same hash.
 int run_dettest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
     GameServices services{&mixer, &assets, &cmaps};
@@ -863,10 +924,19 @@ int run_ridetest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cma
     GameServices services{&mixer, &assets, &cmaps};
     game_init(4242, services);
     InputState in;
-    auto tick_with = [&](Key k) {
-        in.pressed[int(k)] = true;
-        game_update(in);
-        in.end_tick();
+    auto tick_with = [&](Key k) {  // RT1.2: one world tick == kWorldStep frames (+~1-2 grid actions)
+        for (int f = 0; f < kWorldStep; ++f) {
+            in.pressed[int(k)] = true;
+            game_update(in);
+            in.end_tick();
+        }
+    };
+    // RT1.2: exactly ONE player action — settle kWorldStep frames with no input so the action
+    // cooldown expires, then one ready press. (A held Ride would mount AND then re-fire the
+    // commit-extract; ride mount/steer/dismount must each be a single discrete action.)
+    auto act = [&](Key k) {
+        for (int f = 0; f < kWorldStep; ++f) { game_update(in); in.end_tick(); }
+        in.pressed[int(k)] = true; game_update(in); in.end_tick();
     };
 
     game_debug_use_door();                               // out of the sietch (click-only doors)
@@ -874,7 +944,7 @@ int run_ridetest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cma
     tick_with(Key::Thumper);
     for (int i = 0; i < 7; ++i) tick_with(Key::Left);    // fall back
     int turns = 0;
-    while (turns++ < 120 && game_worm_state() != 4 && !game_is_dead()) {
+    while (turns++ < 240 && game_worm_state() != 4 && !game_is_dead()) {
         if (turns % 12 == 0) game_debug_refill();
         tick_with(Key::Wait);
     }
@@ -882,27 +952,25 @@ int run_ridetest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cma
 
     game_debug_grant_hooks();
     game_debug_warp_to_worm();
-    tick_with(Key::Ride);
+    act(Key::Ride);
     if (!game_debug_riding()) { std::printf("ridetest FAIL (mount)\n"); return 1; }
 
-    // Ride until the worm moves. The worm only swims onto sand ("shies from
-    // rock"), so try each cardinal and keep the first that actually advances it
-    // (direction-agnostic — robust to whichever sand lies open at the surface).
+    // Ride until the worm moves. The worm only swims onto sand ("shies from rock"), so try each
+    // cardinal with ONE steering action and keep the first that advances it. One ride_move per
+    // direction stays well under kExtractRideTurns, so a shy direction can't auto-extract the ride.
     int wx0 = 0, wy0 = 0, wx1 = 0, wy1 = 0;
     game_debug_worm_pos(&wx0, &wy0);
     const Key dirs[4] = {Key::Right, Key::Left, Key::Down, Key::Up};
     bool moved = false;
     for (Key k : dirs) {
         int bx, by; game_debug_worm_pos(&bx, &by);
-        for (int i = 0; i < 4 && !moved; ++i) {
-            tick_with(k);
-            int ax, ay; game_debug_worm_pos(&ax, &ay);
-            if (ax != bx || ay != by) moved = true;
-        }
-        if (moved) break;
+        act(k);
+        int ax, ay; game_debug_worm_pos(&ax, &ay);
+        if (ax != bx || ay != by) { moved = true; break; }
+        if (!game_debug_riding()) break;  // safety: the ride ended
     }
     game_debug_worm_pos(&wx1, &wy1);
-    tick_with(Key::Ride);  // dismount
+    act(Key::Ride);  // dismount / commit the ride home
 
     std::printf("worm rode from %d,%d to %d,%d (riding now %d, dead %d)\n",
                 wx0, wy0, wx1, wy1, game_debug_riding() ? 1 : 0, game_is_dead() ? 1 : 0);
@@ -916,7 +984,15 @@ int run_extractiontest(audio::Mixer& mixer, const Assets& assets, const Colormap
     GameServices services{&mixer, &assets, &cmaps};
     game_init(4242, services);
     InputState in;
-    auto tick_with = [&](Key k) { in.pressed[int(k)] = true; game_update(in); in.end_tick(); };
+    auto tick_with = [&](Key k) {  // RT1.2: one world tick == kWorldStep frames (+~1-2 grid actions)
+        for (int f = 0; f < kWorldStep; ++f) { in.pressed[int(k)] = true; game_update(in); in.end_tick(); }
+    };
+    // RT1.2: exactly ONE player action (settle the cooldown, then one ready press) — ride
+    // mount and the commit-extract must each be a single discrete action, not a held key.
+    auto act = [&](Key k) {
+        for (int f = 0; f < kWorldStep; ++f) { game_update(in); in.end_tick(); }
+        in.pressed[int(k)] = true; game_update(in); in.end_tick();
+    };
 
     game_debug_use_door();                               // hub -> field node 1
     const int node_field = game_debug_cur_node();
@@ -924,16 +1000,16 @@ int run_extractiontest(audio::Mixer& mixer, const Assets& assets, const Colormap
     tick_with(Key::Thumper);
     for (int i = 0; i < 7; ++i) tick_with(Key::Left);
     int turns = 0;
-    while (turns++ < 120 && game_worm_state() != 4 && !game_is_dead()) {
+    while (turns++ < 240 && game_worm_state() != 4 && !game_is_dead()) {
         if (turns % 12 == 0) game_debug_refill();
         tick_with(Key::Wait);
     }
     if (game_worm_state() != 4) { std::printf("extractiontest FAIL (no surface)\n"); return 1; }
 
     game_debug_warp_to_worm();
-    tick_with(Key::Ride);
+    act(Key::Ride);
     const bool mounted = game_debug_riding();
-    tick_with(Key::Ride);                                // commit: the Maker bears you home
+    act(Key::Ride);                                      // commit: the Maker bears you home
     const int node_home = game_debug_cur_node();
 
     const bool extracted = node_home == 0 && !game_debug_riding() && !game_is_dead();
@@ -969,7 +1045,7 @@ int run_rpgtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmap
         game_debug_spawn_shield_adjacent(&hp);
         if (hp <= 0) continue;  // unwalkable spot; try the next one
         int guard = 0;
-        while (game_debug_shield_hp() > 0 && guard++ < 40) {
+        while (game_debug_shield_hp() > 0 && guard++ < 400) {  // RT1.2: ~1 attack / kPlayerActionTicks frames
             game_debug_refill();
             tick_with(Key::Right);
         }
@@ -1141,7 +1217,8 @@ int main(int argc, char** argv) {
          campaigntest = false, dettest = false, ridetest = false, animdebug = false,
          circledemo = false, fightdemo = false, rpgtest = false, clicktest = false,
          reveltest = false, gauntlettest = false, extractiontest = false, metatest = false,
-         statmodtest = false, affixtest = false, metamigratetest = false, ailmenttest = false;
+         statmodtest = false, affixtest = false, metamigratetest = false, ailmenttest = false,
+         rttest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
         if (SDL_strcmp(argv[i], "--seamtest") == 0) seamtest = true;
@@ -1160,6 +1237,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--ailmenttest") == 0) ailmenttest = true;
         if (SDL_strcmp(argv[i], "--campaigntest") == 0) campaigntest = true;
         if (SDL_strcmp(argv[i], "--dettest") == 0) dettest = true;
+        if (SDL_strcmp(argv[i], "--rttest") == 0) rttest = true;
         if (SDL_strcmp(argv[i], "--ridetest") == 0) ridetest = true;
         if (SDL_strcmp(argv[i], "--animdebug") == 0) animdebug = true;
         if (SDL_strcmp(argv[i], "--rpgtest") == 0) rpgtest = true;
@@ -1197,6 +1275,7 @@ int main(int argc, char** argv) {
     if (ailmenttest) return run_ailmenttest(mixer, assets, cmaps);
     if (campaigntest) return run_campaigntest(mixer, assets, cmaps);
     if (dettest) return run_dettest(mixer, assets, cmaps);
+    if (rttest) return run_rttest(mixer, assets, cmaps);
     if (ridetest) return run_ridetest(mixer, assets, cmaps);
     if (rpgtest) return run_rpgtest(mixer, assets, cmaps);
     if (reveltest) return run_reveltest(mixer, assets, cmaps);

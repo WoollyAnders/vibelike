@@ -18,6 +18,6 @@ func _init():
         sim.tick_key(8, 60)   # Wait
         hashes.append(sim.state_hash_hex())
     var det = hashes[0] == hashes[1]
-    var matches = hashes[0] == "569202113c280713"  # rebaselined for C1/C2 (attributes + energy shield)
+    var matches = hashes[0] == "5600eca2167a3c27"  # rebaselined for RT1.2 (real-time world tick + clock/energy hashed)
     print("godot determinism: hash=", hashes[0], " det=", det, " baseline_match=", matches)
     quit(0 if det and matches else 1)

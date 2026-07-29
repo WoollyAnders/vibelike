@@ -173,6 +173,7 @@ struct Player {
     int litany_turns = 0;      // active suppression
     int litany_day = -1;       // last day the Litany was spoken
     int free_moves = 0;        // Threadwalk strides (no world advance)
+    uint32_t next_act_tick = 0;  // RT1.2: earliest sim_clock at which the player may act again (cooldown)
     Background background = Background::Fedaykin;
     bool sandwalk = false;
     bool dead = false;
@@ -2023,7 +2024,15 @@ void upkeep() {
 }
 
 // The player spent a turn: world advances.
-void advance_world() {
+// RT1.2: real-time cadence. The player may take a grid action only once per cooldown
+// (kPlayerActionTicks sim-ticks); consuming an action arms it. The WORLD no longer advances
+// as a side effect of player actions — game_update fires world_tick() on its own timer.
+bool player_ready() { return g.sim_clock >= g.pl.next_act_tick; }
+void consume_action() { g.pl.next_act_tick = g.sim_clock + uint32_t(tune::kPlayerActionTicks); }
+
+// One world step: enemies act, upkeep runs, the worm/ops/seasons advance. Fired from
+// game_update every kWorldStepTicks sim-ticks (real-time), NOT per player action.
+void world_tick() {
     upkeep();
     tick_enemy_ailments();  // C3: DoTs (poison/scorch/bleed) on afflicted foes
     if (g.pl.dead) return;
@@ -2196,7 +2205,7 @@ void extract_run() {
     g_meta.banked_spice = g.pl.spice;  // B5: the whole run's spice is now safe (banked)
     persist_character();               // gear + progress made real
     enter_node(0);      // wake in the sietch hub
-    advance_world();
+    refresh_fov_and_paths();  // RT1.2: settle FOV/paths after the transition (world runs on its timer)
 }
 
 bool worm_rideable_at(int x, int y) {
@@ -2251,7 +2260,7 @@ void try_ride() {
     g.log.push("Hooks bite between the rings. The desert tilts - YOU RIDE.");
     g.services.mixer->push({audio::Cmd::PlaySfx, 0, 255, 90});
     flash(240, 220, 120);
-    advance_world();
+    consume_action();
 }
 
 // Steer the ridden worm: the head takes two strides, the body follows, and
@@ -2300,7 +2309,7 @@ void ride_move(int dx, int dy) {
         (void)cb;
         return;
     }
-    advance_world();
+    consume_action();
     (void)cb;
 }
 
@@ -2499,7 +2508,7 @@ void revelation_confirm() {
         const int dest = g.rev_dest;
         g.revelation_stage = 0;
         enter_node(dest);
-        advance_world();
+        refresh_fov_and_paths();  // RT1.2: settle FOV/paths after the transition
     }
 }
 
@@ -2520,7 +2529,7 @@ void try_move(int dx, int dy) {
                                     worm_callbacks());
         if (dealt > 0) g.log.push("Your blade bites the soft flesh of the maw!");
         g.noise.add(p.x, p.y, 12);
-        advance_world();
+        consume_action();
         return;
     }
 
@@ -2532,7 +2541,7 @@ void try_move(int dx, int dy) {
         } else {
             g.log.push("Your water is full.");
         }
-        advance_world();
+        consume_action();
         return;
     }
 
@@ -2553,7 +2562,7 @@ void try_move(int dx, int dy) {
         g.log.push("They share two grains for the road. The caravan breaks camp.");
         car->type = EType::None;
         g.sideobj_kind = 0;
-        advance_world();
+        consume_action();
         return;
     }
     if (Entity* env = entity_at(nx, ny, g.cur_zone, EType::Envoy)) {
@@ -2570,7 +2579,7 @@ void try_move(int dx, int dy) {
             g.log.push("'%d grains buys blindness. You carry %d. Return heavier.'",
                        bribe, g.pl.spice);
         }
-        advance_world();
+        consume_action();
         return;
     }
     // NPCs are click-to-talk now: a bump just blocks (no menu). Interaction is
@@ -2605,7 +2614,7 @@ void try_move(int dx, int dy) {
         g.noise.add(nx, ny, victim->type == EType::Spotter ? 4 : 12);  // blades are quiet
         if (dealt == 0) {
             g.log.push("Your blade whispers past. A miss.");
-            advance_world();
+            consume_action();
             return;
         }
         victim->hp -= int16_t(dealt);
@@ -2643,7 +2652,7 @@ void try_move(int dx, int dy) {
                 *victim = Entity{EType::Corpse, Ai::Idle, uint8_t(g.cur_zone),
                                  victim->x, victim->y, 0, 0, 400};
                 end_season(campaign::kVictory);
-                advance_world();
+                consume_action();
                 return;
             }
             switch (victim->type) {
@@ -2712,7 +2721,7 @@ void try_move(int dx, int dy) {
                        victim->type == EType::Hound ? "the dust hound" :
                        victim->type == EType::Trooper ? "the trooper" : "the spotter");
         }
-        advance_world();
+        consume_action();
         return;
     }
 
@@ -2733,13 +2742,13 @@ void try_move(int dx, int dy) {
     if (entity_at(nx, ny, g.cur_zone, EType::Corpse))
         g.log.push("A corpse lies here. G harvests its water.");
 
-    if (g.pl.free_moves > 0) {  // Threadwalk: the world holds its breath
+    if (g.pl.free_moves > 0) {  // Threadwalk: two fast strides outside the cooldown
         --g.pl.free_moves;
         refresh_fov_and_paths();
-        return;
+        return;  // no cooldown consumed — the free stride is instant
     }
-    advance_world();
-    if (g.pl.sandwalk && !g.pl.dead) advance_world();  // slow, broken rhythm
+    consume_action();
+    // RT1.2: sandwalk is now a slower glide (kGlideStepSandwalk), not a double world-tick.
 }
 
 void place_glowglobe() {
@@ -2749,7 +2758,7 @@ void place_glowglobe() {
         globe->type = EType::None;
         ++g.pl.glowglobes;
         g.log.push("You pocket the glowglobe.");
-        advance_world();
+        consume_action();
         return;
     }
     if (g.pl.glowglobes <= 0) {
@@ -2763,7 +2772,7 @@ void place_glowglobe() {
     --g.pl.glowglobes;
     g.log.push("The glowglobe rises and burns steady. A pool of light.");
     g.services.mixer->push({audio::Cmd::PlaySfx, 1, 140, 150});
-    advance_world();
+    consume_action();
 }
 
 void place_thumper() {
@@ -2783,7 +2792,7 @@ void place_thumper() {
     --g.pl.thumpers;
     g.log.push("Thumper planted. lump... lump... lump...");
     g.services.mixer->push({audio::Cmd::PlaySfx, 1, 180, 70});
-    advance_world();
+    consume_action();
 }
 
 bool player_adjacent_op() {
@@ -2817,7 +2826,7 @@ void try_plant() {
         add_flash(g.op.x, g.op.y, 10, 31, 3);  // fireball light
         op_denied("The crawler blossoms into fire and shrapnel.");
     }
-    advance_world();
+    consume_action();
 }
 
 void try_poison() {
@@ -2836,7 +2845,7 @@ void try_poison() {
     --g.pl.poisons;
     g.op.poisoned = true;
     g.log.push("You slip the toxin into the hold. No one sees a thing.");
-    advance_world();
+    consume_action();
 }
 
 void try_harvest() {
@@ -2849,7 +2858,7 @@ void try_harvest() {
         g.op.stolen = true;
         g.noise.add(p.x, p.y, 8);
         g.log.push("You scoop raw spice from the hold. +5 grains.");
-        advance_world();
+        consume_action();
         return;
     }
     if (Entity* drop = entity_at(p.x, p.y, g.cur_zone, EType::Loot)) {
@@ -2862,7 +2871,7 @@ void try_harvest() {
                 g.log.push("Taken: %s (I to equip).", nm);
                 drop->type = EType::None;
                 g.services.mixer->push({audio::Cmd::PlaySfx, 1, 150, 140});
-                advance_world();
+                consume_action();
                 return;
             }
         g.log.push("Your pack is full. Bank gear at the Naib's vault.");
@@ -2875,7 +2884,7 @@ void try_harvest() {
         cache->type = EType::None;
         g.noise.add(p.x, p.y, 6);
         g.services.mixer->push({audio::Cmd::PlaySfx, 1, 150, 140});
-        advance_world();
+        consume_action();
         return;
     }
     if (Entity* c = entity_at(p.x, p.y, g.cur_zone, EType::Corpse)) {
@@ -2885,7 +2894,7 @@ void try_harvest() {
         g.log.push("The deathstill takes its due. +%d water.", int(c->data));
         c->type = EType::None;
         g.services.mixer->push({audio::Cmd::PlaySfx, 1, 150, 140});
-        advance_world();
+        consume_action();
     } else {
         g.log.push("Nothing to harvest here.");
     }
@@ -3040,14 +3049,14 @@ void use_door() {
     if (g.cur_node == 0) {
         g.log.push("You drink deep of the Water. Muad'Dib's vision takes you.");
         begin_run();
-        advance_world();
+        refresh_fov_and_paths();  // RT1.2: settle FOV/paths after entering the run
         return;
     }
     const int nxt = g.graph.forward(g.cur_node);
     if (nxt < 0) {
         g.log.push("The vision recedes; you wake in the sietch.");
         enter_node(0);
-        advance_world();
+        refresh_fov_and_paths();  // RT1.2: settle FOV/paths after the transition
         return;
     }
     // B2b: at a forward door the vision reveals gear; the Revelation pick then advances to `nxt`.
@@ -3551,14 +3560,23 @@ bool game_update(const InputState& in) {
         return true;
     }
 
-    // a fresh press moves at once; a held key re-steps as the glide lands
+    // RT1.2: the world advances on its own real-time cadence, independent of player input.
+    // Menus / dead / choosing / revelation all returned above, so we only reach here in live
+    // play. A world step fires every kWorldStepTicks sim-ticks — enemies act and time passes
+    // even while the player stands still. This is what makes the game real-time.
+    if (++g.world_accum >= tune::kWorldStepTicks) {
+        g.world_accum -= tune::kWorldStepTicks;
+        world_tick();
+    }
+    if (g.pl.dead || g.season.ending != campaign::kNone) return true;  // world_tick may have ended the run
+
     if (in.was_pressed(Key::Map)) g.show_map = !g.show_map;  // A5: toggle the minimap
 
-    const bool can_continue = glide_done(player_ent());
-    auto move_input = [&](Key k) {
-        return in.was_pressed(k) ||
-               (in.is_down(k) && can_continue && in.held_ticks[int(k)] >= tune::kHeldStepFloor);
-    };
+    // RT1.2: player grid-actions are rate-limited by the action cooldown (sim-clock based), NOT by
+    // the glide animation. Fast input can't speed the world (it's on a timer); standing still can't
+    // freeze it. `ready` gates every action below; glide (vpx/vpy) stays purely cosmetic.
+    const bool ready = player_ready();
+    auto move_input = [&](Key k) { return ready && (in.was_pressed(k) || in.is_down(k)); };
     int dx = 0, dy = 0;
 
     // PoE2 screen-relative WASD: compose an 8-way tile step from the four keys so
@@ -3566,17 +3584,10 @@ bool game_update(const InputState& in) {
     // dx = sign(Sx+Sy), dy = sign(Sy-Sx), for screen intent (Sx, Sy).
     const int wsx = (in.is_down(Key::WalkRight) ? 1 : 0) - (in.is_down(Key::WalkLeft) ? 1 : 0);
     const int wsy = (in.is_down(Key::WalkDown) ? 1 : 0) - (in.is_down(Key::WalkUp) ? 1 : 0);
-    if (wsx || wsy) {
-        int held = 0;
-        for (Key k : {Key::WalkUp, Key::WalkDown, Key::WalkLeft, Key::WalkRight})
-            if (in.is_down(k) && in.held_ticks[int(k)] > held) held = in.held_ticks[int(k)];
-        const bool fresh = in.was_pressed(Key::WalkUp) || in.was_pressed(Key::WalkDown) ||
-                           in.was_pressed(Key::WalkLeft) || in.was_pressed(Key::WalkRight);
-        if (fresh || (can_continue && held >= tune::kHeldStepFloor)) {
-            const int tdx = wsx + wsy, tdy = wsy - wsx;
-            dx = tdx > 0 ? 1 : tdx < 0 ? -1 : 0;
-            dy = tdy > 0 ? 1 : tdy < 0 ? -1 : 0;
-        }
+    if ((wsx || wsy) && ready) {  // RT1.2: cooldown-gated, not glide-gated
+        const int tdx = wsx + wsy, tdy = wsy - wsx;
+        dx = tdx > 0 ? 1 : tdx < 0 ? -1 : 0;
+        dy = tdy > 0 ? 1 : tdy < 0 ? -1 : 0;
     }
     if (!dx && !dy) {  // classic tile-cardinal keys (arrows / numpad / headless tests)
         if (move_input(Key::Up)) { dy = -1; }
@@ -3622,7 +3633,7 @@ bool game_update(const InputState& in) {
         else try_move(dx, dy);
     }
     else if (g.move_goal_x >= 0) {
-        if (can_continue) {
+        if (ready) {
             const Entity& p = player_ent();
             if ((p.x == g.move_goal_x && p.y == g.move_goal_y) ||
                 !click_step_toward(g.move_goal_x, g.move_goal_y))
@@ -3662,16 +3673,16 @@ bool game_update(const InputState& in) {
             }
         }
     }
-    else if (in.pressed_or_repeat(Key::Wait)) advance_world();
-    else if (in.was_pressed(Key::Ride)) try_ride();
+    else if (in.pressed_or_repeat(Key::Wait)) { /* RT1.2: hold position; the world advances on its own */ }
+    else if (ready && in.was_pressed(Key::Ride)) try_ride();
     else if (in.was_pressed(Key::Powers)) { g.menu_open = 4; g.menu_sel = 0; }
     else if (in.was_pressed(Key::Inventory)) { g.menu_open = 6; g.menu_sel = 0; }
     else if (in.was_pressed(Key::Character)) { g.menu_open = 5; g.menu_sel = 0; }
-    else if (in.was_pressed(Key::Harvest)) try_harvest();
-    else if (in.was_pressed(Key::Thumper)) place_thumper();
-    else if (in.was_pressed(Key::Glowglobe)) place_glowglobe();
-    else if (in.was_pressed(Key::Plant)) try_plant();
-    else if (in.was_pressed(Key::Poison)) try_poison();
+    else if (ready && in.was_pressed(Key::Harvest)) try_harvest();
+    else if (ready && in.was_pressed(Key::Thumper)) place_thumper();
+    else if (ready && in.was_pressed(Key::Glowglobe)) place_glowglobe();
+    else if (ready && in.was_pressed(Key::Plant)) try_plant();
+    else if (ready && in.was_pressed(Key::Poison)) try_poison();
     else if (in.was_pressed(Key::Sandwalk)) {
         g.pl.sandwalk = !g.pl.sandwalk;
         g.log.push(g.pl.sandwalk ? "You break your rhythm. Walk without wormsign."
@@ -4824,6 +4835,7 @@ void game_serialize(SaveWriter& w) {
     w.i32(g.pl.litany_turns);
     w.i32(g.pl.litany_day);
     w.i32(g.pl.free_moves);
+    w.u32(g.pl.next_act_tick);  // RT1.2: player action cooldown
     w.i32(g.quest_kind);
     w.i32(g.quest_need);
     w.i32(g.quest_progress);
@@ -4905,6 +4917,7 @@ bool game_deserialize(SaveReader& r) {
     pl.litany_turns = r.i32();
     pl.litany_day = r.i32();
     pl.free_moves = r.i32();
+    pl.next_act_tick = r.u32();  // RT1.2: player action cooldown
     const int quest_kind = r.i32();
     const int quest_need = r.i32();
     const int quest_progress = r.i32();
@@ -5370,6 +5383,10 @@ uint64_t game_state_hash() {
     mix(uint64_t(uint32_t(g.pl.water)));
     mix(uint64_t(uint32_t(g.pl.exposure)));
     mix(uint64_t(uint32_t(g.pl.turn)));
+    // RT1.2: the real-time clock, world-step accumulator, and player action cooldown now vary
+    // independently of the turn count, so they are part of the hashed sim state.
+    mix(uint64_t(g.sim_clock) | (uint64_t(uint32_t(g.world_accum)) << 32));
+    mix(uint64_t(uint32_t(g.pl.next_act_tick)));
     mix(uint64_t(uint32_t(g.pl.shield)) | (uint64_t(uint32_t(g.pl.shield_delay)) << 32));  // C2
     mix(uint64_t(uint32_t(g.pl.will)));  // D1
     mix(uint64_t(uint32_t(g.pl.ail_poison_dmg)) | (uint64_t(uint32_t(g.pl.ail_poison_turns)) << 32));  // C3
@@ -5387,6 +5404,7 @@ uint64_t game_state_hash() {
         mix(uint64_t(uint8_t(e.type)) | (uint64_t(e.zone) << 8) |
             (uint64_t(uint16_t(e.x)) << 16) | (uint64_t(uint16_t(e.y)) << 32) |
             (uint64_t(uint16_t(e.hp)) << 48));
+        mix(uint64_t(uint16_t(e.energy)));  // RT1.2: energy advances on the world clock, now hashed
     }
     mix(g.rng.world.state);
     mix(g.rng.combat.state);

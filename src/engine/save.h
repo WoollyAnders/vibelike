@@ -7,7 +7,7 @@
 #include <vector>
 
 inline constexpr uint32_t kSaveMagic = 0x54535544;  // 'DUST'
-inline constexpr uint16_t kSaveVersion = 11;  // v11: RT1 sim clock (real-time conversion groundwork)
+inline constexpr uint16_t kSaveVersion = 12;  // v12: RT1.2 player action cooldown (real-time world tick)
 
 class SaveWriter {
 public:
