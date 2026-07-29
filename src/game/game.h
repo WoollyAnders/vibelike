@@ -90,4 +90,6 @@ void game_debug_derived(int* max_hp, int* leth, int* max_shield, int* max_will,
 void game_debug_roll_item(int ilvl, int rarity_bonus, int slot,
                           int* rarity, int* naffix, int* max_tier);  // D1: roll + report
 int game_debug_meta_migrate_selftest();  // D1: DME3->DME4 vault back-compat self-test
+void game_debug_poison_player(int dmg, int turns);  // C3: apply a poison ailment to the player
+int game_debug_enemy_poison_turns();  // C3: poison turns on the first spawned ShieldTrooper
 int game_debug_item_name(int where, int idx, char* out, int cap);  // G2: where 0=inv 1=equip

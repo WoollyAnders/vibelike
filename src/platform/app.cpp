@@ -593,6 +593,66 @@ int run_affixtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cm
     return pass ? 0 : 1;
 }
 
+// C3: the combat-poison ailment — the player inflicts it via AK_POISON, and Toxin Resistance
+// mitigates it when an enemy inflicts it on the player. Activates D1's inert AK_POISON + AK_RES_TOX.
+int run_ailmenttest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(777, services);
+    InputState in;
+    auto tick_with = [&](Key k) { in.pressed[int(k)] = true; game_update(in); in.end_tick(); };
+    auto wait = [&]() { in.pressed[int(Key::Wait)] = true; game_update(in); in.end_tick(); };
+
+    // (A) player inflicts Poison via AK_POISON on a landed hit -> enemy takes a DoT.
+    // (mirror rpgtest's warm-up: an initial warp + a tick settles the resident zone before spawns.)
+    game_debug_equip_affix(int(items::AK_POISON), 60);
+    game_debug_warp(1, 30, 30);
+    tick_with(Key::Sandwalk);
+    int hp0 = -1;
+    for (int sx = 18; sx <= 46 && hp0 <= 0; sx += 4) {  // find a spot where a bulwark can spawn adjacent
+        game_debug_warp(1, sx, 30);
+        game_debug_clear_hostiles();  // isolate the bulwark from zone wildlife
+        game_debug_spawn_shield_adjacent(&hp0);
+    }
+    int guard = 0;
+    while (game_debug_enemy_poison_turns() <= 0 && game_debug_shield_hp() > 0 && guard++ < 40) {
+        game_debug_refill();
+        tick_with(Key::Right);  // attack the adjacent bulwark until a hit lands + poisons it
+    }
+    const bool inflicted = game_debug_enemy_poison_turns() > 0;
+    const int hp_a = game_debug_shield_hp();
+    wait(); wait();  // poison ticks on the enemy
+    const bool enemy_dot = game_debug_shield_hp() < hp_a;  // hp dropped (or enemy gone -> -1)
+
+    // (B) enemy inflicts Poison on the player; Toxin Resistance cuts the ticks.
+    game_debug_clear_hostiles();
+    int hp = 0;
+    game_debug_equip_affix(int(items::AK_POISON), 0);  // clean carrier, NO resistance
+    game_debug_refill();
+    game_debug_player_stats(&hp, nullptr, nullptr, nullptr, nullptr, nullptr);
+    const int start_noR = hp;
+    game_debug_poison_player(5, 3);
+    for (int i = 0; i < 3; ++i) wait();
+    game_debug_player_stats(&hp, nullptr, nullptr, nullptr, nullptr, nullptr);
+    const int lost_noR = start_noR - hp;
+
+    game_debug_equip_affix(int(items::AK_RES_TOX), 60);  // 60% Toxin Resistance
+    game_debug_refill();
+    game_debug_player_stats(&hp, nullptr, nullptr, nullptr, nullptr, nullptr);
+    const int start_R = hp;
+    game_debug_poison_player(5, 3);
+    for (int i = 0; i < 3; ++i) wait();
+    game_debug_player_stats(&hp, nullptr, nullptr, nullptr, nullptr, nullptr);
+    const int lost_R = start_R - hp;
+
+    const bool resisted = lost_noR > 0 && lost_R < lost_noR;
+    const bool pass = inflicted && enemy_dot && resisted;
+    int px = 0, py = 0; game_debug_player_pos(&px, &py);
+    std::printf("ailmenttest %s (spawn_hp0 %d pl(%d,%d) inflicted %d enemy_dot %d[%d->%d] poison_lost noR %d vs res %d)\n",
+                pass ? "PASS" : "FAIL", hp0, px, py, inflicted, enemy_dot, hp_a, game_debug_shield_hp(),
+                lost_noR, lost_R);
+    return pass ? 0 : 1;
+}
+
 // D1: a legacy DME3 vault converts to DME4 without losing banked items or the wallet.
 int run_metamigratetest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
     (void)assets; (void)cmaps; (void)mixer;
@@ -1022,7 +1082,7 @@ int main(int argc, char** argv) {
          campaigntest = false, dettest = false, ridetest = false, animdebug = false,
          circledemo = false, fightdemo = false, rpgtest = false, clicktest = false,
          reveltest = false, gauntlettest = false, extractiontest = false, metatest = false,
-         statmodtest = false, affixtest = false, metamigratetest = false;
+         statmodtest = false, affixtest = false, metamigratetest = false, ailmenttest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
         if (SDL_strcmp(argv[i], "--seamtest") == 0) seamtest = true;
@@ -1038,6 +1098,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--statmodtest") == 0) statmodtest = true;
         if (SDL_strcmp(argv[i], "--affixtest") == 0) affixtest = true;
         if (SDL_strcmp(argv[i], "--metamigratetest") == 0) metamigratetest = true;
+        if (SDL_strcmp(argv[i], "--ailmenttest") == 0) ailmenttest = true;
         if (SDL_strcmp(argv[i], "--campaigntest") == 0) campaigntest = true;
         if (SDL_strcmp(argv[i], "--dettest") == 0) dettest = true;
         if (SDL_strcmp(argv[i], "--ridetest") == 0) ridetest = true;
@@ -1074,6 +1135,7 @@ int main(int argc, char** argv) {
     if (statmodtest) return run_statmodtest(mixer, assets, cmaps);
     if (affixtest) return run_affixtest(mixer, assets, cmaps);
     if (metamigratetest) return run_metamigratetest(mixer, assets, cmaps);
+    if (ailmenttest) return run_ailmenttest(mixer, assets, cmaps);
     if (campaigntest) return run_campaigntest(mixer, assets, cmaps);
     if (dettest) return run_dettest(mixer, assets, cmaps);
     if (ridetest) return run_ridetest(mixer, assets, cmaps);
