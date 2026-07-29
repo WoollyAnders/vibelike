@@ -393,11 +393,26 @@ is now a bulwark (higher armor/hp). `shieldtest` retired, **`focustest`** added
 (soak → recharge → spill). Full SDL suite green; dettest rebaselined
 `d9a06b6d27ca7e33` (confirmed via the SDL-free spike too).
 
-### C3 — Base classes + branching ascendancies (PoE-style) ⬜
+### C3 — Base classes + branching ascendancies (PoE-style) ✅ *(core; ascendancy talent tree + in-game rite UI deferred)*
 **Reworked (2026-07-29) — approved design:** three *basic* Fremen **base classes** (one per
 attribute) that **ascend** into one of **three ascendancies** each (PoE base→ascendancy, branching).
 Shared Will fuel. Full design record: the approved plan
 `/root/.claude/plans/this-project-is-to-nested-planet.md`.
+
+**BUILT (2026-07-29, on main):** `enum class Background`→`BaseClass {Knifehand, Wanderer, Oracle}`
+(ordinals preserved) + `Ascendancy {None, Fedaykin, DesertGhost, WaterReaver, Saboteur, Wayfinder,
+Sunwalker, Sayyadina, ReverendMother, Spiceweaver}`; `apply_background`→`apply_base_class` (base
+kits: Wanderer=tools, Oracle=spice/water, Knifehand=plain blade); char-create picks a base.
+`ascend()` = the rite: **Awaken-gated** (`awaken_unlocked >= 2`) + **base-matched** (`kAscendancyBase`)
++ once + **persists across death** (meta `DME4→DME5`, save `v13→v14`, both back-compat; base class +
+ascendancy hashed). **Ascendancy on-hit ailment SOURCES wired** (the offense half of the two-way
+system): Sunwalker→Scorch, WaterReaver→Bleed, Sayyadina→Poison(mastery), DesertGhost→Blind,
+ReverendMother→Freeze(scaled), Fedaykin→innate Block; Saboteur/Wayfinder/Spiceweaver await
+traps/ranged/abilities (C6/C7). New `classtest`; full 21-test suite green; dettest rebaselined
+`f445f960b04db58d`. **Deferred:** the ascendancy *talent tree* (its own system, nodes "as we go")
+and the in-game sietch-rite *UI trigger* (UI phase) — ascension is mechanic+debug-hook for now.
+**Still open (enemy side):** the enemy-element roll that inflicts ailments on the player so gear
+resistances matter defensively (Stun is already two-way; elemental enemy sources are next).
 
 **Groundwork IMPLEMENTED (2026-07-29, on main):** (1) **combat-ailment system — the DoT family
 (Poison / Scorch / Bleed) is done.** Per-entity + per-player timers; ticked each world turn via

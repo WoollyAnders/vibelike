@@ -105,4 +105,9 @@ int game_debug_stun_chance(int hit_dmg, int max_life, int mult, int reduce);  //
 void game_debug_stun_player(int ticks);  // RT2: force a Stun on the player
 int game_debug_player_stun_turns();      // RT2: player's remaining Stun ticks
 int game_debug_player_ready();           // RT2: 1 if the player may act (not frozen/stunned/on cooldown)
+void game_debug_apply_base(int bc);      // C3: set the base class (classtest)
+void game_debug_class(int* base, int* asc);           // C3: read live base class + ascendancy
+void game_debug_unlock_awaken(int lvl);  // C3: set meta awaken_unlocked (gate the rite)
+int game_debug_ascend(int asc);          // C3: ascend into ascendancy `asc` (1 = success)
+void game_debug_meta_reload_class(int* base, int* asc);  // C3: reload meta.dat + report persisted class
 int game_debug_item_name(int where, int idx, char* out, int cap);  // G2: where 0=inv 1=equip

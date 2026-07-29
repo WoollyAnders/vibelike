@@ -94,21 +94,39 @@ constexpr const char* kFremenBarks[] = {
     "\"Shai-Hulud stirs in the deep bled. Best you not wake Him.\"",
 };
 
-enum class Background : uint8_t { Fedaykin = 0, Saboteur, Sayyadina, Count };
+// C3: three basic Fremen BASE CLASSES (one per attribute); each ASCENDS at a sietch rite into one
+// of its three ascendancies (PoE base->ascendancy, branching). Base ordinals are preserved from the
+// old Background enum (Knifehand<-Fedaykin, Wanderer<-Saboteur, Oracle<-Sayyadina) so the hash/save
+// value for the base is unchanged. Fedaykin/Saboteur/Sayyadina are now ASCENDANCIES, not bases.
+enum class BaseClass : uint8_t { Knifehand = 0, Wanderer, Oracle, Count };
+enum class Ascendancy : uint8_t {
+    None = 0,
+    Fedaykin, DesertGhost, WaterReaver,      // Knifehand (Conditioning)
+    Saboteur, Wayfinder, Sunwalker,          // Wanderer  (Versatility)
+    Sayyadina, ReverendMother, Spiceweaver,  // Oracle    (Awareness)
+    Count
+};
+// The base each ascendancy belongs to (index by Ascendancy; None -> 0xFF). Gates valid ascensions.
+constexpr uint8_t kAscendancyBase[int(Ascendancy::Count)] = {0xFF, 0, 0, 0, 1, 1, 1, 2, 2, 2};
+constexpr const char* kAscendancyNames[int(Ascendancy::Count)] = {
+    "None", "Fedaykin", "Desert Ghost", "Water Reaver",
+    "Saboteur", "Wayfinder", "Sunwalker",
+    "Sayyadina", "Reverend Mother", "Spiceweaver",
+};
 
-struct BackgroundDef {
+struct BaseClassDef {
     const char* name;
     const char* sprite;
     const char* blurb1;
     const char* blurb2;
 };
-constexpr BackgroundDef kBackgrounds[] = {
-    {"FEDAYKIN", "player_fedaykin",
-     "Death commando of the inner sietch.", "Crysknife-trained: strikes hit harder."},
-    {"SABOTEUR", "player_saboteur",
-     "Quiet hands, loud results.", "Extra charges, toxin and thumpers."},
-    {"SAYYADINA-TOUCHED", "player_sayyadina",
-     "The spice has opened one eye.", "Carries spice; the desert drinks slower."},
+constexpr BaseClassDef kBaseClasses[] = {
+    {"KNIFEHAND", "player_fedaykin",
+     "Fremen blade, close and certain.", "Ascends: Fedaykin / Desert Ghost / Water Reaver."},
+    {"WANDERER", "player_saboteur",
+     "Sietch outrider of tools and traps.", "Ascends: Saboteur / Wayfinder / Sunwalker."},
+    {"ORACLE", "player_sayyadina",
+     "The spice has opened one eye.", "Ascends: Sayyadina / Reverend Mother / Spiceweaver."},
 };
 
 // X3: talents — three branches, three talents each, ranks 0..3.
@@ -176,23 +194,25 @@ struct Player {
     int litany_day = -1;       // last day the Litany was spoken
     int free_moves = 0;        // Threadwalk strides (no world advance)
     uint32_t next_act_tick = 0;  // RT1.2: earliest sim_clock at which the player may act again (cooldown)
-    Background background = Background::Fedaykin;
+    BaseClass base_class = BaseClass::Knifehand;  // C3: the chosen base (one per attribute)
+    Ascendancy ascendancy = Ascendancy::None;     // C3: granted at the sietch rite; persists
     bool sandwalk = false;
     bool dead = false;
 };
 
-void apply_background(Player& pl, Background bg) {
-    pl.background = bg;
-    switch (bg) {
-        case Background::Fedaykin:
-            // C3: classes start with 0 additional attributes — no starting stat bonus.
+void apply_base_class(Player& pl, BaseClass bc) {
+    pl.base_class = bc;
+    pl.ascendancy = Ascendancy::None;  // ascension happens later, at the sietch rite
+    switch (bc) {
+        case BaseClass::Knifehand:
+            // the plain blade — baseline kit (C3: 0 additional attributes for every class)
             break;
-        case Background::Saboteur:
+        case BaseClass::Wanderer:
             pl.charges = 3;
             pl.poisons = 2;
             pl.thumpers = 5;
             break;
-        case Background::Sayyadina:
+        case BaseClass::Oracle:
             pl.spice = 10;
             pl.water = tune::kStartWater + 200;
             break;
@@ -957,9 +977,13 @@ struct Meta {
     CharStats st;                  // persistent level / attributes / talents / xp
     items::Inst equip[int(items::Slot::Count)];
     items::Inst inv[12];
+    // --- C3 (DME5) --- base class + ascendancy persist across death (character identity)
+    uint8_t base_class = 0;        // BaseClass
+    uint8_t ascendancy = 0;        // Ascendancy (0 = None until the rite)
 };
 Meta g_meta;
 
+inline constexpr uint32_t kMetaV5 = 0x35454D44u;  // 'DME5' (C3: + base class / ascendancy)
 inline constexpr uint32_t kMetaV4 = 0x34454D44u;  // 'DME4' (D1: widened Inst)
 inline constexpr uint32_t kMetaV3 = 0x33454D44u;  // 'DME3'
 inline constexpr uint32_t kMetaV2 = 0x32454D44u;  // 'DME2'
@@ -990,7 +1014,7 @@ void meta_load() {
     if (!f) return;
     uint32_t magic = 0;
     if (std::fread(&magic, 4, 1, f) == 1) {
-        if (magic == kMetaV4) {  // native widened-Inst format
+        if (magic == kMetaV5 || magic == kMetaV4) {  // native widened-Inst format (V5 = + class fields)
             (void)!std::fread(&g_meta.runs, 4, 1, f);
             (void)!std::fread(&g_meta.endings_seen, 1, 1, f);
             (void)!std::fread(&g_meta.stash_count, 1, 1, f);
@@ -1002,6 +1026,10 @@ void meta_load() {
             (void)!std::fread(&g_meta.st, sizeof g_meta.st, 1, f);
             (void)!std::fread(g_meta.equip, sizeof g_meta.equip, 1, f);
             (void)!std::fread(g_meta.inv, sizeof g_meta.inv, 1, f);
+            if (magic == kMetaV5) {  // C3: base class + ascendancy (DME4 leaves them at 0/None)
+                (void)!std::fread(&g_meta.base_class, 1, 1, f);
+                (void)!std::fread(&g_meta.ascendancy, 1, 1, f);
+            }
         } else if (magic == kMetaV3 || magic == kMetaV2) {  // legacy 4-byte items -> convert
             (void)!std::fread(&g_meta.runs, 4, 1, f);
             (void)!std::fread(&g_meta.endings_seen, 1, 1, f);
@@ -1032,7 +1060,7 @@ void meta_load() {
 void meta_save() {
     FILE* f = std::fopen("meta.dat", "wb");
     if (!f) return;
-    std::fwrite(&kMetaV4, 4, 1, f);
+    std::fwrite(&kMetaV5, 4, 1, f);
     std::fwrite(&g_meta.runs, 4, 1, f);
     std::fwrite(&g_meta.endings_seen, 1, 1, f);
     std::fwrite(&g_meta.stash_count, 1, 1, f);
@@ -1044,6 +1072,8 @@ void meta_save() {
     std::fwrite(&g_meta.st, sizeof g_meta.st, 1, f);
     std::fwrite(g_meta.equip, sizeof g_meta.equip, 1, f);
     std::fwrite(g_meta.inv, sizeof g_meta.inv, 1, f);
+    std::fwrite(&g_meta.base_class, 1, 1, f);  // C3 (DME5)
+    std::fwrite(&g_meta.ascendancy, 1, 1, f);  // C3 (DME5)
     std::fclose(f);
 }
 
@@ -1051,9 +1081,25 @@ void meta_save() {
 void persist_character() {
     g_meta.has_char = 1;
     g_meta.st = g.pl.st;
+    g_meta.base_class = uint8_t(g.pl.base_class);   // C3: class identity survives death
+    g_meta.ascendancy = uint8_t(g.pl.ascendancy);
     std::memcpy(g_meta.equip, g.pl.equip, sizeof g_meta.equip);
     std::memcpy(g_meta.inv, g.pl.inv, sizeof g_meta.inv);
     meta_save();
+}
+
+// C3: the sietch rite of passage. Gated by the Awaken ladder (you must have proven yourself once —
+// awaken_unlocked >= 2), and the chosen ascendancy must belong to your base class. You ascend once;
+// it persists across death (character identity). Returns true on success.
+bool can_ascend() { return g.pl.ascendancy == Ascendancy::None && g_meta.awaken_unlocked >= 2; }
+bool ascend(Ascendancy asc) {
+    if (!can_ascend()) return false;
+    if (int(asc) <= 0 || int(asc) >= int(Ascendancy::Count)) return false;
+    if (kAscendancyBase[int(asc)] != uint8_t(g.pl.base_class)) return false;  // must match the base
+    g.pl.ascendancy = asc;
+    g.log.push("The sietch names you: %s.", kAscendancyNames[int(asc)]);
+    persist_character();  // the naming survives death
+    return true;
 }
 
 void grant_xp(int amount) {
@@ -1498,12 +1544,15 @@ uint8_t res_kind_for(DmgType t) {
     }
 }
 
+// C3: Fedaykin (Knifehand tank ascendancy) — innate Block on top of any gear Block.
+int ascendancy_block() { return g.pl.ascendancy == Ascendancy::Fedaykin ? 15 : 0; }
+
 void damage_player(int dmg, const char* cause, DmgType type = DT_PHYS) {
     g.pl.shield_delay = tune::kShieldRechargeDelay;  // any hit pauses the shield recharge
-    // Block: enemy physical only — a chance to turn the blow entirely. (No draw unless geared, so
-    // determinism baselines are unaffected for characters without a block affix.)
+    // Block: enemy physical only — a chance to turn the blow entirely. (No draw unless geared/
+    // Fedaykin, so determinism baselines are unaffected for a plain character.)
     if (type == DT_PHYS) {
-        const int blk = affix_total(items::AK_BLOCK);
+        const int blk = affix_total(items::AK_BLOCK) + ascendancy_block();
         if (blk > 0 && int(g.rng.combat.below(100)) < blk) { flash(180, 180, 60); return; }
     }
     // Resistance (typed hazards): reduce by the matching resist, 75% cap.
@@ -1627,6 +1676,33 @@ void foe_hit_player(int dmg, const char* cause, DmgType type = DT_PHYS) {
     if (g.pl.dead || dmg <= 0) return;
     if (int st = roll_stun_ticks(dmg, player_max_hp(), 0, affix_total(items::AK_STUN_REDUCE)); st > 0)
         stun_player(st);
+}
+
+// C3: the player's ascendancy stamps its signature ailment on a landed melee hit — the OFFENSE
+// side of the two-way ailment system (gear resistances are the defense). Durations are seconds
+// (secs_to_ticks). Fedaykin (tank) + Saboteur/Wayfinder/Spiceweaver (traps/ranged/abilities — C6/C7)
+// have no on-hit ailment here.
+void apply_ascendancy_on_hit(Entity& victim, int dealt, const Foe* foe) {
+    if (victim.hp <= 0) return;
+    const int lvl = g.pl.st.level;
+    switch (g.pl.ascendancy) {
+        case Ascendancy::Sunwalker:       // Scorch (Heat DoT)
+            scorch_entity(victim, 1 + dealt / 3, tune::secs_to_ticks(2.0));
+            break;
+        case Ascendancy::WaterReaver:     // Bleed (bypasses armor)
+            bleed_entity(victim, 1 + dealt / 2, tune::secs_to_ticks(2.0));
+            break;
+        case Ascendancy::Sayyadina:       // Poison mastery (no AK_POISON needed)
+            poison_entity(victim, 1 + dealt / 3 + lvl / 4, tune::secs_to_ticks(2.5));
+            break;
+        case Ascendancy::DesertGhost:     // Storm -> Blind
+            blind_entity(victim, tune::secs_to_ticks(1.5));
+            break;
+        case Ascendancy::ReverendMother:  // Cold -> Freeze, scaled by the hit vs the foe's Life
+            if (foe) { const int ft = freeze_ticks_for(dealt, foe->hp); if (ft > 0) freeze_entity(victim, ft); }
+            break;
+        default: break;
+    }
 }
 // C3: DoT-afflicted enemies lose hp each world turn; a DoT kill leaves a corpse (water, no loot/xp).
 void tick_enemy_ailments() {
@@ -2703,6 +2779,7 @@ void try_move(int dx, int dy) {
                 g.log.push("Staggered!");
             }
         }
+        apply_ascendancy_on_hit(*victim, dealt, foe);  // C3: the ascendancy's signature ailment
         if (crit) g.log.push("CRIT - %d! The blade finds the seam.", dealt);
         else g.log.push("You hit for %d.", dealt);
         if (victim->hp <= 0) {
@@ -3010,6 +3087,8 @@ void game_init(uint64_t seed, const GameServices& services) {
     // meta.dat (the vault still loads for rpgtest; persistence WRITES still happen for a metatest).
     if (g_meta.has_char && services.interactive) {
         g.pl.st = g_meta.st;
+        g.pl.base_class = BaseClass(g_meta.base_class);   // C3: restore class identity
+        g.pl.ascendancy = Ascendancy(g_meta.ascendancy);
         std::memcpy(g.pl.equip, g_meta.equip, sizeof g.pl.equip);
         std::memcpy(g.pl.inv, g_meta.inv, sizeof g.pl.inv);
         g.pl.spice = g_meta.banked_spice;   // spendable wallet = the safe banked amount
@@ -3024,7 +3103,7 @@ void game_init(uint64_t seed, const GameServices& services) {
         g.pl.equip[int(items::Slot::Body)].def = 17;      // Patched Suit-body
         g.pl.equip[int(items::Slot::Pumps)].def = 22;     // Worn Heel-pumps
         g.choosing = services.interactive;
-        if (!g.choosing) apply_background(g.pl, Background::Fedaykin);
+        if (!g.choosing) apply_base_class(g.pl, BaseClass::Knifehand);
     }
     g.pl.hp = player_max_hp();
     g.pl.shield = player_max_shield();  // C2: begin a run with a full Focus shield
@@ -3069,7 +3148,7 @@ const anim::Set* anim_set_for(const Entity& e) {
     if (!g.services.anims) return nullptr;
     switch (e.type) {
         case EType::Player:
-            return g.services.anims->get(kBackgrounds[int(g.pl.background)].sprite);
+            return g.services.anims->get(kBaseClasses[int(g.pl.base_class)].sprite);
         case EType::Hound: return g.services.anims->get("hound");
         case EType::Trooper:
         case EType::ShieldTrooper: return g.services.anims->get("trooper");
@@ -3382,13 +3461,13 @@ bool game_update(const InputState& in) {
     if (g.fade > 0) g.fade -= 6;
 
     if (g.choosing) {
-        const int n = int(Background::Count);
+        const int n = int(BaseClass::Count);
         if (in.was_pressed(Key::Left)) g.choose_idx = (g.choose_idx + n - 1) % n;
         if (in.was_pressed(Key::Right)) g.choose_idx = (g.choose_idx + 1) % n;
         if (in.was_pressed(Key::Confirm)) {
-            apply_background(g.pl, Background(g.choose_idx));
+            apply_base_class(g.pl, BaseClass(g.choose_idx));
             g.choosing = false;
-            g.log.push("You are %s. The Tanzerouft waits.", kBackgrounds[g.choose_idx].name);
+            g.log.push("You are %s. The Tanzerouft waits.", kBaseClasses[g.choose_idx].name);
             flash(10, 10, 10);
         }
         return !in.was_pressed(Key::Cancel);
@@ -3954,7 +4033,7 @@ void pass_decor(RenderCtx& r) {
 // Entities: actors (and the surfaced worm), into the scene list.
 void pass_entities(RenderCtx& r) {
     const SpriteSheet* player_spr =
-        r.assets->get(kBackgrounds[int(g.pl.background)].sprite);
+        r.assets->get(kBaseClasses[int(g.pl.base_class)].sprite);
     if (!player_spr) player_spr = r.assets->get("player");
     const SpriteSheet* hound_spr = r.assets->get("hound");
     const SpriteSheet* corpse_spr = r.assets->get("corpse");
@@ -4432,21 +4511,21 @@ void pass_ui(RenderCtx& r) {
         draw_text_shadow(ctx, "D U S T F A L L", fb::W / 2 - 15 * kCh, 120, 230, 1);
         draw_text_shadow(ctx, "Choose your path", fb::W / 2 - 16 * kCh, 170, 24, 1);
 
-        const int n = int(Background::Count);
+        const int n = int(BaseClass::Count);
         set_draw_scale(1);  // R3: class portraits authored at native size, blit 1:1
         for (int i = 0; i < n; ++i) {
             const int cx = fb::W / 2 + (i - 1) * 320;
             const bool sel = i == g.choose_idx;
-            if (const SpriteSheet* spr = r.assets->get(kBackgrounds[i].sprite)) {
+            if (const SpriteSheet* spr = r.assets->get(kBaseClasses[i].sprite)) {
                 if (sel) fill_rect(ctx, cx - 90, 300, 180, 220, 3);
                 draw_sprite(ctx, *spr, (g.anim_tick / 9) % spr->frames, cx, 500,
                             sel ? 31 : 24);
             }
-            const int name_x = cx - int(std::strlen(kBackgrounds[i].name)) * kCh;
-            draw_text_shadow(ctx, kBackgrounds[i].name, name_x, 540, sel ? 245 : 12, 1);
+            const int name_x = cx - int(std::strlen(kBaseClasses[i].name)) * kCh;
+            draw_text_shadow(ctx, kBaseClasses[i].name, name_x, 540, sel ? 245 : 12, 1);
         }
         set_draw_scale(1);
-        const BackgroundDef& b = kBackgrounds[g.choose_idx];
+        const BaseClassDef& b = kBaseClasses[g.choose_idx];
         draw_text_shadow(ctx, b.blurb1, fb::W / 2 - int(std::strlen(b.blurb1)) * kCh, 640, 28, 1);
         draw_text_shadow(ctx, b.blurb2, fb::W / 2 - int(std::strlen(b.blurb2)) * kCh, 672, 230, 1);
         draw_text_shadow(ctx, "left/right choose   ENTER begin",
@@ -4917,7 +4996,8 @@ void game_serialize(SaveWriter& w) {
     w.i32(g.quest_kind);
     w.i32(g.quest_need);
     w.i32(g.quest_progress);
-    w.u8(uint8_t(g.pl.background));
+    w.u8(uint8_t(g.pl.base_class));   // C3
+    w.u8(uint8_t(g.pl.ascendancy));   // C3
     w.u8(g.pl.sandwalk ? 1 : 0);
     w.u8(g.pl.dead ? 1 : 0);
     w.u8(g.spawned_mask);
@@ -5000,7 +5080,8 @@ bool game_deserialize(SaveReader& r) {
     const int quest_kind = r.i32();
     const int quest_need = r.i32();
     const int quest_progress = r.i32();
-    pl.background = Background(r.u8());
+    pl.base_class = BaseClass(r.u8());   // C3
+    pl.ascendancy = Ascendancy(r.u8());  // C3
     pl.sandwalk = r.u8() != 0;
     pl.dead = r.u8() != 0;
     const uint8_t spawned = r.u8();
@@ -5250,6 +5331,20 @@ int game_debug_stun_chance(int hit_dmg, int max_life, int mult, int reduce) {
 void game_debug_stun_player(int ticks) { stun_player(ticks); }  // RT2: force a player Stun
 int game_debug_player_stun_turns() { return g.pl.ail_stun_turns; }
 int game_debug_player_ready() { return player_ready() ? 1 : 0; }  // RT2: is the player able to act?
+// C3: base class / ascendancy hooks (classtest).
+void game_debug_apply_base(int bc) { apply_base_class(g.pl, BaseClass(bc)); }
+void game_debug_class(int* base, int* asc) {
+    if (base) *base = int(g.pl.base_class);
+    if (asc) *asc = int(g.pl.ascendancy);
+}
+void game_debug_unlock_awaken(int lvl) { g_meta.awaken_unlocked = uint8_t(lvl); }  // gate the rite
+int game_debug_ascend(int asc) { return ascend(Ascendancy(asc)) ? 1 : 0; }
+void game_debug_meta_reload_class(int* base, int* asc) {  // prove the DME5 write->read round-trip
+    g_meta = Meta{};
+    meta_load();
+    if (base) *base = g_meta.base_class;
+    if (asc) *asc = g_meta.ascendancy;
+}
 void game_debug_shield_state(int* shield, int* max_shield, int* hp) {
     if (shield) *shield = g.pl.shield;
     if (max_shield) *max_shield = player_max_shield();
@@ -5491,7 +5586,8 @@ uint64_t game_state_hash() {
     mix(uint64_t(uint32_t(g.pl.ail_bleed_dmg)) | (uint64_t(uint32_t(g.pl.ail_bleed_turns)) << 32));    // C3
     mix(uint64_t(uint32_t(g.pl.ail_blind_turns)) | (uint64_t(uint32_t(g.pl.ail_frozen_turns)) << 32));  // C3
     mix(uint64_t(uint32_t(g.pl.ail_stun_turns)));  // RT2: Stun locks the player out
-    mix(uint64_t(uint8_t(g.pl.background)) | (uint64_t(uint32_t(g.pl.atk)) << 8));
+    mix(uint64_t(uint8_t(g.pl.base_class)) | (uint64_t(uint8_t(g.pl.ascendancy)) << 8) |
+        (uint64_t(uint32_t(g.pl.atk)) << 16));  // C3: base class + ascendancy
     mix(uint64_t(uint16_t(g.pl.st.level)) | (uint64_t(uint32_t(g.pl.st.xp)) << 16) |
         (uint64_t(uint16_t(g.pl.st.cond)) << 48));  // C1: Conditioning (was str)
     mix(uint64_t(uint32_t(g.season.shipped)) | (uint64_t(uint32_t(g.season.denied)) << 16) |

@@ -817,6 +817,45 @@ int run_stuntest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cma
     return pass ? 0 : 1;
 }
 
+// C3: base classes + branching ascendancies. Each base creates distinctly + unascended; the sietch
+// rite is Awaken-gated and base-matched, happens once, and the ascendancy persists across death
+// (meta.dat DME5 round-trip). Ascendancy enum: None=0, Fedaykin=1..DesertGhost=2..WaterReaver=3
+// (Knifehand); Saboteur=4..Wayfinder=5..Sunwalker=6 (Wanderer); Sayyadina=7.. (Oracle).
+int run_classtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    std::remove("meta.dat");  // fresh: awaken_unlocked == 1, no persisted character
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(777, services);
+
+    // (A) each base applies distinctly and starts unascended (Ascendancy::None == 0)
+    int b = -1, a = -1;
+    game_debug_apply_base(0); game_debug_class(&b, &a); const bool knifehand = b == 0 && a == 0;
+    game_debug_apply_base(1); game_debug_class(&b, &a); const bool wanderer  = b == 1 && a == 0;
+    game_debug_apply_base(2); game_debug_class(&b, &a); const bool oracle    = b == 2 && a == 0;
+
+    // (B) the rite is GATED by the Awaken ladder — a fresh character (unlocked 1) is refused
+    game_debug_apply_base(0);  // Knifehand
+    const bool gated = game_debug_ascend(1 /*Fedaykin*/) == 0;
+    game_debug_unlock_awaken(2);
+
+    // (C) you may only pick one of your base's ascendancies, and only once
+    const bool wrong_base = game_debug_ascend(6 /*Sunwalker: a Wanderer ascendancy*/) == 0;
+    const bool right = game_debug_ascend(1 /*Fedaykin*/) == 1;
+    game_debug_class(&b, &a); const bool ascended = a == 1;
+    const bool once = game_debug_ascend(2 /*Desert Ghost*/) == 0;  // already ascended -> refused
+
+    // (D) the ascendancy persists across death: ascend() saved meta; reload it and confirm
+    int mb = -1, ma = -1; game_debug_meta_reload_class(&mb, &ma);
+    const bool persisted = mb == 0 && ma == 1;  // Knifehand / Fedaykin survived write->read
+
+    const bool pass = knifehand && wanderer && oracle && gated && wrong_base && right &&
+                      ascended && once && persisted;
+    std::printf("classtest %s (bases %d/%d/%d gated %d wrongbase %d right %d asc %d once %d persist %d/%d)\n",
+                pass ? "PASS" : "FAIL", knifehand, wanderer, oracle, gated, wrong_base, right,
+                ascended, once, mb, ma);
+    std::remove("meta.dat");
+    return pass ? 0 : 1;
+}
+
 // D1: a legacy DME3 vault converts to DME4 without losing banked items or the wallet.
 int run_metamigratetest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
     (void)assets; (void)cmaps; (void)mixer;
@@ -1297,7 +1336,7 @@ int main(int argc, char** argv) {
          circledemo = false, fightdemo = false, rpgtest = false, clicktest = false,
          reveltest = false, gauntlettest = false, extractiontest = false, metatest = false,
          statmodtest = false, affixtest = false, metamigratetest = false, ailmenttest = false,
-         rttest = false, stuntest = false;
+         rttest = false, stuntest = false, classtest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
         if (SDL_strcmp(argv[i], "--seamtest") == 0) seamtest = true;
@@ -1318,6 +1357,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--dettest") == 0) dettest = true;
         if (SDL_strcmp(argv[i], "--rttest") == 0) rttest = true;
         if (SDL_strcmp(argv[i], "--stuntest") == 0) stuntest = true;
+        if (SDL_strcmp(argv[i], "--classtest") == 0) classtest = true;
         if (SDL_strcmp(argv[i], "--ridetest") == 0) ridetest = true;
         if (SDL_strcmp(argv[i], "--animdebug") == 0) animdebug = true;
         if (SDL_strcmp(argv[i], "--rpgtest") == 0) rpgtest = true;
@@ -1357,6 +1397,7 @@ int main(int argc, char** argv) {
     if (dettest) return run_dettest(mixer, assets, cmaps);
     if (rttest) return run_rttest(mixer, assets, cmaps);
     if (stuntest) return run_stuntest(mixer, assets, cmaps);
+    if (classtest) return run_classtest(mixer, assets, cmaps);
     if (ridetest) return run_ridetest(mixer, assets, cmaps);
     if (rpgtest) return run_rpgtest(mixer, assets, cmaps);
     if (reveltest) return run_reveltest(mixer, assets, cmaps);
