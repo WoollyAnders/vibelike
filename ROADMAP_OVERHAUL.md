@@ -399,11 +399,15 @@ attribute) that **ascend** into one of **three ascendancies** each (PoE base→a
 Shared Will fuel. Full design record: the approved plan
 `/root/.claude/plans/this-project-is-to-nested-planet.md`.
 
-**Groundwork IMPLEMENTED (2026-07-29, on main):** (1) **combat-ailment system, first slice = Poison**
-— `Entity.poison_dmg/turns` + `Player.ail_poison_*`; the player inflicts Poison via `AK_POISON` on a
-landed hit (activates D1's inert stat), enemies inflict it (hunter-seeker needle → `poison_player`),
-it ticks as `DT_TOX` so **Toxin Resistance** (`AK_RES_TOX`) mitigates it — the two-way loop is live
-for Poison; Scorch/Freeze/Blind/Bleed slot onto the same framework next. (2) **Mob HP** — added `hp`
+**Groundwork IMPLEMENTED (2026-07-29, on main):** (1) **combat-ailment system — the DoT family
+(Poison / Scorch / Bleed) is done.** Per-entity + per-player timers; ticked each world turn via
+`damage_player` with the matching `DmgType`: **Poison** (`AK_POISON` on hit; hunter-seeker inflicts
+it; `DT_TOX` → Toxin Resistance), **Scorch** (`DT_HEAT` → Heat Resistance), **Bleed** (`DT_BLEED` —
+physical, **bypasses armor AND the Focus shield**, only Fortitude/life mitigates). Two-way (player
+inflicts / enemies inflict); `ailmenttest` proves each mitigation. **Remaining:** the effect-based
+ailments **Blind** (accuracy debuff, Storm) and **Slow/Freeze** (turn control, Cold), plus in-game
+Scorch/Bleed *sources* (currently debug-hooked; the Sunwalker/Water-Reaver ascendancies + an
+enemy-element roll supply them). (2) **Mob HP** — added `hp`
 to `Foe` + `foe_hp(EType)` scaling by Awaken depth; all spawn sites use it (mobs were ~1–10 hp, now
 real/scaling). (3) **Class start = 0 additional attributes** (dropped the Fedaykin bonus) + **flat
 per-level Life & Will** (`kLifePerLevel`/`kWillPerLevel`, class-agnostic). New `ailmenttest`; suite

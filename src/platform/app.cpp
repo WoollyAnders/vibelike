@@ -623,7 +623,9 @@ int run_ailmenttest(audio::Mixer& mixer, const Assets& assets, const Colormaps& 
     wait(); wait();  // poison ticks on the enemy
     const bool enemy_dot = game_debug_shield_hp() < hp_a;  // hp dropped (or enemy gone -> -1)
 
-    // (B) enemy inflicts Poison on the player; Toxin Resistance cuts the ticks.
+    // (B) player-side ailments: reset to the sheltered sietch (indoors -> no exposure/thirst noise
+    // that would otherwise pollute the Life/shield deltas).
+    game_init(778, services);
     game_debug_clear_hostiles();
     int hp = 0;
     game_debug_equip_affix(int(items::AK_POISON), 0);  // clean carrier, NO resistance
@@ -645,11 +647,43 @@ int run_ailmenttest(audio::Mixer& mixer, const Assets& assets, const Colormaps& 
     const int lost_R = start_R - hp;
 
     const bool resisted = lost_noR > 0 && lost_R < lost_noR;
-    const bool pass = inflicted && enemy_dot && resisted;
+
+    // (C) Scorch (Heat DoT) — Heat Resistance mitigates it, like poison/Toxin.
+    game_debug_equip_affix(int(items::AK_HP), 0);  // clean carrier, no resistances
+    game_debug_refill();
+    game_debug_player_stats(&hp, nullptr, nullptr, nullptr, nullptr, nullptr);
+    const int sc_start_noR = hp;
+    game_debug_scorch_player(5, 3);
+    for (int i = 0; i < 3; ++i) wait();
+    game_debug_player_stats(&hp, nullptr, nullptr, nullptr, nullptr, nullptr);
+    const int sc_lost_noR = sc_start_noR - hp;
+    game_debug_equip_affix(int(items::AK_HEAT), 60);  // 60% Heat Resistance ("of Noon")
+    game_debug_refill();
+    game_debug_player_stats(&hp, nullptr, nullptr, nullptr, nullptr, nullptr);
+    const int sc_start_R = hp;
+    game_debug_scorch_player(5, 3);
+    for (int i = 0; i < 3; ++i) wait();
+    game_debug_player_stats(&hp, nullptr, nullptr, nullptr, nullptr, nullptr);
+    const int sc_lost_R = sc_start_R - hp;
+    const bool scorch_resisted = sc_lost_noR > 0 && sc_lost_R < sc_lost_noR;
+
+    // (D) Bleed — a physical DoT that bypasses the Focus shield (Heat Resist does NOT help it).
+    game_debug_equip_affix(int(items::AK_SHIELD), 40);  // give a shield; bleed should ignore it
+    game_debug_refill();
+    int bhp = 0, bsh = 0;
+    game_debug_shield_state(&bsh, nullptr, &bhp);
+    game_debug_bleed_player(4, 2);
+    wait(); wait();
+    int bhp2 = 0, bsh2 = 0;
+    game_debug_shield_state(&bsh2, nullptr, &bhp2);
+    const bool bleed_bypasses_shield = bhp2 < bhp && bsh2 == bsh;  // Life dropped, shield untouched
+
+    const bool pass = inflicted && enemy_dot && resisted && scorch_resisted && bleed_bypasses_shield;
     int px = 0, py = 0; game_debug_player_pos(&px, &py);
-    std::printf("ailmenttest %s (spawn_hp0 %d pl(%d,%d) inflicted %d enemy_dot %d[%d->%d] poison_lost noR %d vs res %d)\n",
-                pass ? "PASS" : "FAIL", hp0, px, py, inflicted, enemy_dot, hp_a, game_debug_shield_hp(),
-                lost_noR, lost_R);
+    std::printf("ailmenttest %s (inflicted %d enemy_dot %d poison %d/%d scorch %d/%d bleed[hp %d->%d sh %d->%d])\n",
+                pass ? "PASS" : "FAIL", inflicted, enemy_dot, lost_noR, lost_R,
+                sc_lost_noR, sc_lost_R, bhp, bhp2, bsh, bsh2);
+    (void)px; (void)py; (void)hp_a;
     return pass ? 0 : 1;
 }
 

@@ -47,6 +47,8 @@ struct Entity {
     uint8_t hurt_flash = 0;     // G3: bright flinch frames remaining
     int16_t poison_dmg = 0;     // C3: combat-poison ailment — damage per world turn
     int16_t poison_turns = 0;   // C3: remaining poison ticks
+    int16_t scorch_dmg = 0, scorch_turns = 0;  // C3: Scorch DoT (Heat)
+    int16_t bleed_dmg = 0, bleed_turns = 0;     // C3: Bleed DoT (physical, bypasses armor)
 };
 
 // Sietch furniture/decor: static props placed in the hub chambers. Regenerated
@@ -152,6 +154,10 @@ struct Player {
     int will = 0;          // D1: current Will (ability fuel); regens + siphons now, spent in C7
     int ail_poison_dmg = 0;    // C3: combat-poison on the player — damage/turn (DT_TOX, resisted)
     int ail_poison_turns = 0;  // C3: remaining poison ticks on the player
+    int ail_scorch_dmg = 0;    // C3: Scorch DoT — DT_HEAT (Heat Resistance mitigates)
+    int ail_scorch_turns = 0;
+    int ail_bleed_dmg = 0;     // C3: Bleed DoT — physical, bypasses armor (DT_BLEED)
+    int ail_bleed_turns = 0;
     int glowglobes = 2;
     int atk = tune::kPlayerAtk;
     bool maker_hooks = false;  // Honored: the right to ride
@@ -1470,7 +1476,7 @@ int step_noise(uint8_t floor) {
 
 // D1 damage types (all canon, non-magical). DT_PHYS = enemy blade/hunter-seeker (blockable);
 // the elementals map to Arrakis hazards; DT_TRUE = internal (thirst) — bypasses mitigation.
-enum DmgType : uint8_t { DT_PHYS, DT_HEAT, DT_COLD, DT_STORM, DT_TOX, DT_TRUE };
+enum DmgType : uint8_t { DT_PHYS, DT_HEAT, DT_COLD, DT_STORM, DT_TOX, DT_BLEED, DT_TRUE };
 uint8_t res_kind_for(DmgType t) {
     switch (t) {
         case DT_HEAT: return items::AK_HEAT;
@@ -1501,8 +1507,8 @@ void damage_player(int dmg, const char* cause, DmgType type = DT_PHYS) {
         dmg = dmg * (100 - dr) / 100;
     }
     if ((rk != 0xFF || affix_total(items::AK_DR) > 0) && dmg < 1) dmg = 1;  // mitigation never fully negates
-    // Energy shield (Focus) soaks before Life.
-    if (g.pl.shield > 0 && dmg > 0) {
+    // Energy shield (Focus) soaks before Life — except Bleed, which seeps under it (Fortitude only).
+    if (g.pl.shield > 0 && dmg > 0 && type != DT_BLEED) {
         const int soaked = dmg < g.pl.shield ? dmg : g.pl.shield;
         g.pl.shield -= soaked;
         dmg -= soaked;
@@ -1521,22 +1527,42 @@ void reflect_thorns(Entity* attacker) {
 void gain_hp(int amt) { if (amt <= 0) return; const int m = player_max_hp(); if ((g.pl.hp += amt) > m) g.pl.hp = m; }
 void gain_shield(int amt) { if (amt <= 0) return; const int m = player_max_shield(); if ((g.pl.shield += amt) > m) g.pl.shield = m; }
 void gain_will(int amt) { if (amt <= 0) return; const int m = player_max_will(); if ((g.pl.will += amt) > m) g.pl.will = m; }
-// C3 combat-poison ailment: refresh to the stronger tick + the longer duration (stacks don't add).
+// C3 DoT ailments — refresh to the stronger tick + the longer duration (stacks don't add).
 void poison_entity(Entity& e, int dmg_per_turn, int turns) {
     if (dmg_per_turn > e.poison_dmg) e.poison_dmg = int16_t(dmg_per_turn);
     if (turns > e.poison_turns) e.poison_turns = int16_t(turns);
+}
+void scorch_entity(Entity& e, int dmg_per_turn, int turns) {
+    if (dmg_per_turn > e.scorch_dmg) e.scorch_dmg = int16_t(dmg_per_turn);
+    if (turns > e.scorch_turns) e.scorch_turns = int16_t(turns);
+}
+void bleed_entity(Entity& e, int dmg_per_turn, int turns) {
+    if (dmg_per_turn > e.bleed_dmg) e.bleed_dmg = int16_t(dmg_per_turn);
+    if (turns > e.bleed_turns) e.bleed_turns = int16_t(turns);
 }
 void poison_player(int dmg_per_turn, int turns) {
     if (dmg_per_turn > g.pl.ail_poison_dmg) g.pl.ail_poison_dmg = dmg_per_turn;
     if (turns > g.pl.ail_poison_turns) g.pl.ail_poison_turns = turns;
 }
-// C3: poisoned enemies bleed hp each world turn; a poison kill leaves a corpse (water, no loot/xp).
-void tick_enemy_poison() {
+void scorch_player(int dmg_per_turn, int turns) {
+    if (dmg_per_turn > g.pl.ail_scorch_dmg) g.pl.ail_scorch_dmg = dmg_per_turn;
+    if (turns > g.pl.ail_scorch_turns) g.pl.ail_scorch_turns = turns;
+}
+void bleed_player(int dmg_per_turn, int turns) {
+    if (dmg_per_turn > g.pl.ail_bleed_dmg) g.pl.ail_bleed_dmg = dmg_per_turn;
+    if (turns > g.pl.ail_bleed_turns) g.pl.ail_bleed_turns = turns;
+}
+// C3: DoT-afflicted enemies lose hp each world turn; a DoT kill leaves a corpse (water, no loot/xp).
+void tick_enemy_ailments() {
     for (int i = 1; i < kMaxEnts; ++i) {
         Entity& e = g.ents[i];
-        if (e.poison_turns <= 0 || e.hp <= 0) continue;
-        --e.poison_turns;
-        e.hp = int16_t(e.hp - e.poison_dmg);
+        if (e.hp <= 0) continue;
+        int dot = 0;
+        if (e.poison_turns > 0) { --e.poison_turns; dot += e.poison_dmg; }
+        if (e.scorch_turns > 0) { --e.scorch_turns; dot += e.scorch_dmg; }
+        if (e.bleed_turns > 0) { --e.bleed_turns; dot += e.bleed_dmg; }
+        if (dot <= 0) continue;
+        e.hp = int16_t(e.hp - dot);
         if (e.hp <= 0)
             e = Entity{EType::Corpse, Ai::Idle, e.zone, e.x, e.y, 0, 0, int16_t(60)};
     }
@@ -1970,12 +1996,21 @@ void upkeep() {
         --g.pl.ail_poison_turns;
         if (g.pl.ail_poison_dmg > 0) damage_player(g.pl.ail_poison_dmg, "The venom takes you.", DT_TOX);
     }
+    // C3: Scorch (Heat Resistance mitigates) and Bleed (physical, bypasses armor + shield).
+    if (g.pl.ail_scorch_turns > 0 && !g.pl.dead) {
+        --g.pl.ail_scorch_turns;
+        if (g.pl.ail_scorch_dmg > 0) damage_player(g.pl.ail_scorch_dmg, "You burn away to nothing.", DT_HEAT);
+    }
+    if (g.pl.ail_bleed_turns > 0 && !g.pl.dead) {
+        --g.pl.ail_bleed_turns;
+        if (g.pl.ail_bleed_dmg > 0) damage_player(g.pl.ail_bleed_dmg, "You bleed out into the sand.", DT_BLEED);
+    }
 }
 
 // The player spent a turn: world advances.
 void advance_world() {
     upkeep();
-    tick_enemy_poison();  // C3: DoT on poisoned foes
+    tick_enemy_ailments();  // C3: DoTs (poison/scorch/bleed) on afflicted foes
     if (g.pl.dead) return;
 
     // transient light flashes decay
@@ -4748,6 +4783,10 @@ void game_serialize(SaveWriter& w) {
     w.i32(g.pl.will);          // D1
     w.i32(g.pl.ail_poison_dmg);    // C3
     w.i32(g.pl.ail_poison_turns);  // C3
+    w.i32(g.pl.ail_scorch_dmg);    // C3
+    w.i32(g.pl.ail_scorch_turns);  // C3
+    w.i32(g.pl.ail_bleed_dmg);     // C3
+    w.i32(g.pl.ail_bleed_turns);   // C3
     w.u8(g.pl.maker_hooks ? 1 : 0);
     w.u8(g.pl.riding ? 1 : 0);
     w.i32(g.pl.ride_turns);
@@ -4821,6 +4860,10 @@ bool game_deserialize(SaveReader& r) {
     pl.will = r.i32();          // D1
     pl.ail_poison_dmg = r.i32();    // C3
     pl.ail_poison_turns = r.i32();  // C3
+    pl.ail_scorch_dmg = r.i32();    // C3
+    pl.ail_scorch_turns = r.i32();  // C3
+    pl.ail_bleed_dmg = r.i32();     // C3
+    pl.ail_bleed_turns = r.i32();   // C3
     pl.maker_hooks = r.u8() != 0;
     pl.riding = r.u8() != 0;
     pl.ride_turns = r.i32();
@@ -5034,6 +5077,8 @@ void game_debug_player_stats(int* hp, int* max_hp, int* water, int* max_water, i
 }
 void game_debug_hurt(int dmg) { damage_player(dmg, "Struck down in the harness."); }
 void game_debug_poison_player(int dmg, int turns) { poison_player(dmg, turns); }  // C3
+void game_debug_scorch_player(int dmg, int turns) { scorch_player(dmg, turns); }  // C3
+void game_debug_bleed_player(int dmg, int turns) { bleed_player(dmg, turns); }    // C3
 int game_debug_enemy_poison_turns() {  // C3: poison turns on the first ShieldTrooper in the zone
     for (int i = 1; i < kMaxEnts; ++i)
         if (g.ents[i].type == EType::ShieldTrooper && g.ents[i].zone == g.cur_zone)
@@ -5273,6 +5318,8 @@ uint64_t game_state_hash() {
     mix(uint64_t(uint32_t(g.pl.shield)) | (uint64_t(uint32_t(g.pl.shield_delay)) << 32));  // C2
     mix(uint64_t(uint32_t(g.pl.will)));  // D1
     mix(uint64_t(uint32_t(g.pl.ail_poison_dmg)) | (uint64_t(uint32_t(g.pl.ail_poison_turns)) << 32));  // C3
+    mix(uint64_t(uint32_t(g.pl.ail_scorch_dmg)) | (uint64_t(uint32_t(g.pl.ail_scorch_turns)) << 32));  // C3
+    mix(uint64_t(uint32_t(g.pl.ail_bleed_dmg)) | (uint64_t(uint32_t(g.pl.ail_bleed_turns)) << 32));    // C3
     mix(uint64_t(uint8_t(g.pl.background)) | (uint64_t(uint32_t(g.pl.atk)) << 8));
     mix(uint64_t(uint16_t(g.pl.st.level)) | (uint64_t(uint32_t(g.pl.st.xp)) << 16) |
         (uint64_t(uint16_t(g.pl.st.cond)) << 48));  // C1: Conditioning (was str)
