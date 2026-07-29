@@ -7,7 +7,7 @@
 #include <vector>
 
 inline constexpr uint32_t kSaveMagic = 0x54535544;  // 'DUST'
-inline constexpr uint16_t kSaveVersion = 9;  // v9: C3 Scorch + Bleed DoTs (player + Entity fields)
+inline constexpr uint16_t kSaveVersion = 10;  // v10: C3 Blind + Freeze ailments (player + Entity fields)
 
 class SaveWriter {
 public:

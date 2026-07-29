@@ -49,6 +49,8 @@ struct Entity {
     int16_t poison_turns = 0;   // C3: remaining poison ticks
     int16_t scorch_dmg = 0, scorch_turns = 0;  // C3: Scorch DoT (Heat)
     int16_t bleed_dmg = 0, bleed_turns = 0;     // C3: Bleed DoT (physical, bypasses armor)
+    int16_t blind_turns = 0;                    // C3: Blind (Storm) — this foe's accuracy drops
+    int16_t frozen_turns = 0;                   // C3: Freeze (Cold) — this foe loses its turns
 };
 
 // Sietch furniture/decor: static props placed in the hub chambers. Regenerated
@@ -158,6 +160,8 @@ struct Player {
     int ail_scorch_turns = 0;
     int ail_bleed_dmg = 0;     // C3: Bleed DoT — physical, bypasses armor (DT_BLEED)
     int ail_bleed_turns = 0;
+    int ail_blind_turns = 0;   // C3: Blind (Storm) on the player — reduces the player's accuracy
+    int ail_frozen_turns = 0;  // C3: Freeze (Cold) on the player — reserved (player turn-skip: next slice)
     int glowglobes = 2;
     int atk = tune::kPlayerAtk;
     bool maker_hooks = false;  // Honored: the right to ride
@@ -441,7 +445,8 @@ int player_dodge() {  // Flow: Versatility -> evasion
 
 // Player melee swing vs a foe. Returns damage dealt (0 = miss); fills crit.
 int player_attack_roll(const Foe& f, bool* crit_out) {
-    const int acc = with_inc(55 + eff_vers() * 2 + affix_total(items::AK_TOHIT), items::AK_INC_TOHIT);  // Precision
+    int acc = with_inc(55 + eff_vers() * 2 + affix_total(items::AK_TOHIT), items::AK_INC_TOHIT);  // Precision
+    if (g.pl.ail_blind_turns > 0) acc -= tune::kBlindAcc;  // C3: Blinded — the player misses more
     const int tohit = acc - f.ac_dodge;
     const int chance = tohit < 15 ? 15 : tohit > 95 ? 95 : tohit;
     if (int(g.rng.combat.below(100)) >= chance) return 0;
@@ -457,9 +462,10 @@ int player_attack_roll(const Foe& f, bool* crit_out) {
     return dmg;
 }
 
-// Enemy swing at the player. Returns damage taken (0 = miss/dodge).
-int foe_attack_roll(const Foe& f) {
-    const int chance0 = int(f.tohit) - player_dodge();
+// Enemy swing at the player. Returns damage taken (0 = miss/dodge). `attacker_blind` (C3) is the
+// Blind accuracy penalty when the attacking foe is Blinded (Storm ailment — e.g. Desert Ghost).
+int foe_attack_roll(const Foe& f, int attacker_blind = 0) {
+    const int chance0 = int(f.tohit) - player_dodge() - attacker_blind;
     const int chance = chance0 < 15 ? 15 : chance0 > 95 ? 95 : chance0;
     if (int(g.rng.combat.below(100)) >= chance) return 0;
     int dmg = g.rng.combat.range(f.dmin, f.dmax) - player_armor() / 2;
@@ -1552,11 +1558,16 @@ void bleed_player(int dmg_per_turn, int turns) {
     if (dmg_per_turn > g.pl.ail_bleed_dmg) g.pl.ail_bleed_dmg = dmg_per_turn;
     if (turns > g.pl.ail_bleed_turns) g.pl.ail_bleed_turns = turns;
 }
+// C3 effect ailments (no damage): Blind (accuracy) + Freeze (turn control) — refresh to longer duration.
+void blind_entity(Entity& e, int turns) { if (turns > e.blind_turns) e.blind_turns = int16_t(turns); }
+void freeze_entity(Entity& e, int turns) { if (turns > e.frozen_turns) e.frozen_turns = int16_t(turns); }
+void blind_player(int turns) { if (turns > g.pl.ail_blind_turns) g.pl.ail_blind_turns = turns; }
 // C3: DoT-afflicted enemies lose hp each world turn; a DoT kill leaves a corpse (water, no loot/xp).
 void tick_enemy_ailments() {
     for (int i = 1; i < kMaxEnts; ++i) {
         Entity& e = g.ents[i];
         if (e.hp <= 0) continue;
+        if (e.blind_turns > 0) --e.blind_turns;  // C3: Blind wears off (Freeze ticks in the act loop)
         int dot = 0;
         if (e.poison_turns > 0) { --e.poison_turns; dot += e.poison_dmg; }
         if (e.scorch_turns > 0) { --e.scorch_turns; dot += e.scorch_dmg; }
@@ -1588,7 +1599,7 @@ void trooper_act(Entity& e) {
         if (pdist == 1) {
             e.anim.facing = facing_from_tile_delta(p.x - e.x, p.y - e.y);
             e.anim.set(anim::State::Attack);
-            const int dmg = foe_attack_roll(*foe_stats(e.type));
+            const int dmg = foe_attack_roll(*foe_stats(e.type), e.blind_turns > 0 ? tune::kBlindAcc : 0);
             if (dmg == 0) {
                 g.log.push("You slip the trooper's blade. A miss.");
                 return;
@@ -1761,7 +1772,7 @@ void critter_act(Entity& e) {
 
     if (e.type == EType::Hermit) {
         if (pdist == 1) {
-            const int dmg = foe_attack_roll(*foe_stats(EType::Hermit));
+            const int dmg = foe_attack_roll(*foe_stats(EType::Hermit), e.blind_turns > 0 ? tune::kBlindAcc : 0);
             if (dmg == 0) { g.log.push("The hermit's claws rake past you."); return; }
             g.log.push("The spice-mad hermit claws at you, shrieking prophecy!");
             damage_player(dmg, "Beaten down by a prophet of the sand.");
@@ -1825,7 +1836,7 @@ void hound_act(Entity& e) {
         if (pdist == 1) {  // adjacent: bite
             e.anim.facing = facing_from_tile_delta(p.x - e.x, p.y - e.y);
             e.anim.set(anim::State::Attack);
-            const int dmg = foe_attack_roll(*foe_stats(EType::Hound));
+            const int dmg = foe_attack_roll(*foe_stats(EType::Hound), e.blind_turns > 0 ? tune::kBlindAcc : 0);
             if (dmg == 0) {
                 g.log.push("The hound snaps at empty air.");
                 return;
@@ -2005,6 +2016,8 @@ void upkeep() {
         --g.pl.ail_bleed_turns;
         if (g.pl.ail_bleed_dmg > 0) damage_player(g.pl.ail_bleed_dmg, "You bleed out into the sand.", DT_BLEED);
     }
+    if (g.pl.ail_blind_turns > 0) --g.pl.ail_blind_turns;      // C3: Blind wears off
+    if (g.pl.ail_frozen_turns > 0) --g.pl.ail_frozen_turns;    // C3: reserved (player turn-skip: next slice)
 }
 
 // The player spent a turn: world advances.
@@ -2033,6 +2046,14 @@ void advance_world() {
             }
             continue;
         }
+        // C3: a Frozen combatant (Cold control — Reverend Mother) loses its turn.
+        if (e.frozen_turns > 0 &&
+            (e.type == EType::Boss || e.type == EType::Trooper || e.type == EType::ShieldTrooper ||
+             e.type == EType::PanAdder || e.type == EType::Hermit || e.type == EType::HunterSeeker ||
+             e.type == EType::Hound)) {
+            --e.frozen_turns;
+            continue;
+        }
         if (e.type == EType::Boss) {
             const uint8_t traits = uint8_t(e.data >> 8);
             e.energy += int16_t((traits & BT_SWIFT) ? 150 : 100);
@@ -2044,7 +2065,7 @@ void advance_world() {
                                                            player_ent().y - e.y);
                     e.anim.set(anim::State::Attack);
                     const Foe f = boss_foe(e);
-                    const int dmg = foe_attack_roll(f);
+                    const int dmg = foe_attack_roll(f, e.blind_turns > 0 ? tune::kBlindAcc : 0);
                     if (dmg == 0) { g.log.push("You slip the champion's blade."); continue; }
                     if (traits & BT_TOXIC) {
                         g.poison_turns = 15;
@@ -4787,6 +4808,8 @@ void game_serialize(SaveWriter& w) {
     w.i32(g.pl.ail_scorch_turns);  // C3
     w.i32(g.pl.ail_bleed_dmg);     // C3
     w.i32(g.pl.ail_bleed_turns);   // C3
+    w.i32(g.pl.ail_blind_turns);   // C3
+    w.i32(g.pl.ail_frozen_turns);  // C3
     w.u8(g.pl.maker_hooks ? 1 : 0);
     w.u8(g.pl.riding ? 1 : 0);
     w.i32(g.pl.ride_turns);
@@ -4864,6 +4887,8 @@ bool game_deserialize(SaveReader& r) {
     pl.ail_scorch_turns = r.i32();  // C3
     pl.ail_bleed_dmg = r.i32();     // C3
     pl.ail_bleed_turns = r.i32();   // C3
+    pl.ail_blind_turns = r.i32();   // C3
+    pl.ail_frozen_turns = r.i32();  // C3
     pl.maker_hooks = r.u8() != 0;
     pl.riding = r.u8() != 0;
     pl.ride_turns = r.i32();
@@ -5079,6 +5104,27 @@ void game_debug_hurt(int dmg) { damage_player(dmg, "Struck down in the harness."
 void game_debug_poison_player(int dmg, int turns) { poison_player(dmg, turns); }  // C3
 void game_debug_scorch_player(int dmg, int turns) { scorch_player(dmg, turns); }  // C3
 void game_debug_bleed_player(int dmg, int turns) { bleed_player(dmg, turns); }    // C3
+void game_debug_blind_player(int turns) { blind_player(turns); }                  // C3
+// C3: the player's clamped to-hit vs a foe of ac_dodge `ac` — deterministic (no roll), for blindtest.
+int game_debug_player_tohit(int ac) {
+    int acc = with_inc(55 + eff_vers() * 2 + affix_total(items::AK_TOHIT), items::AK_INC_TOHIT);
+    if (g.pl.ail_blind_turns > 0) acc -= tune::kBlindAcc;
+    const int t = acc - ac;
+    return t < 15 ? 15 : t > 95 ? 95 : t;
+}
+void game_debug_freeze_first_enemy(int turns) {  // C3: freeze the first ShieldTrooper in the zone
+    for (int i = 1; i < kMaxEnts; ++i)
+        if (g.ents[i].type == EType::ShieldTrooper && g.ents[i].zone == g.cur_zone) {
+            freeze_entity(g.ents[i], turns);
+            return;
+        }
+}
+int game_debug_enemy_frozen_turns() {  // C3: frozen turns on the first ShieldTrooper
+    for (int i = 1; i < kMaxEnts; ++i)
+        if (g.ents[i].type == EType::ShieldTrooper && g.ents[i].zone == g.cur_zone)
+            return g.ents[i].frozen_turns;
+    return -1;
+}
 int game_debug_enemy_poison_turns() {  // C3: poison turns on the first ShieldTrooper in the zone
     for (int i = 1; i < kMaxEnts; ++i)
         if (g.ents[i].type == EType::ShieldTrooper && g.ents[i].zone == g.cur_zone)
@@ -5320,6 +5366,7 @@ uint64_t game_state_hash() {
     mix(uint64_t(uint32_t(g.pl.ail_poison_dmg)) | (uint64_t(uint32_t(g.pl.ail_poison_turns)) << 32));  // C3
     mix(uint64_t(uint32_t(g.pl.ail_scorch_dmg)) | (uint64_t(uint32_t(g.pl.ail_scorch_turns)) << 32));  // C3
     mix(uint64_t(uint32_t(g.pl.ail_bleed_dmg)) | (uint64_t(uint32_t(g.pl.ail_bleed_turns)) << 32));    // C3
+    mix(uint64_t(uint32_t(g.pl.ail_blind_turns)) | (uint64_t(uint32_t(g.pl.ail_frozen_turns)) << 32));  // C3
     mix(uint64_t(uint8_t(g.pl.background)) | (uint64_t(uint32_t(g.pl.atk)) << 8));
     mix(uint64_t(uint16_t(g.pl.st.level)) | (uint64_t(uint32_t(g.pl.st.xp)) << 16) |
         (uint64_t(uint16_t(g.pl.st.cond)) << 48));  // C1: Conditioning (was str)

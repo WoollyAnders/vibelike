@@ -678,12 +678,37 @@ int run_ailmenttest(audio::Mixer& mixer, const Assets& assets, const Colormaps& 
     game_debug_shield_state(&bsh2, nullptr, &bhp2);
     const bool bleed_bypasses_shield = bhp2 < bhp && bsh2 == bsh;  // Life dropped, shield untouched
 
-    const bool pass = inflicted && enemy_dot && resisted && scorch_resisted && bleed_bypasses_shield;
-    int px = 0, py = 0; game_debug_player_pos(&px, &py);
-    std::printf("ailmenttest %s (inflicted %d enemy_dot %d poison %d/%d scorch %d/%d bleed[hp %d->%d sh %d->%d])\n",
-                pass ? "PASS" : "FAIL", inflicted, enemy_dot, lost_noR, lost_R,
-                sc_lost_noR, sc_lost_R, bhp, bhp2, bsh, bsh2);
-    (void)px; (void)py; (void)hp_a;
+    // (E) Blind (Storm) — the player's accuracy drops while Blinded.
+    game_debug_equip_affix(int(items::AK_HP), 0);  // clean, no precision affixes
+    const int th0 = game_debug_player_tohit(8);
+    game_debug_blind_player(3);
+    const int th1 = game_debug_player_tohit(8);
+    const bool blind_works = th1 < th0;
+
+    // (F) Freeze (Cold control) — a frozen enemy loses its turn (frozen counter ticks down on skip).
+    game_init(779, services);
+    game_debug_equip_affix(int(items::AK_HP), 0);
+    game_debug_warp(1, 30, 30);
+    tick_with(Key::Sandwalk);
+    int fhp = -1;
+    for (int sx = 18; sx <= 46 && fhp <= 0; sx += 4) {
+        game_debug_warp(1, sx, 30);
+        game_debug_clear_hostiles();
+        game_debug_spawn_shield_adjacent(&fhp);
+    }
+    game_debug_freeze_first_enemy(3);
+    const int fz0 = game_debug_enemy_frozen_turns();
+    wait();
+    const int fz1 = game_debug_enemy_frozen_turns();
+    const bool freeze_works = fz0 == 3 && fz1 == 2;  // the frozen enemy skipped its turn (counter ticked)
+
+    const bool pass = inflicted && enemy_dot && resisted && scorch_resisted &&
+                      bleed_bypasses_shield && blind_works && freeze_works;
+    std::printf("ailmenttest %s (poison %d/%d scorch %d/%d bleed[hp %d->%d sh %d->%d] "
+                "blind tohit %d->%d freeze %d->%d)\n",
+                pass ? "PASS" : "FAIL", lost_noR, lost_R, sc_lost_noR, sc_lost_R,
+                bhp, bhp2, bsh, bsh2, th0, th1, fz0, fz1);
+    (void)hp_a; (void)inflicted; (void)enemy_dot;
     return pass ? 0 : 1;
 }
 
