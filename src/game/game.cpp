@@ -234,7 +234,6 @@ struct GameState {
     int world_accum = 0;     // RT1: ticks since the last world step (drives world_tick from RT1.2)
     uint8_t cur_zone = map::kZoneSietch;  // derived from the current node's Stage (biome/membership tag)
     // B2b: the Revelation (a prescient gear suggestion at each forward door). Transient (reset on load).
-    int awaken_choice = 1;                 // B5: Awaken level to launch (1..meta.awaken_unlocked)
     int revelation_stage = 0;              // 0 none, 1 pick slot, 2 pick item
     int rev_sel = 0;
     int rev_dest = 0;                      // node to enter once the pick resolves
@@ -1094,7 +1093,7 @@ bool ascend(Ascendancy asc) {
     if (int(asc) <= 0 || int(asc) >= int(Ascendancy::Count)) return false;
     if (kAscendancyBase[int(asc)] != uint8_t(g.pl.base_class)) return false;  // must match the base
     g.pl.ascendancy = asc;
-    g.log.push("The sietch names you: %s.", kAscendancyNames[int(asc)]);
+    g.log.push("The Awakening takes you. The sietch names you: %s.", kAscendancyNames[int(asc)]);
     persist_character();  // the naming survives death
     return true;
 }
@@ -1366,7 +1365,8 @@ void award_pinnacle_clear(int node) {
     if (aw > g_meta.awaken_cleared) g_meta.awaken_cleared = uint8_t(aw);
     if (aw == g_meta.awaken_unlocked && g_meta.awaken_unlocked < 10) {
         ++g_meta.awaken_unlocked;
-        g.log.push("A deeper vision opens to Muad'Dib: AWAKEN %d.", g_meta.awaken_unlocked);
+        g.log.push("The path to Arrakeen deepens. Vision %d of 10 opens to Muad'Dib.",
+                   g_meta.awaken_unlocked);
     }
     meta_save();
 }
@@ -2602,7 +2602,9 @@ void enter_node(int idx) {
 // The Water-of-Life ritual (B2) launches a campaign run at node 1; here it's a bare trigger.
 // B5: launch the vision at the chosen Awaken level (its first field node on the spine).
 void begin_run() {
-    int lvl = g.awaken_choice;
+    // Step 1b: linear (Hades-style) progression — a vision-run always launches at your CURRENT
+    // frontier step (no difficulty picker). Headless tests always start at step 1 for isolation.
+    int lvl = g.services.interactive ? int(g_meta.awaken_unlocked) : 1;
     if (lvl < 1) lvl = 1;
     if (lvl > world::kAwakenLevels) lvl = world::kAwakenLevels;
     const int first = 1 + (lvl - 1) * (world::kRoomsPerLevel + 1);  // first field node of the level
@@ -3118,8 +3120,7 @@ void game_init(uint64_t seed, const GameServices& services) {
     g.pl.hp = player_max_hp();
     g.pl.shield = player_max_shield();  // C2: begin a run with a full Focus shield
     g.pl.will = player_max_will();
-    g.pl.maker_hooks = true;  // B4: extraction (ride a Maker home) is always available
-    g.awaken_choice = services.interactive ? g_meta.awaken_unlocked : 1;  // B5: frontier (headless=1)
+    g.pl.maker_hooks = true;  // reserved for the endgame Long Ride (worm-riding is parked in-campaign)
     // Interactive launches open on the title menu; headless tests jump into play.
     g.screen = services.interactive ? GameState::Screen::Menu : GameState::Screen::Play;
 
@@ -4298,11 +4299,11 @@ const ManualPage kManual[] = {
         "sends YOU. Drink at his hand and enter a prescient vision: the road",
         "across Arrakis to Arrakeen, and the fall of Baron Harkonnen.",
         "",
-        "Click MUAD'DIB in the sietch to begin the vision. Each run climbs the",
-        "AWAKEN ladder toward the Baron. Nothing in a vision is truly real --",
+        "Click MUAD'DIB in the sietch to begin the vision. Each vision walks one",
+        "step of the path toward the Baron. Nothing in a vision is truly real --",
         "so your gear and your life are never lost. But the spice, water, and",
-        "materials you gather are only MADE REAL if you ride a worm home; die,",
-        "and the vision's spoils vanish with the thread.",
+        "materials you gather are only MADE REAL if you END THE VISION and wake",
+        "(the Ride key, or complete its path); die, and the spoils vanish.",
         "",
         "'Dreams are messages from the deep.'",
         nullptr}},
@@ -5269,7 +5270,6 @@ void game_debug_awaken(int* unlocked, int* cleared, int* banked_spice) {  // B5:
     if (cleared) *cleared = g_meta.awaken_cleared;
     if (banked_spice) *banked_spice = g_meta.banked_spice;
 }
-void game_debug_set_awaken_choice(int lvl) { g.awaken_choice = lvl; }  // B5: pick the launch level
 int game_debug_char_level() { return g.pl.st.level; }
 
 // G2: read-only UI query surface for native Godot HUD/inventory (determinism-safe).

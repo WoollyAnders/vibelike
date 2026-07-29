@@ -80,7 +80,6 @@ void game_debug_extract();  // Step 1a: fade-the-vision extraction (headless)
 void game_debug_warp_to_node(int idx);  // B3: enter a specific graph node
 int game_debug_hostile_count();  // B3: hostiles in the resident zone
 void game_debug_awaken(int* unlocked, int* cleared, int* banked_spice);  // B5: Awaken ladder + wallet
-void game_debug_set_awaken_choice(int lvl);  // B5: choose the launch Awaken level
 int game_debug_char_level();  // B5: persistent character level
 void game_debug_player_stats(int* hp, int* max_hp, int* water, int* max_water, int* level, int* spice);  // G2
 void game_debug_hurt(int dmg);  // C2: apply damage through the shield/Life pipeline (harness only)
