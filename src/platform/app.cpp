@@ -1055,103 +1055,21 @@ int run_dettest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmap
     return pass ? 0 : 1;
 }
 
-// Worm-riding: bait, mount, steer east, and confirm the Maker obeys.
-int run_ridetest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
-    GameServices services{&mixer, &assets, &cmaps};
-    game_init(4242, services);
-    InputState in;
-    auto tick_with = [&](Key k) {  // RT1.2: one world tick == kWorldStep frames (+~1-2 grid actions)
-        for (int f = 0; f < kWorldStep; ++f) {
-            in.pressed[int(k)] = true;
-            game_update(in);
-            in.end_tick();
-        }
-    };
-    // RT1.2: exactly ONE player action — settle kWorldStep frames with no input so the action
-    // cooldown expires, then one ready press. (A held Ride would mount AND then re-fire the
-    // commit-extract; ride mount/steer/dismount must each be a single discrete action.)
-    auto act = [&](Key k) {
-        for (int f = 0; f < kWorldStep; ++f) { game_update(in); in.end_tick(); }
-        in.pressed[int(k)] = true; game_update(in); in.end_tick();
-    };
-
-    game_debug_use_door();                               // out of the sietch (click-only doors)
-    for (int i = 0; i < 8; ++i) tick_with(Key::Right);   // onto open sand
-    tick_with(Key::Thumper);
-    for (int i = 0; i < 7; ++i) tick_with(Key::Left);    // fall back
-    int turns = 0;
-    while (turns++ < 240 && game_worm_state() != 4 && !game_is_dead()) {
-        if (turns % 12 == 0) game_debug_refill();
-        tick_with(Key::Wait);
-    }
-    if (game_worm_state() != 4) { std::printf("ridetest FAIL (no surface)\n"); return 1; }
-
-    game_debug_grant_hooks();
-    game_debug_warp_to_worm();
-    act(Key::Ride);
-    if (!game_debug_riding()) { std::printf("ridetest FAIL (mount)\n"); return 1; }
-
-    // Ride until the worm moves. The worm only swims onto sand ("shies from rock"), so try each
-    // cardinal with ONE steering action and keep the first that advances it. One ride_move per
-    // direction stays well under kExtractRideTurns, so a shy direction can't auto-extract the ride.
-    int wx0 = 0, wy0 = 0, wx1 = 0, wy1 = 0;
-    game_debug_worm_pos(&wx0, &wy0);
-    const Key dirs[4] = {Key::Right, Key::Left, Key::Down, Key::Up};
-    bool moved = false;
-    for (Key k : dirs) {
-        int bx, by; game_debug_worm_pos(&bx, &by);
-        act(k);
-        int ax, ay; game_debug_worm_pos(&ax, &ay);
-        if (ax != bx || ay != by) { moved = true; break; }
-        if (!game_debug_riding()) break;  // safety: the ride ended
-    }
-    game_debug_worm_pos(&wx1, &wy1);
-    act(Key::Ride);  // dismount / commit the ride home
-
-    std::printf("worm rode from %d,%d to %d,%d (riding now %d, dead %d)\n",
-                wx0, wy0, wx1, wy1, game_debug_riding() ? 1 : 0, game_is_dead() ? 1 : 0);
-    const bool pass = moved && !game_debug_riding() && !game_is_dead();
-    std::printf("ridetest %s\n", pass ? "PASS" : "FAIL");
-    return pass ? 0 : 1;
-}
-
-// B4: worm-ride extraction bears you home — surface a Maker, mount, ride, and wake in the sietch.
+// Step 1a: extraction is "let the vision fade" (no worm) — enter a vision-run, choose to end it,
+// wake in the sietch with the haul banked. (Worm-riding is parked for the endgame Long Ride, so the
+// old worm-ride ridetest is retired.)
 int run_extractiontest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
     GameServices services{&mixer, &assets, &cmaps};
     game_init(4242, services);
-    InputState in;
-    auto tick_with = [&](Key k) {  // RT1.2: one world tick == kWorldStep frames (+~1-2 grid actions)
-        for (int f = 0; f < kWorldStep; ++f) { in.pressed[int(k)] = true; game_update(in); in.end_tick(); }
-    };
-    // RT1.2: exactly ONE player action (settle the cooldown, then one ready press) — ride
-    // mount and the commit-extract must each be a single discrete action, not a held key.
-    auto act = [&](Key k) {
-        for (int f = 0; f < kWorldStep; ++f) { game_update(in); in.end_tick(); }
-        in.pressed[int(k)] = true; game_update(in); in.end_tick();
-    };
 
-    game_debug_use_door();                               // hub -> field node 1
+    game_debug_use_door();                 // hub -> a field vision-node
     const int node_field = game_debug_cur_node();
-    for (int i = 0; i < 8; ++i) tick_with(Key::Right);
-    tick_with(Key::Thumper);
-    for (int i = 0; i < 7; ++i) tick_with(Key::Left);
-    int turns = 0;
-    while (turns++ < 240 && game_worm_state() != 4 && !game_is_dead()) {
-        if (turns % 12 == 0) game_debug_refill();
-        tick_with(Key::Wait);
-    }
-    if (game_worm_state() != 4) { std::printf("extractiontest FAIL (no surface)\n"); return 1; }
-
-    game_debug_warp_to_worm();
-    act(Key::Ride);
-    const bool mounted = game_debug_riding();
-    act(Key::Ride);                                      // commit: the Maker bears you home
+    game_debug_extract();                  // fade the vision = extraction (no Maker needed)
     const int node_home = game_debug_cur_node();
 
-    const bool extracted = node_home == 0 && !game_debug_riding() && !game_is_dead();
-    const bool pass = node_field > 0 && mounted && extracted;
-    std::printf("extractiontest %s (field_node %d mounted %d home_node %d)\n",
-                pass ? "PASS" : "FAIL", node_field, mounted, node_home);
+    const bool pass = node_field > 0 && node_home == 0 && !game_debug_riding() && !game_is_dead();
+    std::printf("extractiontest %s (field_node %d home_node %d)\n",
+                pass ? "PASS" : "FAIL", node_field, node_home);
     return pass ? 0 : 1;
 }
 
@@ -1350,7 +1268,7 @@ int main(int argc, char** argv) {
 
     bool seamtest = false, slicetest = false, wormtest = false, autodemo = false,
          optest = false, opdemo = false, uishot = false, focustest = false,
-         campaigntest = false, dettest = false, ridetest = false, animdebug = false,
+         campaigntest = false, dettest = false, animdebug = false,
          circledemo = false, fightdemo = false, rpgtest = false, clicktest = false,
          reveltest = false, gauntlettest = false, extractiontest = false, metatest = false,
          statmodtest = false, affixtest = false, metamigratetest = false, ailmenttest = false,
@@ -1376,7 +1294,6 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--rttest") == 0) rttest = true;
         if (SDL_strcmp(argv[i], "--stuntest") == 0) stuntest = true;
         if (SDL_strcmp(argv[i], "--classtest") == 0) classtest = true;
-        if (SDL_strcmp(argv[i], "--ridetest") == 0) ridetest = true;
         if (SDL_strcmp(argv[i], "--animdebug") == 0) animdebug = true;
         if (SDL_strcmp(argv[i], "--rpgtest") == 0) rpgtest = true;
         if (SDL_strcmp(argv[i], "--clicktest") == 0) clicktest = true;
@@ -1416,7 +1333,6 @@ int main(int argc, char** argv) {
     if (rttest) return run_rttest(mixer, assets, cmaps);
     if (stuntest) return run_stuntest(mixer, assets, cmaps);
     if (classtest) return run_classtest(mixer, assets, cmaps);
-    if (ridetest) return run_ridetest(mixer, assets, cmaps);
     if (rpgtest) return run_rpgtest(mixer, assets, cmaps);
     if (reveltest) return run_reveltest(mixer, assets, cmaps);
     if (gauntlettest) return run_gauntlettest(mixer, assets, cmaps);

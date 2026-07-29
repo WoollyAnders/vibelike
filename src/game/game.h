@@ -76,6 +76,7 @@ void game_debug_use_door();  // headless: leave the sietch (doors are click-only
 void game_debug_revelation(int* stage, int* inv_count);  // B2b: Revelation stage + inv item count
 void game_debug_revelation_pick(int idx);  // B2b: choose row idx + confirm the Revelation
 int game_debug_cur_node();  // B1.3: current graph node index
+void game_debug_extract();  // Step 1a: fade-the-vision extraction (headless)
 void game_debug_warp_to_node(int idx);  // B3: enter a specific graph node
 int game_debug_hostile_count();  // B3: hostiles in the resident zone
 void game_debug_awaken(int* unlocked, int* cleared, int* banked_spice);  // B5: Awaken ladder + wallet

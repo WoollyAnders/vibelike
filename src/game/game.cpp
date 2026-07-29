@@ -187,9 +187,6 @@ struct Player {
     bool maker_hooks = false;  // Honored: the right to ride
     bool riding = false;
     int ride_turns = 0;
-    int tox = 0;               // spice tolerance burn, decays 1/turn
-    int tox_lifetime = 0;      // total ever — the Eyes come at 40
-    bool eyes_ibad = false;
     int litany_turns = 0;      // active suppression
     int litany_day = -1;       // last day the Litany was spoken
     int free_moves = 0;        // Threadwalk strides (no world advance)
@@ -1445,7 +1442,6 @@ void op_denied(const char* how) {
         alert_gain = campaign::kAlertQuietWorm;
     raise_alert(alert_gain);
 
-    if (g.pl.eyes_ibad) alert_gain += alert_gain > 0 ? 1 : 0;  // a marked face
     if (g.op.mutators & campaign::MUT_CLIMAX) {
         spawn_boss(true);  // the Baron himself — victory means killing HIM
         return;
@@ -2071,7 +2067,6 @@ void upkeep() {
     drain = drain * (8 - g.pl.st.talents[7]) / 8;  // Water Discipline
     if (int th = affix_total(items::AK_THRIFT); th > 0)  // D1: Reduced Water Use
         drain = drain * (100 - (th > 75 ? 75 : th)) / 100;
-    if (g.pl.tox > 60) drain = drain * 3 / 2;  // the spice burns water
     if (base > 0 && drain < 1) drain = 1;
     g.pl.water -= drain;
     if (g.pl.water < 0) g.pl.water = 0;
@@ -2089,23 +2084,8 @@ void upkeep() {
         g.log.push("Grains enough for the Sayyadina's rites. +12 standing.");
     }
 
-    // spice tolerance burns down; the Litany holds the body together
-    if (g.pl.tox > 0) --g.pl.tox;
+    // the Litany holds the body together
     if (g.pl.litany_turns > 0) --g.pl.litany_turns;
-    if (!g.pl.eyes_ibad && g.pl.tox_lifetime >= 40) {
-        g.pl.eyes_ibad = true;
-        g.log.push("Your reflection in a blade: eyes gone BLUE WITHIN BLUE.");
-        g.log.push("The tribe will know you. So will the Harkonnens.");
-    }
-    if (g.pl.tox > 60 && (g.pl.turn % 7) == 0 && g.pl.litany_turns == 0) {
-        static const char* kVisions[4] = {
-            "The dunes breathe. You are sure of it.",
-            "A voice you buried speaks your water-name.",
-            "Futures branch before you like cracked glass.",
-            "The sun blinks. Slowly. Like an eye.",
-        };
-        g.log.push("%s", kVisions[g.rng.fx.below(4)]);
-    }
 
     // pan adder venom burns water
     if (g.poison_turns > 0) {
@@ -2387,8 +2367,8 @@ void extract_run() {
     g.wrm = worm::Worm{};
     g.noise.clear();
     g.services.mixer->push({audio::Cmd::Rumble, 0, 0, 0});
-    g.log.push("The Maker bears you home across the dunes. The vision fades.");
-    g.log.push("The Fremen forge what Muad'Dib showed you. Your haul is made real.");
+    g.log.push("You let Muad'Dib's vision fade. The desert releases you toward home.");
+    g.log.push("The Fremen forge what the vision showed. Your haul is made real.");
     g_meta.banked_spice = g.pl.spice;  // B5: the whole run's spice is now safe (banked)
     persist_character();               // gear + progress made real
     enter_node(0);      // wake in the sietch hub
@@ -2424,30 +2404,17 @@ void dismount(const char* why) {
     g.log.push("%s", why);
 }
 
+// Step 1a: the Ride key now "fades the vision" = EXTRACTION (worm-riding is parked, reserved for the
+// endgame "Long Ride"). Choosing to end Paul's vision carries you home with your haul — no Maker
+// needed; you begin each vision near your objective, so there is nothing to ride to. Works anywhere
+// in a run (the extract-or-push early-bail); completing the vision's graph also extracts (use_door).
 void try_ride() {
-    Entity& p = player_ent();
-    if (g.pl.riding) {
-        extract_run();  // B4: committing to the ride carries you home (extraction)
-        return;
-    }
     if (g.cur_node == 0) {
-        g.log.push("No Makers ride the sietch's stone halls.");
+        g.log.push("You are already awake in the sietch.");
         return;
     }
-    if (!g.pl.maker_hooks) {
-        g.log.push("You have no maker hooks. The tribe grants them to the Honored.");
-        return;
-    }
-    if (!worm_rideable_at(p.x, p.y)) {
-        g.log.push("No surfaced worm in reach of your hooks.");
-        return;
-    }
-    g.pl.riding = true;
-    g.pl.ride_turns = 0;
-    g.log.push("Hooks bite between the rings. The desert tilts - YOU RIDE.");
-    g.services.mixer->push({audio::Cmd::PlaySfx, 0, 255, 90});
-    flash(240, 220, 120);
-    consume_action();
+    g.log.push("You choose to end the vision here.");
+    extract_run();
 }
 
 // Steer the ridden worm: the head takes two strides, the body follows, and
@@ -2490,9 +2457,11 @@ void ride_move(int dx, int dy) {
     player_ent().y = g.wrm.y;
     g.wrm.timer = 12;  // stays surfaced while ridden
 
-    // B4: after a short ride the Maker bears you home — extraction (no free-roam dismount).
+    // Worm-riding is parked (reserved for the endgame Long Ride). ride_move is currently unreachable
+    // (try_ride no longer mounts); if it revives, a tired Maker dives and ends the ride — it does NOT
+    // extract (extraction is fading the vision, not riding).
     if (++g.pl.ride_turns >= kExtractRideTurns) {
-        extract_run();
+        dismount("The Maker tires and dives beneath the sand. The ride ends.");
         (void)cb;
         return;
     }
@@ -3251,9 +3220,8 @@ void use_door() {
     }
     const int nxt = g.graph.forward(g.cur_node);
     if (nxt < 0) {
-        g.log.push("The vision recedes; you wake in the sietch.");
-        enter_node(0);
-        refresh_fov_and_paths();  // RT1.2: settle FOV/paths after the transition
+        g.log.push("The vision runs its course; you wake in the sietch.");
+        extract_run();  // completing the vision forges the haul (extraction; also wakes at node 0)
         return;
     }
     // B2b: at a forward door the vision reveals gear; the Revelation pick then advances to `nxt`.
@@ -3672,7 +3640,7 @@ bool game_update(const InputState& in) {
                 case 20:  // Sayyadina: spice tribute
                     if (g.pl.spice >= 5) {
                         g.pl.spice -= 5;
-                        raise_standing(g.pl.eyes_ibad ? 15 : 12);
+                        raise_standing(12);
                         g.log.push("Blue eyes hold yours. 'The tribe sees you.' +12 standing.");
                     } else {
                         g.log.push("'Bring spice when you have it to give.'");
@@ -3715,8 +3683,6 @@ bool game_update(const InputState& in) {
                     const int cost = g.pl.st.talents[6] >= 2 ? 1 : 2;
                     if (g.pl.spice >= cost) {
                         g.pl.spice -= cost;
-                        g.pl.tox += 10;
-                        g.pl.tox_lifetime += 10;
                         for (int i = 0; i < map::N; ++i)
                             zone().vis[i] |= map::V_REMEMBERED;
                         g.log.push("The spice unfolds. You see the whole quarter at once.");
@@ -3729,8 +3695,6 @@ bool game_update(const InputState& in) {
                     const int cost = g.pl.st.talents[6] >= 2 ? 2 : 3;
                     if (g.pl.spice >= cost) {
                         g.pl.spice -= cost;
-                        g.pl.tox += 15;
-                        g.pl.tox_lifetime += 15;
                         g.pl.free_moves = 2;
                         g.log.push("Time goes thick as syrup. You move BETWEEN moments.");
                         flash(150, 100, 220);
@@ -4628,13 +4592,12 @@ void pass_ui(RenderCtx& r) {
     // hover description + personal gauges, just above the panel
     {
         char buf[64];
-        std::snprintf(buf, sizeof buf, "LVL %d  xp %d/%d  spice %d  tox %d%s%s%s",
+        std::snprintf(buf, sizeof buf, "LVL %d  xp %d/%d  spice %d%s%s",
                       int(g.pl.st.level), int(g.pl.st.xp), xp_to_level(g.pl.st.level),
-                      g.pl.spice, g.pl.tox,
-                      g.pl.eyes_ibad ? "  [EYES OF IBAD]" : "",
+                      g.pl.spice,
                       g.pl.riding ? "  [RIDING]" : "",
                       g.pl.st.statpts + g.pl.st.talentpts > 0 ? "  [P: spend pts]" : "");
-        draw_text_shadow(ctx, buf, 4, ui::kPanelY - 22, uint8_t(g.pl.tox > 60 ? 208 : 136), 1);
+        draw_text_shadow(ctx, buf, 4, ui::kPanelY - 22, 136, 1);
         if (g.hover_tx >= 0)
             if (const char* what = describe_at(g.hover_tx, g.hover_ty))
                 draw_text_shadow(ctx, what, fb::W / 2 - int(std::strlen(what)) * kCh,
@@ -5027,9 +4990,6 @@ void game_serialize(SaveWriter& w) {
     w.u8(g.pl.maker_hooks ? 1 : 0);
     w.u8(g.pl.riding ? 1 : 0);
     w.i32(g.pl.ride_turns);
-    w.i32(g.pl.tox);
-    w.i32(g.pl.tox_lifetime);
-    w.u8(g.pl.eyes_ibad ? 1 : 0);
     w.i32(g.pl.litany_turns);
     w.i32(g.pl.litany_day);
     w.i32(g.pl.free_moves);
@@ -5111,9 +5071,6 @@ bool game_deserialize(SaveReader& r) {
     pl.maker_hooks = r.u8() != 0;
     pl.riding = r.u8() != 0;
     pl.ride_turns = r.i32();
-    pl.tox = r.i32();
-    pl.tox_lifetime = r.i32();
-    pl.eyes_ibad = r.u8() != 0;
     pl.litany_turns = r.i32();
     pl.litany_day = r.i32();
     pl.free_moves = r.i32();
@@ -5305,6 +5262,7 @@ void game_debug_revelation_pick(int idx) {  // headless: choose row idx + confir
     revelation_confirm();
 }
 int game_debug_cur_node() { return g.cur_node; }
+void game_debug_extract() { extract_run(); }  // Step 1a: fade-the-vision extraction (no worm)
 void game_debug_warp_to_node(int idx) { enter_node(idx); }  // B3: jump straight to a graph node
 void game_debug_awaken(int* unlocked, int* cleared, int* banked_spice) {  // B5: meta ladder + wallet
     if (unlocked) *unlocked = g_meta.awaken_unlocked;

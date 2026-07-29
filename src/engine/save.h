@@ -7,7 +7,7 @@
 #include <vector>
 
 inline constexpr uint32_t kSaveMagic = 0x54535544;  // 'DUST'
-inline constexpr uint16_t kSaveVersion = 14;  // v14: C3 base class + ascendancy
+inline constexpr uint16_t kSaveVersion = 15;  // v15: cut tox/Eyes-of-Ibad (Phase B cleanup)
 
 class SaveWriter {
 public:
