@@ -98,4 +98,11 @@ int game_debug_player_tohit(int ac);                // C3: deterministic player 
 void game_debug_freeze_first_enemy(int turns);      // C3: freeze the first spawned ShieldTrooper
 int game_debug_enemy_frozen_turns();                // C3: frozen turns on the first ShieldTrooper
 int game_debug_enemy_poison_turns();  // C3: poison turns on the first spawned ShieldTrooper
+int game_debug_enemy_stun_turns();    // RT2: stun turns on the first spawned ShieldTrooper
+int game_debug_freeze_ticks(int cold_dmg, int max_life);            // RT2: Freeze duration formula (ticks)
+int game_debug_stun_ticks(int hit_dmg, int max_life, int mult, int reduce);   // RT2: Stun duration formula
+int game_debug_stun_chance(int hit_dmg, int max_life, int mult, int reduce);  // RT2: Stun chance%
+void game_debug_stun_player(int ticks);  // RT2: force a Stun on the player
+int game_debug_player_stun_turns();      // RT2: player's remaining Stun ticks
+int game_debug_player_ready();           // RT2: 1 if the player may act (not frozen/stunned/on cooldown)
 int game_debug_item_name(int where, int idx, char* out, int cap);  // G2: where 0=inv 1=equip

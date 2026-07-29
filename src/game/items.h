@@ -42,6 +42,7 @@ enum AffixKind : uint8_t {
     AK_WILL, AK_WILL_SIPHON,                          // resource
     AK_RES_COLD, AK_RES_STORM, AK_RES_TOX,           // resistances (heat = AK_HEAT)
     AK_THRIFT, AK_WATER_FIND, AK_SPICE_FIND, AK_RARITY, AK_XP,  // desert / find
+    AK_STUN_MULT, AK_STUN_REDUCE,                    // RT2: stun buildup (offense) / stun reduction (defense)
     AK_COUNT
 };
 
@@ -92,6 +93,8 @@ inline const char* stat_name(uint8_t k) {
         case AK_SPICE_FIND: return "Spice Find";
         case AK_RARITY: return "Rarity Find";
         case AK_XP: return "Experience Gain";
+        case AK_STUN_MULT: return "Stun Buildup";
+        case AK_STUN_REDUCE: return "Stun Reduction";
         default: return "?";
     }
 }
@@ -251,6 +254,11 @@ inline constexpr AffixFamily kFamilies[] = {
         {5,9,14,20,28}, {9,14,20,28,38}},
     {AK_XP,       false, sm(Slot::Token)|sm(Slot::Hood), "of Insight", 300,
         {5,9,14,20,28}, {9,14,20,28,38}},
+    // ---- RT2: STUN ---- (offense buildup on weapons; defensive reduction on armor)
+    {AK_STUN_MULT,  true,  sm(Slot::Weapon)|sm(Slot::Token), "Staggering", 350,
+        {10,18,28,40,55}, {18,28,40,55,75}},
+    {AK_STUN_REDUCE,false, sm(Slot::Body)|sm(Slot::Hood)|sm(Slot::Token), "of Poise", 350,
+        {8,14,22,32,44}, {14,22,32,44,58}},
 };
 inline constexpr int kFamilyCount = int(sizeof(kFamilies) / sizeof(kFamilies[0]));
 

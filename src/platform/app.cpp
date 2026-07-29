@@ -738,6 +738,85 @@ int run_ailmenttest(audio::Mixer& mixer, const Assets& assets, const Colormaps& 
     return pass ? 0 : 1;
 }
 
+// RT2: timed Freeze (0.3-3 s, scaled by cold_dmg:max-Life) + the Stun ailment (PoE threshold +
+// chance, two-way). (A)/(B) assert the deterministic seconds-based formulas; (C) the player Stun
+// action-lockout; (D) a real melee hit Stuns a foe (the player->enemy wiring), forced via a huge
+// Stun Buildup carrier so the roll is a certainty, not a coin-flip.
+int run_stuntest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(777, services);
+    InputState in;
+    auto tick_with = [&](Key k) { in.pressed[int(k)] = true; game_update(in); in.end_tick(); };
+    auto wait = [&]() {  // one world tick
+        for (int f = 0; f < kWorldStep; ++f) { in.pressed[int(Key::Wait)] = true; game_update(in); in.end_tick(); }
+    };
+    const int ML = 100;  // a round max-Life so the ratios read as percentages
+
+    // (A) Freeze scales with cold_dmg : max-Life, floored at 0.3 s, capped at 3.0 s.
+    const int fz_lo  = game_debug_freeze_ticks(5,   ML);  // 5%  -> below the 0.3 s floor -> none
+    const int fz_mid = game_debug_freeze_ticks(50,  ML);  // 50% -> mid
+    const int fz_hi  = game_debug_freeze_ticks(100, ML);  // 100% -> cap
+    const int fz_ovr = game_debug_freeze_ticks(300, ML);  // >100% -> still capped
+    const bool freeze_scales = fz_lo == 0 && fz_mid >= tune::kFreezeMinTicks && fz_mid < fz_hi &&
+                               fz_hi == tune::kFreezeMaxTicks && fz_ovr == tune::kFreezeMaxTicks;
+    const bool freeze_secs = tune::kFreezeMinTicks == tune::secs_to_ticks(0.3) &&
+                             tune::kFreezeMaxTicks == tune::secs_to_ticks(3.0);
+
+    // (B) Stun: below threshold -> none; scales with the ratio (capped); reduction shortens it;
+    // Stun Buildup inflates a sub-threshold hit over the line.
+    const int st_lo   = game_debug_stun_ticks(10,  ML, 0,   0);   // 10% < 15% threshold -> none
+    const int st_mid  = game_debug_stun_ticks(30,  ML, 0,   0);
+    const int st_hi   = game_debug_stun_ticks(100, ML, 0,   0);   // full-Life hit -> longest
+    const int st_red  = game_debug_stun_ticks(100, ML, 0,   50);  // 50% Stun Reduction -> shorter
+    const int st_mult = game_debug_stun_ticks(10,  ML, 100, 0);   // 10% x2 buildup -> now stuns
+    const bool stun_formula = st_lo == 0 && st_mid > 0 && st_hi > st_mid &&
+                              st_hi <= tune::kStunMaxTicks && st_red > 0 && st_red < st_hi && st_mult > 0;
+    const bool stun_chance = game_debug_stun_chance(10, ML, 0, 0) == 0 &&      // below threshold
+                             game_debug_stun_chance(100, ML, 0, 0) > 0 &&      // big hit can stun
+                             // at a mid ratio (chance not yet saturated at 100), reduction lowers it
+                             game_debug_stun_chance(40, ML, 0, 50) < game_debug_stun_chance(40, ML, 0, 0);
+
+    // (C) a Stunned player cannot act until it wears off.
+    game_debug_warp(1, 30, 30);
+    game_debug_clear_hostiles();
+    game_debug_refill();
+    game_debug_stun_player(6);  // ~0.9 s
+    const bool locked = game_debug_player_ready() == 0;
+    int bx = 0, by = 0; game_debug_player_pos(&bx, &by);
+    for (int i = 0; i < 6; ++i) tick_with(Key::Right);  // input ignored while stunned
+    int mx = 0, my = 0; game_debug_player_pos(&mx, &my);
+    const bool no_move_stunned = mx == bx && my == by;
+    for (int i = 0; i < 8; ++i) wait();                 // wear the Stun off (>= 6 world ticks)
+    const bool freed = game_debug_player_stun_turns() == 0 && game_debug_player_ready() == 1;
+    int fx = 0, fy = 0; game_debug_player_pos(&fx, &fy);
+    for (int i = 0; i < 24; ++i) tick_with(Key::Right);  // now the player moves (non-vacuous: tile walkable)
+    int gx = 0, gy = 0; game_debug_player_pos(&gx, &gy);
+    const bool moves_after = gx != fx || gy != fy;
+
+    // (D) a real melee hit Stuns a foe. A huge Stun Buildup carrier makes the roll a certainty.
+    game_debug_equip_affix(int(items::AK_STUN_MULT), 2000);
+    int ehp = -1;
+    for (int sx = 18; sx <= 46 && ehp <= 0; sx += 4) {
+        game_debug_warp(1, sx, 30);
+        game_debug_clear_hostiles();
+        game_debug_spawn_shield_adjacent(&ehp);
+    }
+    bool stunned_foe = false;
+    for (int guard = 0; guard < 160 && game_debug_shield_hp() > 0 && !stunned_foe; ++guard) {
+        game_debug_refill();
+        tick_with(Key::Right);
+        if (game_debug_enemy_stun_turns() > 0) stunned_foe = true;
+    }
+
+    const bool pass = freeze_scales && freeze_secs && stun_formula && stun_chance &&
+                      locked && no_move_stunned && freed && moves_after && stunned_foe;
+    std::printf("stuntest %s (freeze %d/%d/%d/%d stun %d/%d/%d red%d mult%d "
+                "lock %d nomove %d freed %d moved %d foe %d)\n", pass ? "PASS" : "FAIL",
+                fz_lo, fz_mid, fz_hi, fz_ovr, st_lo, st_mid, st_hi, st_red, st_mult,
+                locked, no_move_stunned, freed, moves_after, stunned_foe);
+    return pass ? 0 : 1;
+}
+
 // D1: a legacy DME3 vault converts to DME4 without losing banked items or the wallet.
 int run_metamigratetest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
     (void)assets; (void)cmaps; (void)mixer;
@@ -1218,7 +1297,7 @@ int main(int argc, char** argv) {
          circledemo = false, fightdemo = false, rpgtest = false, clicktest = false,
          reveltest = false, gauntlettest = false, extractiontest = false, metatest = false,
          statmodtest = false, affixtest = false, metamigratetest = false, ailmenttest = false,
-         rttest = false;
+         rttest = false, stuntest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
         if (SDL_strcmp(argv[i], "--seamtest") == 0) seamtest = true;
@@ -1238,6 +1317,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--campaigntest") == 0) campaigntest = true;
         if (SDL_strcmp(argv[i], "--dettest") == 0) dettest = true;
         if (SDL_strcmp(argv[i], "--rttest") == 0) rttest = true;
+        if (SDL_strcmp(argv[i], "--stuntest") == 0) stuntest = true;
         if (SDL_strcmp(argv[i], "--ridetest") == 0) ridetest = true;
         if (SDL_strcmp(argv[i], "--animdebug") == 0) animdebug = true;
         if (SDL_strcmp(argv[i], "--rpgtest") == 0) rpgtest = true;
@@ -1276,6 +1356,7 @@ int main(int argc, char** argv) {
     if (campaigntest) return run_campaigntest(mixer, assets, cmaps);
     if (dettest) return run_dettest(mixer, assets, cmaps);
     if (rttest) return run_rttest(mixer, assets, cmaps);
+    if (stuntest) return run_stuntest(mixer, assets, cmaps);
     if (ridetest) return run_ridetest(mixer, assets, cmaps);
     if (rpgtest) return run_rpgtest(mixer, assets, cmaps);
     if (reveltest) return run_reveltest(mixer, assets, cmaps);

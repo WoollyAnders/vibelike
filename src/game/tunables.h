@@ -12,6 +12,26 @@ inline constexpr int kTickHz = 60;
 inline constexpr int kWorldStepTicks = 9;    // ~0.15 s per world tick
 inline constexpr int kPlayerActionTicks = 7; // ~0.12 s player action cooldown
 
+// RT2: ailment durations are expressed in SECONDS but stored as integer world-tick counts
+// (1 world tick = kWorldStepTicks / kTickHz s). secs_to_ticks converts at compile time; the sim
+// uses integers only (float determinism is not safe across the firewall's two builds).
+inline constexpr int secs_to_ticks(double s) { return int(s * kTickHz / kWorldStepTicks + 0.5); }
+
+// Freeze (Cold): a cold hit freezes for a duration scaled by cold_dmg : target eff-max-Life,
+// clamped to [0.3, 3.0] s (ratio 1.0 == full). Below the 0.3 s floor (ratio < ~0.1) -> no freeze.
+inline constexpr int kFreezeMinTicks = secs_to_ticks(0.3);  // 2 ticks
+inline constexpr int kFreezeMaxTicks = secs_to_ticks(3.0);  // 20 ticks
+
+// Stun (PoE-style threshold + chance): a hit whose damage is >= kStunThresholdPct of the target's
+// eff-max-Life can stun. Chance ramps with the excess ratio; duration scales with the ratio,
+// clamped [0.2, 1.5] s. Stun buildup (offense) inflates the ratio; stun reduction (defense) lowers
+// both chance and duration. Brief action-lockout, both ways.
+inline constexpr int kStunThresholdPct = 15;   // hit must be >= 15% of max Life to threaten a stun
+inline constexpr int kStunRatioCapPct  = 100;  // ratio saturates here (a hit for full Life)
+inline constexpr int kStunChanceNum    = 2;    // chance% = (ratioPct - threshold) * this, capped 100
+inline constexpr int kStunMinTicks = secs_to_ticks(0.2);  // 1 tick
+inline constexpr int kStunMaxTicks = secs_to_ticks(1.5);  // 10 ticks
+
 // --- player ---
 inline constexpr int kPlayerHpMax = 20;
 inline constexpr int kPlayerAtk = 3;

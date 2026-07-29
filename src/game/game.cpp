@@ -51,6 +51,7 @@ struct Entity {
     int16_t bleed_dmg = 0, bleed_turns = 0;     // C3: Bleed DoT (physical, bypasses armor)
     int16_t blind_turns = 0;                    // C3: Blind (Storm) — this foe's accuracy drops
     int16_t frozen_turns = 0;                   // C3: Freeze (Cold) — this foe loses its turns
+    int16_t stun_turns = 0;                     // RT2: Stun — this foe loses its turns (brief)
 };
 
 // Sietch furniture/decor: static props placed in the hub chambers. Regenerated
@@ -161,7 +162,8 @@ struct Player {
     int ail_bleed_dmg = 0;     // C3: Bleed DoT — physical, bypasses armor (DT_BLEED)
     int ail_bleed_turns = 0;
     int ail_blind_turns = 0;   // C3: Blind (Storm) on the player — reduces the player's accuracy
-    int ail_frozen_turns = 0;  // C3: Freeze (Cold) on the player — reserved (player turn-skip: next slice)
+    int ail_frozen_turns = 0;  // C3/RT2: Freeze (Cold) on the player — locks actions while > 0
+    int ail_stun_turns = 0;    // RT2: Stun on the player — locks actions while > 0 (brief)
     int glowglobes = 2;
     int atk = tune::kPlayerAtk;
     bool maker_hooks = false;  // Honored: the right to ride
@@ -1565,6 +1567,67 @@ void bleed_player(int dmg_per_turn, int turns) {
 void blind_entity(Entity& e, int turns) { if (turns > e.blind_turns) e.blind_turns = int16_t(turns); }
 void freeze_entity(Entity& e, int turns) { if (turns > e.frozen_turns) e.frozen_turns = int16_t(turns); }
 void blind_player(int turns) { if (turns > g.pl.ail_blind_turns) g.pl.ail_blind_turns = turns; }
+void stun_entity(Entity& e, int turns) { if (turns > e.stun_turns) e.stun_turns = int16_t(turns); }
+void stun_player(int turns) { if (turns > g.pl.ail_stun_turns) g.pl.ail_stun_turns = turns; }
+
+// RT2: Freeze duration (world-tick count) scaled by a cold hit vs the target's eff-max-Life,
+// clamped to [0.3, 3.0] s. Below the 0.3 s floor -> 0 (no freeze). Pure integer math (firewall).
+int freeze_ticks_for(int cold_dmg, int max_life) {
+    if (max_life < 1) max_life = 1;
+    int t = cold_dmg * tune::kFreezeMaxTicks / max_life;   // ratio * max ticks (floor)
+    if (t < tune::kFreezeMinTicks) return 0;
+    if (t > tune::kFreezeMaxTicks) t = tune::kFreezeMaxTicks;
+    return t;
+}
+
+// RT2: the hit's damage as a % of the target's eff-max-Life, inflated by attacker Stun Buildup and
+// saturated at the cap. The shared basis for both stun chance and stun duration.
+int stun_ratio_pct(int hit_dmg, int max_life, int mult_pct) {
+    if (max_life < 1) max_life = 1;
+    int rp = hit_dmg * 100 / max_life;
+    if (mult_pct > 0) rp = rp * (100 + mult_pct) / 100;
+    if (rp > tune::kStunRatioCapPct) rp = tune::kStunRatioCapPct;
+    return rp;
+}
+// Deterministic stun duration (world ticks, 0 = below threshold) — no RNG. Reduction shortens it.
+int stun_duration_for(int hit_dmg, int max_life, int mult_pct, int reduce_pct) {
+    if (reduce_pct < 0) reduce_pct = 0; if (reduce_pct > 90) reduce_pct = 90;
+    const int rp = stun_ratio_pct(hit_dmg, max_life, mult_pct);
+    if (rp < tune::kStunThresholdPct) return 0;
+    int t = rp * tune::kStunMaxTicks / 100;
+    t = t * (100 - reduce_pct) / 100;
+    if (t < tune::kStunMinTicks) t = tune::kStunMinTicks;
+    if (t > tune::kStunMaxTicks) t = tune::kStunMaxTicks;
+    return t;
+}
+// Stun chance% (0 = can't stun) — ramps with the ratio above the threshold, less Stun Reduction.
+int stun_chance_for(int hit_dmg, int max_life, int mult_pct, int reduce_pct) {
+    if (reduce_pct < 0) reduce_pct = 0; if (reduce_pct > 90) reduce_pct = 90;
+    const int rp = stun_ratio_pct(hit_dmg, max_life, mult_pct);
+    if (rp < tune::kStunThresholdPct) return 0;
+    int chance = (rp - tune::kStunThresholdPct) * tune::kStunChanceNum - reduce_pct;
+    if (chance < 0) chance = 0;
+    if (chance > 100) chance = 100;
+    return chance;
+}
+// PoE-style Stun roll: RNG (combat stream) drawn ONLY when the hit crosses the threshold, so
+// sub-threshold hits stay baseline. Returns the stun duration (world ticks, 0 = no stun).
+int roll_stun_ticks(int hit_dmg, int max_life, int mult_pct, int reduce_pct) {
+    const int chance = stun_chance_for(hit_dmg, max_life, mult_pct, reduce_pct);
+    if (chance <= 0) return 0;
+    if (int(g.rng.combat.below(100)) >= chance) return 0;  // failed the stun roll
+    return stun_duration_for(hit_dmg, max_life, mult_pct, reduce_pct);
+}
+
+// RT2: an enemy melee/ranged hit on the player — applies damage, then rolls Stun (hit vs player
+// eff-max-Life, lowered by the player's Stun Reduction). Environment/DoT damage does NOT route
+// through here, so only real hits can stun. Two-way with the player-stuns-foe path in try_move.
+void foe_hit_player(int dmg, const char* cause, DmgType type = DT_PHYS) {
+    damage_player(dmg, cause, type);
+    if (g.pl.dead || dmg <= 0) return;
+    if (int st = roll_stun_ticks(dmg, player_max_hp(), 0, affix_total(items::AK_STUN_REDUCE)); st > 0)
+        stun_player(st);
+}
 // C3: DoT-afflicted enemies lose hp each world turn; a DoT kill leaves a corpse (water, no loot/xp).
 void tick_enemy_ailments() {
     for (int i = 1; i < kMaxEnts; ++i) {
@@ -1608,7 +1671,7 @@ void trooper_act(Entity& e) {
                 return;
             }
             g.log.push("The trooper's blade finds you for %d.", dmg);
-            damage_player(dmg, "Cut down by Harkonnen steel.");
+            foe_hit_player(dmg, "Cut down by Harkonnen steel.");
             reflect_thorns(&e);  // D1: Deflect
             return;
         }
@@ -1743,7 +1806,7 @@ void critter_act(Entity& e) {
     if (e.type == EType::HunterSeeker) {
         if (pdist == 1) {
             g.log.push("The sliver strikes like a wasp - and spends itself.");
-            damage_player(4, "A hunter-seeker found its mark.");
+            foe_hit_player(4, "A hunter-seeker found its mark.");
             poison_player(2, 4);  // C3: the needle is envenomed (Toxin — Toxin Resistance mitigates the ticks)
             e.type = EType::None;
             return;
@@ -1778,7 +1841,7 @@ void critter_act(Entity& e) {
             const int dmg = foe_attack_roll(*foe_stats(EType::Hermit), e.blind_turns > 0 ? tune::kBlindAcc : 0);
             if (dmg == 0) { g.log.push("The hermit's claws rake past you."); return; }
             g.log.push("The spice-mad hermit claws at you, shrieking prophecy!");
-            damage_player(dmg, "Beaten down by a prophet of the sand.");
+            foe_hit_player(dmg, "Beaten down by a prophet of the sand.");
             return;
         }
         if (g.rng.combat.chance(1, 2)) {
@@ -1845,7 +1908,7 @@ void hound_act(Entity& e) {
                 return;
             }
             g.log.push("The dust hound bites you for %d.", dmg);
-            damage_player(dmg, "Torn apart by dust hounds.");
+            foe_hit_player(dmg, "Torn apart by dust hounds.");
             reflect_thorns(&e);  // D1: Deflect
             return;
         }
@@ -2020,14 +2083,20 @@ void upkeep() {
         if (g.pl.ail_bleed_dmg > 0) damage_player(g.pl.ail_bleed_dmg, "You bleed out into the sand.", DT_BLEED);
     }
     if (g.pl.ail_blind_turns > 0) --g.pl.ail_blind_turns;      // C3: Blind wears off
-    if (g.pl.ail_frozen_turns > 0) --g.pl.ail_frozen_turns;    // C3: reserved (player turn-skip: next slice)
+    if (g.pl.ail_frozen_turns > 0) --g.pl.ail_frozen_turns;    // C3/RT2: Freeze wears off (locks actions)
+    if (g.pl.ail_stun_turns > 0) --g.pl.ail_stun_turns;        // RT2: Stun wears off (locks actions)
 }
 
 // The player spent a turn: world advances.
 // RT1.2: real-time cadence. The player may take a grid action only once per cooldown
 // (kPlayerActionTicks sim-ticks); consuming an action arms it. The WORLD no longer advances
 // as a side effect of player actions — game_update fires world_tick() on its own timer.
-bool player_ready() { return g.sim_clock >= g.pl.next_act_tick; }
+bool player_ready() {
+    // RT2: Freeze and Stun lock the player out entirely — the cooldown never readies while either
+    // timer is running (they tick down on the world clock in upkeep).
+    if (g.pl.ail_frozen_turns > 0 || g.pl.ail_stun_turns > 0) return false;
+    return g.sim_clock >= g.pl.next_act_tick;
+}
 void consume_action() { g.pl.next_act_tick = g.sim_clock + uint32_t(tune::kPlayerActionTicks); }
 
 // One world step: enemies act, upkeep runs, the worm/ops/seasons advance. Fired from
@@ -2057,12 +2126,13 @@ void world_tick() {
             }
             continue;
         }
-        // C3: a Frozen combatant (Cold control — Reverend Mother) loses its turn.
-        if (e.frozen_turns > 0 &&
+        // C3/RT2: a Frozen (Cold control) or Stunned combatant loses its turn.
+        if ((e.frozen_turns > 0 || e.stun_turns > 0) &&
             (e.type == EType::Boss || e.type == EType::Trooper || e.type == EType::ShieldTrooper ||
              e.type == EType::PanAdder || e.type == EType::Hermit || e.type == EType::HunterSeeker ||
              e.type == EType::Hound)) {
-            --e.frozen_turns;
+            if (e.frozen_turns > 0) --e.frozen_turns;
+            if (e.stun_turns > 0) --e.stun_turns;
             continue;
         }
         if (e.type == EType::Boss) {
@@ -2083,8 +2153,8 @@ void world_tick() {
                         g.log.push("The blade is POISONED - your water burns.");
                     }
                     g.log.push("The champion strikes you for %d.", dmg);
-                    damage_player(dmg, e.data2 == -1 ? "Slain by the Baron himself."
-                                                     : "Cut down by the Baron's champion.");
+                    foe_hit_player(dmg, e.data2 == -1 ? "Slain by the Baron himself."
+                                                      : "Cut down by the Baron's champion.");
                     reflect_thorns(&e);  // D1: Deflect
                 } else {
                     int best_x = e.x, best_y = e.y;
@@ -2626,6 +2696,13 @@ void try_move(int dx, int dy) {
         // C3: AK_POISON (of Venom / Poison Damage) applies a Poison DoT — activates the D1 stat.
         if (int ap = affix_total(items::AK_POISON); ap > 0 && victim->hp > 0)
             poison_entity(*victim, 1 + ap / 20, 5);
+        // RT2: a heavy blow can Stun (damage vs the foe's max Life; Stun Buildup inflates it).
+        if (victim->hp > 0 && foe) {
+            if (int st = roll_stun_ticks(dealt, foe->hp, affix_total(items::AK_STUN_MULT), 0); st > 0) {
+                stun_entity(*victim, st);
+                g.log.push("Staggered!");
+            }
+        }
         if (crit) g.log.push("CRIT - %d! The blade finds the seam.", dealt);
         else g.log.push("You hit for %d.", dealt);
         if (victim->hp <= 0) {
@@ -4826,6 +4903,7 @@ void game_serialize(SaveWriter& w) {
     w.i32(g.pl.ail_bleed_turns);   // C3
     w.i32(g.pl.ail_blind_turns);   // C3
     w.i32(g.pl.ail_frozen_turns);  // C3
+    w.i32(g.pl.ail_stun_turns);    // RT2
     w.u8(g.pl.maker_hooks ? 1 : 0);
     w.u8(g.pl.riding ? 1 : 0);
     w.i32(g.pl.ride_turns);
@@ -4908,6 +4986,7 @@ bool game_deserialize(SaveReader& r) {
     pl.ail_bleed_turns = r.i32();   // C3
     pl.ail_blind_turns = r.i32();   // C3
     pl.ail_frozen_turns = r.i32();  // C3
+    pl.ail_stun_turns = r.i32();    // RT2
     pl.maker_hooks = r.u8() != 0;
     pl.riding = r.u8() != 0;
     pl.ride_turns = r.i32();
@@ -5153,6 +5232,24 @@ int game_debug_enemy_poison_turns() {  // C3: poison turns on the first ShieldTr
             return g.ents[i].poison_turns;
     return -1;
 }
+int game_debug_enemy_stun_turns() {  // RT2: stun turns on the first ShieldTrooper in the zone
+    for (int i = 1; i < kMaxEnts; ++i)
+        if (g.ents[i].type == EType::ShieldTrooper && g.ents[i].zone == g.cur_zone)
+            return g.ents[i].stun_turns;
+    return -1;
+}
+// RT2 (deterministic, no RNG): the Freeze/Stun duration formulas, for asserting the seconds-based
+// scaling + clamps directly. secs = ticks * kWorldStepTicks / kTickHz.
+int game_debug_freeze_ticks(int cold_dmg, int max_life) { return freeze_ticks_for(cold_dmg, max_life); }
+int game_debug_stun_ticks(int hit_dmg, int max_life, int mult, int reduce) {
+    return stun_duration_for(hit_dmg, max_life, mult, reduce);
+}
+int game_debug_stun_chance(int hit_dmg, int max_life, int mult, int reduce) {
+    return stun_chance_for(hit_dmg, max_life, mult, reduce);
+}
+void game_debug_stun_player(int ticks) { stun_player(ticks); }  // RT2: force a player Stun
+int game_debug_player_stun_turns() { return g.pl.ail_stun_turns; }
+int game_debug_player_ready() { return player_ready() ? 1 : 0; }  // RT2: is the player able to act?
 void game_debug_shield_state(int* shield, int* max_shield, int* hp) {
     if (shield) *shield = g.pl.shield;
     if (max_shield) *max_shield = player_max_shield();
@@ -5393,6 +5490,7 @@ uint64_t game_state_hash() {
     mix(uint64_t(uint32_t(g.pl.ail_scorch_dmg)) | (uint64_t(uint32_t(g.pl.ail_scorch_turns)) << 32));  // C3
     mix(uint64_t(uint32_t(g.pl.ail_bleed_dmg)) | (uint64_t(uint32_t(g.pl.ail_bleed_turns)) << 32));    // C3
     mix(uint64_t(uint32_t(g.pl.ail_blind_turns)) | (uint64_t(uint32_t(g.pl.ail_frozen_turns)) << 32));  // C3
+    mix(uint64_t(uint32_t(g.pl.ail_stun_turns)));  // RT2: Stun locks the player out
     mix(uint64_t(uint8_t(g.pl.background)) | (uint64_t(uint32_t(g.pl.atk)) << 8));
     mix(uint64_t(uint16_t(g.pl.st.level)) | (uint64_t(uint32_t(g.pl.st.xp)) << 16) |
         (uint64_t(uint16_t(g.pl.st.cond)) << 48));  // C1: Conditioning (was str)
