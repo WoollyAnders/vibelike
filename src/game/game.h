@@ -98,6 +98,10 @@ void game_debug_enter_cave();                // B9: duck into a hidden cavern
 void game_debug_exit_cave();                 // B9: climb back out to the field
 int game_debug_in_cave();                    // B9: 1 if inside a cavern excursion
 int game_debug_cave_reward_count();          // B9: loot + spice piles in the current zone
+int game_debug_trials();                     // Desert Trials: bitmask of ordeals passed
+int game_debug_can_ascend();                 // Desert Trials: 1 if the Awakening rite is open
+void game_debug_trigger_trial(int which);    // Desert Trials: pass ordeal which (0/1/2) via mark_trial
+void game_debug_complete_trials();           // Desert Trials: open the gate outright (all three)
 void game_debug_revelation(int* stage, int* inv_count);  // B2b: Revelation stage + inv item count
 void game_debug_revelation_pick(int idx);  // B2b: choose row idx + confirm the Revelation
 int game_debug_cur_node();  // B1.3: current graph node index

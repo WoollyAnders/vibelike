@@ -1036,8 +1036,20 @@ struct Meta {
     // --- B6 (DME6) --- the Guild tithe: an optional difficulty/reward dial
     uint8_t guild_debt = 0;        // how overdue the tithe is (0 = paid up; higher = harder + richer)
     uint8_t guild_broken = 0;      // 1 once the Guild Navigator falls -> raises the debt cap
+    // --- Desert Trials (DME7) --- the ascension gate (replaces the placeholder Awaken>=2 gate).
+    // A bitmask of the three ordeals passed in a vision-run; all three open the Awakening rite.
+    uint8_t trials_done = 0;
 };
 Meta g_meta;
+
+// Desert Trials: the three ordeals of the deep desert (PoE Lab-Trials analog). Passing all three
+// earns the Awakening (the sietch ascension rite). Faced inside vision-runs, persisted in meta.
+enum TrialBit : uint8_t {
+    TRIAL_SANDWALK = 1 << 0,  // cross a leg unheard (reach the forward door in sandwalk)
+    TRIAL_STORM    = 1 << 1,  // ride out a Coriolis storm and live
+    TRIAL_WORM     = 1 << 2,  // survive a Maker surfacing at your heels
+    TRIAL_ALL      = 0x7,
+};
 
 // B6: the Guild-tithe difficulty level = the overdue debt, clamped to the active cap (campaign, or a
 // higher endgame cap once the Guild Navigator has fallen). 0 = baseline (no scaling; determinism-safe).
@@ -1047,6 +1059,7 @@ int guild_difficulty() {
     return d < 0 ? 0 : d > cap ? cap : d;
 }
 
+inline constexpr uint32_t kMetaV7 = 0x37454D44u;  // 'DME7' (Desert Trials: + trials_done)
 inline constexpr uint32_t kMetaV6 = 0x36454D44u;  // 'DME6' (B6: + guild tithe debt / broken)
 inline constexpr uint32_t kMetaV5 = 0x35454D44u;  // 'DME5' (C3: + base class / ascendancy)
 inline constexpr uint32_t kMetaV4 = 0x34454D44u;  // 'DME4' (D1: widened Inst)
@@ -1079,7 +1092,7 @@ void meta_load() {
     if (!f) return;
     uint32_t magic = 0;
     if (std::fread(&magic, 4, 1, f) == 1) {
-        if (magic == kMetaV6 || magic == kMetaV5 || magic == kMetaV4) {  // native widened-Inst format
+        if (magic == kMetaV7 || magic == kMetaV6 || magic == kMetaV5 || magic == kMetaV4) {  // native widened-Inst format
             (void)!std::fread(&g_meta.runs, 4, 1, f);
             (void)!std::fread(&g_meta.endings_seen, 1, 1, f);
             (void)!std::fread(&g_meta.stash_count, 1, 1, f);
@@ -1091,13 +1104,16 @@ void meta_load() {
             (void)!std::fread(&g_meta.st, sizeof g_meta.st, 1, f);
             (void)!std::fread(g_meta.equip, sizeof g_meta.equip, 1, f);
             (void)!std::fread(g_meta.inv, sizeof g_meta.inv, 1, f);
-            if (magic == kMetaV5 || magic == kMetaV6) {  // C3: base class + ascendancy (DME4 -> 0/None)
+            if (magic == kMetaV5 || magic == kMetaV6 || magic == kMetaV7) {  // C3: base class + ascendancy (DME4 -> 0/None)
                 (void)!std::fread(&g_meta.base_class, 1, 1, f);
                 (void)!std::fread(&g_meta.ascendancy, 1, 1, f);
             }
-            if (magic == kMetaV6) {  // B6: guild tithe (DME5/DME4 leave them at 0)
+            if (magic == kMetaV6 || magic == kMetaV7) {  // B6: guild tithe (DME5/DME4 leave them at 0)
                 (void)!std::fread(&g_meta.guild_debt, 1, 1, f);
                 (void)!std::fread(&g_meta.guild_broken, 1, 1, f);
+            }
+            if (magic == kMetaV7) {  // Desert Trials (DME6 and earlier leave it at 0)
+                (void)!std::fread(&g_meta.trials_done, 1, 1, f);
             }
         } else if (magic == kMetaV3 || magic == kMetaV2) {  // legacy 4-byte items -> convert
             (void)!std::fread(&g_meta.runs, 4, 1, f);
@@ -1129,7 +1145,7 @@ void meta_load() {
 void meta_save() {
     FILE* f = std::fopen("meta.dat", "wb");
     if (!f) return;
-    std::fwrite(&kMetaV6, 4, 1, f);
+    std::fwrite(&kMetaV7, 4, 1, f);
     std::fwrite(&g_meta.runs, 4, 1, f);
     std::fwrite(&g_meta.endings_seen, 1, 1, f);
     std::fwrite(&g_meta.stash_count, 1, 1, f);
@@ -1145,6 +1161,7 @@ void meta_save() {
     std::fwrite(&g_meta.ascendancy, 1, 1, f);  // C3 (DME5)
     std::fwrite(&g_meta.guild_debt, 1, 1, f);    // B6 (DME6)
     std::fwrite(&g_meta.guild_broken, 1, 1, f);  // B6 (DME6)
+    std::fwrite(&g_meta.trials_done, 1, 1, f);    // Desert Trials (DME7)
     std::fclose(f);
 }
 
@@ -1172,10 +1189,28 @@ void guild_tithe_pay(int reduce) {
     meta_save();
 }
 
-// C3: the sietch rite of passage. Gated by the Awaken ladder (you must have proven yourself once —
-// awaken_unlocked >= 2), and the chosen ascendancy must belong to your base class. You ascend once;
-// it persists across death (character identity). Returns true on success.
-bool can_ascend() { return g.pl.ascendancy == Ascendancy::None && g_meta.awaken_unlocked >= 2; }
+// A vision-run leg (not the sietch hub, a rendezvous, or a cave excursion) — where the Trials are faced.
+bool in_vision_run() { return g.cur_node > 0 && !g.at_rendezvous && !g.in_cave; }
+
+// Desert Trials: mark an ordeal passed. The first time all three are done, the Awakening opens.
+// Only counts inside a vision-run. RNG-free + meta-only (never touches the sim hash).
+void mark_trial(TrialBit bit) {
+    if (!in_vision_run() || (g_meta.trials_done & bit)) return;
+    g_meta.trials_done |= bit;
+    static const char* kNames[] = {"the Silent Sandwalk", "the Coriolis", "the Maker's Passing"};
+    const int idx = bit == TRIAL_SANDWALK ? 0 : bit == TRIAL_STORM ? 1 : 2;
+    g.log.push("A Trial of the deep desert is passed: %s.", kNames[idx]);
+    if ((g_meta.trials_done & TRIAL_ALL) == TRIAL_ALL)
+        g.log.push("The Desert Trials are complete. The Awakening awaits you in the sietch.");
+    meta_save();  // the Trials persist across death, like the character
+}
+
+// C3: the sietch rite of passage. Gated now by the DESERT TRIALS (all three ordeals passed —
+// replacing the placeholder Awaken>=2 gate), and the chosen ascendancy must belong to your base
+// class. You ascend once; it persists across death (character identity). Returns true on success.
+bool can_ascend() {
+    return g.pl.ascendancy == Ascendancy::None && (g_meta.trials_done & TRIAL_ALL) == TRIAL_ALL;
+}
 bool ascend(Ascendancy asc) {
     if (!can_ascend()) return false;
     if (int(asc) <= 0 || int(asc) >= int(Ascendancy::Count)) return false;
@@ -2254,7 +2289,10 @@ void upkeep() {
     // storm scour: sand-blast exposure regardless of hour
     if (g.storm_turns > 0) {
         --g.storm_turns;
-        if (g.storm_turns == 0) g.log.push("The storm passes. The desert exhales.");
+        if (g.storm_turns == 0) {
+            g.log.push("The storm passes. The desert exhales.");
+            mark_trial(TRIAL_STORM);  // Desert Trials: you rode out the Coriolis and lived
+        }
         if (!(tf & (map::TF_INDOOR | map::TF_SHADE))) {
             g.pl.exposure += 2;
             if (g.pl.exposure > 100) g.pl.exposure = 100;
@@ -2480,6 +2518,10 @@ void world_tick() {
             add_flash(g.wrm.x, g.wrm.y, 8, 24, 2);  // breach static-discharge
         }
     }
+    // Desert Trials: the Maker surfaced at your heels and has now gone back under — you crossed.
+    if (before == worm::State::Surfaced && g.wrm.state != worm::State::Surfaced &&
+        !g.pl.dead && !g.pl.riding)
+        mark_trial(TRIAL_WORM);
 
     // hour changed? re-cast the shadows
     if (hour_now() != g.shade_hour) recompute_shade(g.cur_zone, hour_now());
@@ -3538,6 +3580,8 @@ void use_door() {
         extract_run();  // completing the vision forges the haul (extraction; also wakes at node 0)
         return;
     }
+    // Desert Trials: reaching a forward door in sandwalk = crossing the leg unheard.
+    if (g.pl.sandwalk) mark_trial(TRIAL_SANDWALK);
     // B2b: at a forward door the vision reveals gear; the Revelation pick then advances to `nxt`.
     open_revelation(nxt);
 }
@@ -5714,6 +5758,13 @@ int game_debug_cave_reward_count() {  // B9: loot + spice piles present in the c
     }
     return n;
 }
+
+int game_debug_trials() { return g_meta.trials_done & TRIAL_ALL; }  // Trials: bitmask passed
+int game_debug_can_ascend() { return can_ascend() ? 1 : 0; }        // Trials: is the Awakening open?
+void game_debug_trigger_trial(int which) {  // Trials: pass one ordeal via the real (guarded) path
+    mark_trial(which == 0 ? TRIAL_SANDWALK : which == 1 ? TRIAL_STORM : TRIAL_WORM);
+}
+void game_debug_complete_trials() { g_meta.trials_done = TRIAL_ALL; }  // Trials: open the gate outright
 
 void game_debug_revelation(int* stage, int* inv_count) {
     if (stage) *stage = g.revelation_stage;

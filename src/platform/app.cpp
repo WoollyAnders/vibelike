@@ -850,10 +850,10 @@ int run_classtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cm
     game_debug_apply_base(1); game_debug_class(&b, &a); const bool wanderer  = b == 1 && a == 0;
     game_debug_apply_base(2); game_debug_class(&b, &a); const bool oracle    = b == 2 && a == 0;
 
-    // (B) the rite is GATED by the Awaken ladder — a fresh character (unlocked 1) is refused
+    // (B) the rite is GATED by the Desert Trials — a fresh character (no ordeals passed) is refused
     game_debug_apply_base(0);  // Knifehand
     const bool gated = game_debug_ascend(1 /*Fedaykin*/) == 0;
-    game_debug_unlock_awaken(2);
+    game_debug_complete_trials();  // pass the three desert ordeals -> the Awakening opens
 
     // (C) you may only pick one of your base's ascendancies, and only once
     const bool wrong_base = game_debug_ascend(6 /*Sunwalker: a Wanderer ascendancy*/) == 0;
@@ -1431,6 +1431,38 @@ int run_cavetest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cma
     return pass ? 0 : 1;
 }
 
+// Desert Trials: three desert ordeals faced inside vision-runs. Passing all three (persisted in
+// meta.dat, DME7) opens the Awakening — the sietch ascension rite — replacing the placeholder
+// Awaken>=2 gate. Bits: 0 sandwalk, 1 storm, 2 worm.
+int run_trialtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    std::remove("meta.dat");
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(555, services);
+
+    // (A) in the sietch hub (not a vision-run), an ordeal cannot be passed — the gate guards it.
+    game_debug_trigger_trial(1);
+    const bool hub_noop = game_debug_trials() == 0 && game_debug_can_ascend() == 0;
+
+    // (B) inside a run each ordeal sets its bit; the Awakening opens only once all three are passed.
+    game_debug_use_door();                 // hub -> field vision-run
+    game_debug_trigger_trial(0); const int m1 = game_debug_trials();
+    game_debug_trigger_trial(1); const int m2 = game_debug_trials();
+    const bool partial_gated = game_debug_can_ascend() == 0;   // 2 of 3 -> still shut
+    game_debug_trigger_trial(2); const int m3 = game_debug_trials();
+    const bool progressed = m1 == 1 && m2 == 3 && m3 == 7;
+    const bool opens = game_debug_can_ascend() == 1;
+
+    // (C) DME7 round-trip: the Trials persist across a meta reload (like the character/ascendancy).
+    int mb = -1, ma = -1; game_debug_meta_reload_class(&mb, &ma);
+    const bool persisted = game_debug_trials() == 7;
+
+    const bool pass = hub_noop && progressed && partial_gated && opens && persisted;
+    std::printf("trialtest %s (hub_noop %d prog %d/%d/%d partial_gated %d opens %d persist %d)\n",
+                pass ? "PASS" : "FAIL", hub_noop, m1, m2, m3, partial_gated, opens, persisted);
+    std::remove("meta.dat");
+    return pass ? 0 : 1;
+}
+
 // A4: click-to-move pathfinds to the goal and is deterministic across runs.
 int run_clicktest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
     GameServices services{&mixer, &assets, &cmaps};
@@ -1469,7 +1501,7 @@ int main(int argc, char** argv) {
          reveltest = false, gauntlettest = false, extractiontest = false, metatest = false,
          statmodtest = false, affixtest = false, metamigratetest = false, ailmenttest = false,
          rttest = false, stuntest = false, classtest = false, guildtest = false,
-         vendortest = false, patroltest = false, cavetest = false;
+         vendortest = false, patroltest = false, cavetest = false, trialtest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
         if (SDL_strcmp(argv[i], "--seamtest") == 0) seamtest = true;
@@ -1495,6 +1527,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--vendortest") == 0) vendortest = true;
         if (SDL_strcmp(argv[i], "--patroltest") == 0) patroltest = true;
         if (SDL_strcmp(argv[i], "--cavetest") == 0) cavetest = true;
+        if (SDL_strcmp(argv[i], "--trialtest") == 0) trialtest = true;
         if (SDL_strcmp(argv[i], "--animdebug") == 0) animdebug = true;
         if (SDL_strcmp(argv[i], "--rpgtest") == 0) rpgtest = true;
         if (SDL_strcmp(argv[i], "--clicktest") == 0) clicktest = true;
@@ -1538,6 +1571,7 @@ int main(int argc, char** argv) {
     if (vendortest) return run_vendortest(mixer, assets, cmaps);
     if (patroltest) return run_patroltest(mixer, assets, cmaps);
     if (cavetest) return run_cavetest(mixer, assets, cmaps);
+    if (trialtest) return run_trialtest(mixer, assets, cmaps);
     if (rpgtest) return run_rpgtest(mixer, assets, cmaps);
     if (reveltest) return run_reveltest(mixer, assets, cmaps);
     if (gauntlettest) return run_gauntlettest(mixer, assets, cmaps);
