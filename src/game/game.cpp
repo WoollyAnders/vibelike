@@ -293,6 +293,12 @@ struct GameState {
     // B10.4: the Golden Path capstone — the alternate-Paul mirror boss. Entered once all five shards
     // are gathered; defeating it refuses the Path (the game's apex trophy).
     bool in_capstone = false;
+    // The Long Ride: the deep-desert greed gauntlet. Abstract state (the playable worm-ride zone,
+    // reusing ride_move, layers on later); the leg/haul/restlessness math is here.
+    bool in_ride = false;
+    int ride_leg = 0;       // legs ridden this run
+    int ride_haul = 0;      // un-banked spice haul (lost if the Maker bucks)
+    int ride_restless = 0;  // restlessness — climbs each leg, drives the buck chance's flavor
 
     int storm_turns = 0;       // M5: Coriolis storm remaining
     int poison_turns = 0;      // pan adder venom: +thirst while active
@@ -1060,6 +1066,9 @@ struct Meta {
     uint8_t pinnacle_cleared = 0;    // bit per faction: its homeworld pinnacle defeated
     uint8_t golden_shards = 0;       // bit per faction: Golden Path shard taken from that pinnacle
     uint8_t capstone_done = 0;       // 1 once the alternate Paul (the Golden Path) is refused
+    // --- The Long Ride (DME9) ---
+    uint8_t maker_hides = 0;         // Jacurutu jackpots banked (the Divine reagent; D2 crafting)
+    uint8_t best_ride_leg = 0;       // deepest Long Ride leg reached (a persistent record)
 };
 Meta g_meta;
 
@@ -1091,6 +1100,7 @@ int guild_difficulty() {
     return d < 0 ? 0 : d > cap ? cap : d;
 }
 
+inline constexpr uint32_t kMetaV9 = 0x39454D44u;  // 'DME9' (Long Ride: + maker_hides / best_ride_leg)
 inline constexpr uint32_t kMetaV8 = 0x38454D44u;  // 'DME8' (endgame: + Jihad pressure/pinnacles/shards)
 inline constexpr uint32_t kMetaV7 = 0x37454D44u;  // 'DME7' (Desert Trials: + trials_done)
 inline constexpr uint32_t kMetaV6 = 0x36454D44u;  // 'DME6' (B6: + guild tithe debt / broken)
@@ -1125,7 +1135,7 @@ void meta_load() {
     if (!f) return;
     uint32_t magic = 0;
     if (std::fread(&magic, 4, 1, f) == 1) {
-        if (magic == kMetaV8 || magic == kMetaV7 || magic == kMetaV6 || magic == kMetaV5 || magic == kMetaV4) {  // native widened-Inst format
+        if (magic == kMetaV9 || magic == kMetaV8 || magic == kMetaV7 || magic == kMetaV6 || magic == kMetaV5 || magic == kMetaV4) {  // native widened-Inst format
             (void)!std::fread(&g_meta.runs, 4, 1, f);
             (void)!std::fread(&g_meta.endings_seen, 1, 1, f);
             (void)!std::fread(&g_meta.stash_count, 1, 1, f);
@@ -1137,23 +1147,27 @@ void meta_load() {
             (void)!std::fread(&g_meta.st, sizeof g_meta.st, 1, f);
             (void)!std::fread(g_meta.equip, sizeof g_meta.equip, 1, f);
             (void)!std::fread(g_meta.inv, sizeof g_meta.inv, 1, f);
-            if (magic == kMetaV5 || magic == kMetaV6 || magic == kMetaV7 || magic == kMetaV8) {  // C3: base class + ascendancy (DME4 -> 0/None)
+            if (magic >= kMetaV5 && magic <= kMetaV9) {  // C3: base class + ascendancy (DME4 -> 0/None)
                 (void)!std::fread(&g_meta.base_class, 1, 1, f);
                 (void)!std::fread(&g_meta.ascendancy, 1, 1, f);
             }
-            if (magic == kMetaV6 || magic == kMetaV7 || magic == kMetaV8) {  // B6: guild tithe (DME5/DME4 leave them at 0)
+            if (magic >= kMetaV6 && magic <= kMetaV9) {  // B6: guild tithe (DME5/DME4 leave them at 0)
                 (void)!std::fread(&g_meta.guild_debt, 1, 1, f);
                 (void)!std::fread(&g_meta.guild_broken, 1, 1, f);
             }
-            if (magic == kMetaV7 || magic == kMetaV8) {  // Desert Trials (DME6 and earlier leave it at 0)
+            if (magic >= kMetaV7 && magic <= kMetaV9) {  // Desert Trials (DME6 and earlier leave it at 0)
                 (void)!std::fread(&g_meta.trials_done, 1, 1, f);
             }
-            if (magic == kMetaV8) {  // endgame Jihad state (DME7 and earlier leave it all at 0)
+            if (magic == kMetaV8 || magic == kMetaV9) {  // endgame Jihad state (DME7 and earlier -> 0)
                 (void)!std::fread(&g_meta.chosen_path, 1, 1, f);
                 (void)!std::fread(g_meta.jihad_pressure, sizeof g_meta.jihad_pressure, 1, f);
                 (void)!std::fread(&g_meta.pinnacle_cleared, 1, 1, f);
                 (void)!std::fread(&g_meta.golden_shards, 1, 1, f);
                 (void)!std::fread(&g_meta.capstone_done, 1, 1, f);
+            }
+            if (magic == kMetaV9) {  // The Long Ride (DME8 and earlier leave it at 0)
+                (void)!std::fread(&g_meta.maker_hides, 1, 1, f);
+                (void)!std::fread(&g_meta.best_ride_leg, 1, 1, f);
             }
         } else if (magic == kMetaV3 || magic == kMetaV2) {  // legacy 4-byte items -> convert
             (void)!std::fread(&g_meta.runs, 4, 1, f);
@@ -1185,7 +1199,7 @@ void meta_load() {
 void meta_save() {
     FILE* f = std::fopen("meta.dat", "wb");
     if (!f) return;
-    std::fwrite(&kMetaV8, 4, 1, f);
+    std::fwrite(&kMetaV9, 4, 1, f);
     std::fwrite(&g_meta.runs, 4, 1, f);
     std::fwrite(&g_meta.endings_seen, 1, 1, f);
     std::fwrite(&g_meta.stash_count, 1, 1, f);
@@ -1207,6 +1221,8 @@ void meta_save() {
     std::fwrite(&g_meta.pinnacle_cleared, 1, 1, f);
     std::fwrite(&g_meta.golden_shards, 1, 1, f);
     std::fwrite(&g_meta.capstone_done, 1, 1, f);
+    std::fwrite(&g_meta.maker_hides, 1, 1, f);      // The Long Ride (DME9)
+    std::fwrite(&g_meta.best_ride_leg, 1, 1, f);
     std::fclose(f);
 }
 
@@ -1856,6 +1872,66 @@ bool confront_capstone() {
     if (!capstone_available()) return false;
     enter_capstone();
     return true;
+}
+
+// ---- The Long Ride: the deep-desert greed gauntlet (endgame; sibling to the Jihad Table) ----------
+// Ride the Maker leg by leg; each site adds to an un-banked haul. Bank it (safe) or push on (greed).
+// Past kRideBuckThreshold legs the Maker may BUCK & dive on the remount — the ride ends and the
+// un-banked haul is lost. Jacurutu (the outcast hoard) is the SOLE Maker Hide source, its odds rising
+// with depth; a Hide is secured on the spot (not part of the losable haul). Tithe-free; leg-scaled.
+
+bool ride_begin() {
+    if (!endgame_open() || g.in_ride) return false;
+    g.in_ride = true;
+    g.ride_leg = 0;
+    g.ride_haul = 0;
+    g.ride_restless = 0;
+    g.log.push("You thump the deep sand. A great Maker rises beneath you. The Long Ride begins.");
+    return true;
+}
+
+// Ride on to the next site. Returns 0 = rode on (arrived + resolved the site), 1 = the Maker bucked
+// (ride over, un-banked haul lost). No-op-with-1 if not riding.
+int ride_push() {
+    if (!g.in_ride) return 1;
+    if (g.ride_leg >= tune::kRideBuckThreshold) {  // the remount: the Maker may buck & dive
+        int chance = (g.ride_leg - tune::kRideBuckThreshold + 1) * tune::kRideBuckPerLeg;
+        if (chance > tune::kRideBuckMax) chance = tune::kRideBuckMax;
+        if (int(g.rng.world.below(100)) < chance) {
+            if (g.ride_leg > g_meta.best_ride_leg) g_meta.best_ride_leg = uint8_t(g.ride_leg > 255 ? 255 : g.ride_leg);
+            g.log.push("The Maker BUCKS and sounds! The ride ends; the un-banked haul is lost to the deep.");
+            g.in_ride = false;
+            g.ride_haul = 0;
+            meta_save();
+            return 1;
+        }
+    }
+    ++g.ride_leg;
+    g.ride_restless += g.ride_leg;
+    int jac = tune::kJacurutuBaseChance + g.ride_leg * tune::kJacurutuPerLeg;  // rises with depth
+    if (jac > tune::kJacurutuMax) jac = tune::kJacurutuMax;
+    if (int(g.rng.world.below(100)) < jac) {  // Jacurutu — the outcast hoard, the sole Maker Hide source
+        if (g_meta.maker_hides < 255) ++g_meta.maker_hides;
+        meta_save();  // a Hide is secured on the spot (never part of the losable haul)
+        g.log.push("JACURUTU. The outcast sietch's forbidden hoard yields a MAKER HIDE (leg %d).",
+                   g.ride_leg);
+    } else {
+        g.ride_haul += tune::kRideHaulPerLeg * g.ride_leg;  // a spice site — deeper legs are richer
+        g.log.push("You dismount at a spice blow (leg %d). Un-banked haul: %d.", g.ride_leg, g.ride_haul);
+    }
+    return 0;
+}
+
+// Bank the ride: secure the un-banked haul and walk home. Safe — the greed decision resolved.
+void ride_bank() {
+    if (!g.in_ride) return;
+    g.pl.spice += g.ride_haul;
+    if (g.ride_leg > g_meta.best_ride_leg) g_meta.best_ride_leg = uint8_t(g.ride_leg > 255 ? 255 : g.ride_leg);
+    g.log.push("You bank the ride: %d spice secured after %d legs. You walk home.",
+               g.ride_haul, g.ride_leg);
+    g.in_ride = false;
+    g.ride_haul = 0;
+    meta_save();
 }
 
 void spawn_boss(bool baron) {
@@ -5795,6 +5871,10 @@ void game_serialize(SaveWriter& w) {
     w.u8(g.in_pinnacle ? 1 : 0);    // B10.3: inside a homeworld pinnacle assault
     w.u8(g.pinnacle_faction);
     w.u8(g.in_capstone ? 1 : 0);    // B10.4: inside the Golden Path capstone
+    w.u8(g.in_ride ? 1 : 0);        // The Long Ride: greed-gauntlet state (abstract, no owned zone)
+    w.i32(g.ride_leg);
+    w.i32(g.ride_haul);
+    w.i32(g.ride_restless);
     w.i32(g.storm_turns);
     w.i32(g.poison_turns);
     w.i32(g.thopter_x);
@@ -5892,6 +5972,10 @@ bool game_deserialize(SaveReader& r) {
     const bool in_pinnacle = r.u8() != 0;    // B10.3
     const uint8_t pinnacle_faction = r.u8();
     const bool in_capstone = r.u8() != 0;    // B10.4
+    const bool in_ride = r.u8() != 0;        // The Long Ride
+    const int ride_leg = r.i32();
+    const int ride_haul = r.i32();
+    const int ride_restless = r.i32();
     const int storm_turns = r.i32();
     const int poison_turns = r.i32();
     const int thopter_x = r.i32();
@@ -5956,6 +6040,10 @@ bool game_deserialize(SaveReader& r) {
     g.in_pinnacle = in_pinnacle;      // B10.3
     g.pinnacle_faction = pinnacle_faction;
     g.in_capstone = in_capstone;      // B10.4
+    g.in_ride = in_ride;              // The Long Ride
+    g.ride_leg = ride_leg;
+    g.ride_haul = ride_haul;
+    g.ride_restless = ride_restless;
     g.storm_turns = storm_turns;
     g.poison_turns = poison_turns;
     g.thopter_x = int16_t(thopter_x);
@@ -6212,6 +6300,15 @@ int game_debug_confront_capstone() { return confront_capstone() ? 1 : 0; }  // e
 int game_debug_in_capstone() { return g.in_capstone ? 1 : 0; }
 void game_debug_resolve_capstone() { resolve_capstone(); }   // simulate defeating the alternate Paul
 int game_debug_capstone_done() { return g_meta.capstone_done; }
+// --- The Long Ride hooks ---
+int game_debug_ride_begin() { return ride_begin() ? 1 : 0; }
+int game_debug_ride_push() { return ride_push(); }        // 0 = rode on, 1 = bucked
+void game_debug_ride_bank() { ride_bank(); }
+int game_debug_in_ride() { return g.in_ride ? 1 : 0; }
+int game_debug_ride_leg() { return g.ride_leg; }
+int game_debug_ride_haul() { return g.ride_haul; }
+int game_debug_maker_hides() { return g_meta.maker_hides; }
+int game_debug_best_ride_leg() { return g_meta.best_ride_leg; }
 
 void game_debug_revelation(int* stage, int* inv_count) {
     if (stage) *stage = g.revelation_stage;

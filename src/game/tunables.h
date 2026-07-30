@@ -126,4 +126,17 @@ inline constexpr int kStrikePressPerTier = 12;  // pressure a cleared strike add
 inline constexpr int kStrikeTiers = 5;          // commission tiers (difficulty/reward ladder)
 inline constexpr int kStrikeSpiceBase = 20;     // spice to commission a tier-1 strike (x tier)
 
+// --- Endgame: The Long Ride (Arrakis deep-desert greed gauntlet — sibling to the Jihad Table) ---
+// Alternating leg loop: ride the Maker to a site, bank the haul or push on. Restlessness climbs each
+// leg; past a threshold the Maker may BUCK & dive, ending the ride and costing the un-banked haul.
+// Difficulty is intrinsic (leg-scaled), NEVER the Guild tithe. Jacurutu (the outcast hoard) is the
+// SOLE source of the Maker Hide (a Divine reagent), its odds rising with depth.
+inline constexpr int kRideBuckThreshold = 3;    // legs ridden before the Maker may buck
+inline constexpr int kRideBuckPerLeg = 8;       // +8% buck chance per leg past the threshold
+inline constexpr int kRideBuckMax = 70;         // buck-chance cap
+inline constexpr int kRideHaulPerLeg = 6;       // base spice per site, x leg (deeper legs = richer)
+inline constexpr int kJacurutuBaseChance = 3;   // % Jacurutu (Maker Hide) at leg 1
+inline constexpr int kJacurutuPerLeg = 2;       // +2% per leg
+inline constexpr int kJacurutuMax = 40;         // Jacurutu-chance cap
+
 }  // namespace tune

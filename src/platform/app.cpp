@@ -1661,6 +1661,51 @@ int run_capstonetest(audio::Mixer& mixer, const Assets& assets, const Colormaps&
     return pass ? 0 : 1;
 }
 
+// The Long Ride: the deep-desert greed gauntlet. Ride the Maker leg by leg building an un-banked
+// haul; bank it or push on. Past the buck threshold the Maker may buck & dive (ride over, haul lost).
+// Jacurutu is the sole Maker Hide source. Tithe-free, leg-scaled.
+int run_longridetest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    std::remove("meta.dat");
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(1789, services);
+
+    // (A) shut until the Jihad (Chosen Path) is open
+    const bool gated = game_debug_ride_begin() == 0;
+    game_debug_open_chosen_path();
+    const bool began = game_debug_ride_begin() == 1 && game_debug_in_ride() == 1;
+
+    // (B) the first legs (before the buck threshold) never buck; the haul grows
+    int ok = 0;
+    for (int i = 0; i < 3; ++i) if (game_debug_ride_push() == 0) ++ok;
+    const bool safe = ok == 3 && game_debug_ride_leg() == 3;
+
+    // (C) bank: the un-banked haul is secured into spice, the ride ends
+    int hp, mhp, wa, mwa, lv, sp0; game_debug_player_stats(&hp, &mhp, &wa, &mwa, &lv, &sp0);
+    const int haul = game_debug_ride_haul();
+    game_debug_ride_bank();
+    int sp1; game_debug_player_stats(&hp, &mhp, &wa, &mwa, &lv, &sp1);
+    const bool banked = game_debug_in_ride() == 0 && (sp1 - sp0) == haul && haul > 0;
+
+    // (D) push your luck until the Maker bucks -> ride ends, the un-banked haul is lost
+    game_debug_ride_begin();
+    bool bucked = false;
+    for (int i = 0; i < 200 && !bucked; ++i) if (game_debug_ride_push() == 1) bucked = true;
+    const bool buck = bucked && game_debug_in_ride() == 0 && game_debug_ride_haul() == 0;
+
+    // (E) records + Jacurutu accrual, and the DME9 round-trip
+    const bool records = game_debug_best_ride_leg() > 0;
+    const int hides = game_debug_maker_hides();
+    int mb = -1, ma = -1; game_debug_meta_reload_class(&mb, &ma);
+    const bool persisted = game_debug_best_ride_leg() > 0 && game_debug_maker_hides() == hides;
+
+    const bool pass = gated && began && safe && banked && buck && records && persisted;
+    std::printf("longridetest %s (gated %d began %d safe %d banked %d buck %d best %d hides %d persist %d)\n",
+                pass ? "PASS" : "FAIL", gated, began, safe, banked, buck,
+                game_debug_best_ride_leg(), hides, persisted);
+    std::remove("meta.dat");
+    return pass ? 0 : 1;
+}
+
 // A4: click-to-move pathfinds to the goal and is deterministic across runs.
 int run_clicktest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
     GameServices services{&mixer, &assets, &cmaps};
@@ -1700,7 +1745,8 @@ int main(int argc, char** argv) {
          statmodtest = false, affixtest = false, metamigratetest = false, ailmenttest = false,
          rttest = false, stuntest = false, classtest = false, guildtest = false,
          vendortest = false, patroltest = false, cavetest = false, trialtest = false,
-         endgametest = false, striketest = false, pinnacletest = false, capstonetest = false;
+         endgametest = false, striketest = false, pinnacletest = false, capstonetest = false,
+         longridetest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
         if (SDL_strcmp(argv[i], "--seamtest") == 0) seamtest = true;
@@ -1731,6 +1777,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--striketest") == 0) striketest = true;
         if (SDL_strcmp(argv[i], "--pinnacletest") == 0) pinnacletest = true;
         if (SDL_strcmp(argv[i], "--capstonetest") == 0) capstonetest = true;
+        if (SDL_strcmp(argv[i], "--longridetest") == 0) longridetest = true;
         if (SDL_strcmp(argv[i], "--animdebug") == 0) animdebug = true;
         if (SDL_strcmp(argv[i], "--rpgtest") == 0) rpgtest = true;
         if (SDL_strcmp(argv[i], "--clicktest") == 0) clicktest = true;
@@ -1779,6 +1826,7 @@ int main(int argc, char** argv) {
     if (striketest) return run_striketest(mixer, assets, cmaps);
     if (pinnacletest) return run_pinnacletest(mixer, assets, cmaps);
     if (capstonetest) return run_capstonetest(mixer, assets, cmaps);
+    if (longridetest) return run_longridetest(mixer, assets, cmaps);
     if (rpgtest) return run_rpgtest(mixer, assets, cmaps);
     if (reveltest) return run_reveltest(mixer, assets, cmaps);
     if (gauntlettest) return run_gauntlettest(mixer, assets, cmaps);

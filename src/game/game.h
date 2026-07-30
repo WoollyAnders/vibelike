@@ -126,6 +126,14 @@ int game_debug_confront_capstone();          // B10.4: enter the Golden Path if 
 int game_debug_in_capstone();                // B10.4: 1 while facing the alternate Paul
 void game_debug_resolve_capstone();          // B10.4: defeat the mirror (refuse the Path + return)
 int game_debug_capstone_done();              // B10.4: 1 once the Golden Path is refused
+int game_debug_ride_begin();                 // Long Ride: mount the Maker (1 if the ride starts)
+int game_debug_ride_push();                  // Long Ride: ride on — 0 rode on, 1 the Maker bucked
+void game_debug_ride_bank();                 // Long Ride: bank the haul + walk home
+int game_debug_in_ride();                    // Long Ride: 1 while riding
+int game_debug_ride_leg();                   // Long Ride: current leg
+int game_debug_ride_haul();                  // Long Ride: current un-banked spice haul
+int game_debug_maker_hides();                // Long Ride: Maker Hides banked (Jacurutu jackpots)
+int game_debug_best_ride_leg();              // Long Ride: deepest leg reached (record)
 void game_debug_revelation(int* stage, int* inv_count);  // B2b: Revelation stage + inv item count
 void game_debug_revelation_pick(int idx);  // B2b: choose row idx + confirm the Revelation
 int game_debug_cur_node();  // B1.3: current graph node index
