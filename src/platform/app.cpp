@@ -1322,9 +1322,21 @@ int run_vendortest(audio::Mixer& mixer, const Assets& assets, const Colormaps& c
     game_debug_expire_sideobj();
     const bool expired = game_debug_sideobj_active() == 0 && game_debug_footprint_count() == 0;
 
-    const bool pass = active && leads && deterministic && expired;
-    std::printf("vendortest %s (active %d trail %d ok %d det[%d==%d] expired %d)\n",
-                pass ? "PASS" : "FAIL", active, len1, ok1, len1, len2, expired);
+    // (D) the Ninth Rock rendezvous: riding out puts you in the remote-desert zone with the Guild
+    // agent (a sideobj Envoy) + a footprint trail to it; returning wakes you back in the sietch hub.
+    game_init(4242, services);           // start in the sietch hub (cur_node 0)
+    game_debug_enter_rendezvous();
+    const bool at_rz = game_debug_at_rendezvous() == 1;
+    const bool agent = game_debug_sideobj_active() == 2;         // the Guild Envoy waits
+    const bool rz_trail = game_debug_footprint_count() > 0 && game_debug_footprint_ok() == 1;
+    game_debug_return_rendezvous();
+    const bool home = game_debug_at_rendezvous() == 0 && game_debug_cur_node() == 0;
+    const bool rendezvous = at_rz && agent && rz_trail && home;
+
+    const bool pass = active && leads && deterministic && expired && rendezvous;
+    std::printf("vendortest %s (active %d trail %d ok %d det[%d==%d] expired %d rz[at%d agent%d trail%d home%d])\n",
+                pass ? "PASS" : "FAIL", active, len1, ok1, len1, len2, expired,
+                at_rz, agent, rz_trail, home);
     return pass ? 0 : 1;
 }
 

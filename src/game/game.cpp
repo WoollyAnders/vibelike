@@ -273,6 +273,7 @@ struct GameState {
     int16_t sideobj_x = 0, sideobj_y = 0;
     int32_t sideobj_expires = 0;
     bool sideobj_spawned = false;  // entity placed in-zone
+    bool at_rendezvous = false;    // B7: the player is out at the Ninth Rock (Guild spice exchange)
 
     int storm_turns = 0;       // M5: Coriolis storm remaining
     int poison_turns = 0;      // pan adder venom: +thirst while active
@@ -291,6 +292,9 @@ struct GameState {
     static constexpr int kMaxFootprints = 96;
     int16_t footprints_x[kMaxFootprints] = {}, footprints_y[kMaxFootprints] = {};
     int footprint_count = 0;
+    // B7 (generalized): an explicit way-finding target any system can set (rendezvous, B10 Jihad-Table
+    // points of interest, ...). -1 = none -> the trail falls back to the wandering sideobj vendor.
+    int16_t footprint_tx = -1, footprint_ty = -1;
     iso::Camera cam;
     iso::DrawList draw_list;
     particles::Pool particles;
@@ -964,14 +968,19 @@ void recompute_light() {
 // path between them, no extra Dijkstra, RNG-free. Only when a vendor is materialized in this zone.
 void compute_footprints() {
     g.footprint_count = 0;
-    if (!g.sideobj_spawned || g.sideobj_zone != g.cur_zone) return;
-    int cx = g.sideobj_x, cy = g.sideobj_y;
+    // Target precedence: an explicit way-finding target (rendezvous / B10 POI) wins; otherwise fall
+    // back to the wandering sideobj vendor materialized in this zone (derived, no persistence needed).
+    int cx, cy;
+    if (g.footprint_tx >= 0) { cx = g.footprint_tx; cy = g.footprint_ty; }
+    else if (g.sideobj_spawned && g.sideobj_zone == g.cur_zone) { cx = g.sideobj_x; cy = g.sideobj_y; }
+    else return;
+    const int gx = cx, gy = cy;  // the target tile (for skip-own-tile below)
     if (cx < 0 || cx >= map::W || cy < 0 || cy >= map::H) return;
-    if (g.dmap[cy * map::W + cx] < 0) return;  // vendor unreachable — no trail
+    if (g.dmap[cy * map::W + cx] < 0) return;  // target unreachable — no trail
     const Entity& p = player_ent();
     for (int steps = 0; steps < GameState::kMaxFootprints; ++steps) {
         if (cx == p.x && cy == p.y) break;                 // reached the player
-        if (!(cx == g.sideobj_x && cy == g.sideobj_y)) {   // skip the vendor's own tile
+        if (!(cx == gx && cy == gy)) {                     // skip the target's own tile
             g.footprints_x[g.footprint_count] = int16_t(cx);
             g.footprints_y[g.footprint_count] = int16_t(cy);
             ++g.footprint_count;
@@ -2491,7 +2500,12 @@ void dismount(const char* why) {
 // endgame "Long Ride"). Choosing to end Paul's vision carries you home with your haul — no Maker
 // needed; you begin each vision near your objective, so there is nothing to ride to. Works anywhere
 // in a run (the extract-or-push early-bail); completing the vision's graph also extracts (use_door).
+void return_from_rendezvous();  // fwd (defined below, with enter_rendezvous)
 void try_ride() {
+    if (g.at_rendezvous) {  // B7: leave the Ninth Rock (a plain trip home, not an extraction)
+        return_from_rendezvous();
+        return;
+    }
     if (g.cur_node == 0) {
         g.log.push("You are already awake in the sietch.");
         return;
@@ -2693,6 +2707,41 @@ void begin_run() {
     const int first = 1 + (lvl - 1) * (world::kRoomsPerLevel + 1);  // first field node of the level
     if (first >= 1 && first < g.graph.count) enter_node(first);
     else { const int f = g.graph.forward(0); if (f >= 0) enter_node(f); }
+}
+
+// B7: the Guild rendezvous at the Ninth Rock — a short remote-desert excursion (NOT a run) to
+// exchange spice with the Guild agent. Canon: the Fremen never let the Guild near a sietch, so the
+// tithe is paid at a designated point in the open desert. Reuses the sideobj Envoy (footprint trail
+// + bump-to-pay both apply); the fixed seed gives a stable "Ninth Rock" layout.
+inline constexpr uint64_t kNinthRockSeed = 0x9E9E9E9E9E9E9E9Eull;
+void enter_rendezvous() {
+    g.at_rendezvous = true;
+    for (int i = 1; i < kMaxEnts; ++i) g.ents[i] = Entity{};  // wipe the sietch's occupants
+    g.op = harvest::Op{};
+    g.alarm_turns = 0; g.alarm_spawn_cd = 0;
+    g.delta_count = 0; g.spawned_mask = 0;
+    enter_zone(map::kZoneDesert, kNinthRockSeed, /*use_spawn=*/true);
+    // the Guild agent waits at a fixed rock, opposite the player's landing (a short walk).
+    const Entity& p = player_ent();
+    const int ax = p.x < map::W / 2 ? map::W - 6 : 5;
+    place_npc_near(EType::Envoy, zone(), map::kZoneDesert, ax, p.y);
+    for (int i = 1; i < kMaxEnts; ++i)
+        if (g.ents[i].type == EType::Envoy) {  // register the agent as the sideobj (trail + bump)
+            g.sideobj_kind = 2; g.sideobj_zone = g.cur_zone;
+            g.sideobj_x = g.ents[i].x; g.sideobj_y = g.ents[i].y;
+            g.sideobj_spawned = true; g.sideobj_expires = g.pl.turn + 100000;  // won't expire mid-trip
+            break;
+        }
+    g.log.push("The Guild waits at the Ninth Rock. They never ask where we came from.");
+    g.log.push("We never ask where they go. Spice changes hands, and the desert keeps its secrets.");
+    refresh_fov_and_paths();
+}
+void return_from_rendezvous() {
+    g.at_rendezvous = false;
+    g.sideobj_kind = 0; g.sideobj_spawned = false;
+    g.log.push("You slip back across the sand toward home.");
+    enter_node(0);  // wake in the sietch hub (wipes the rendezvous agent)
+    refresh_fov_and_paths();
 }
 
 // B2b: open the Revelation at a forward door — Muad'Dib's vision reveals gear for the road ahead.
@@ -3721,15 +3770,10 @@ bool game_update(const InputState& in) {
                     g.menu_sel = 0;
                     g.vault_page = 0;
                     break;
-                case 14: {  // Naib: signal the Guild to pay the tithe (reliable hub payment)
-                    const int cost = 8 + run_difficulty();
-                    if (signal_guild())
-                        g.log.push("You signal the Guild from Sietch Tabr. -%d spice; the tithe eases.",
-                                   cost);
-                    else
-                        g.log.push("'The Guild answers only for spice. You carry %d.'", g.pl.spice);
+                case 14:  // Naib: ride out to the Ninth Rock to meet the Guild (B7 rendezvous)
+                    g.menu_open = 0;
+                    enter_rendezvous();
                     break;
-                }
                 case 15: g.menu_open = 0; break;  // leave
                 case 20:  // Sayyadina: spice tribute
                     if (g.pl.spice >= 5) {
@@ -4893,7 +4937,7 @@ void pass_ui(RenderCtx& r) {
         static const char* kMenus[5][6] = {
             {},
             {"Tribute 200 water  (+10 standing)", "Ask about the season",
-             "A task for the tribe", "Open the tribe vault", "Signal the Guild (pay the tithe)", "Leave"},
+             "A task for the tribe", "Open the tribe vault", "Ride out to the Ninth Rock (Guild tithe)", "Leave"},
             {"Offer 5 spice  (+12 standing)", "Healing trance  (6 spice)", "Leave", nullptr},
             {"Demolition charge  (5 spice)", "Two thumpers  (3 spice)",
              "Toxin vial  (2 spice)", "Glowglobe  (3 spice)", "Leave"},
@@ -5128,6 +5172,7 @@ void game_serialize(SaveWriter& w) {
     w.i32(g.sideobj_y);
     w.i32(g.sideobj_expires);
     w.u8(g.sideobj_spawned ? 1 : 0);
+    w.u8(g.at_rendezvous ? 1 : 0);  // B7: out at the Ninth Rock
     w.i32(g.storm_turns);
     w.i32(g.poison_turns);
     w.i32(g.thopter_x);
@@ -5212,6 +5257,7 @@ bool game_deserialize(SaveReader& r) {
     const int so_y = r.i32();
     const int so_exp = r.i32();
     const bool so_spawned = r.u8() != 0;
+    const bool at_rendezvous = r.u8() != 0;  // B7
     const int storm_turns = r.i32();
     const int poison_turns = r.i32();
     const int thopter_x = r.i32();
@@ -5263,6 +5309,7 @@ bool game_deserialize(SaveReader& r) {
     g.sideobj_y = int16_t(so_y);
     g.sideobj_expires = so_exp;
     g.sideobj_spawned = so_spawned;
+    g.at_rendezvous = at_rendezvous;  // B7
     g.storm_turns = storm_turns;
     g.poison_turns = poison_turns;
     g.thopter_x = int16_t(thopter_x);
@@ -5278,8 +5325,12 @@ bool game_deserialize(SaveReader& r) {
     g.delta_count = delta_count;
     std::memcpy(g.deltas, deltas, sizeof g.deltas);
     int sx_, sy_;
-    const world::Node& cn = g.graph.nodes[g.cur_node];   // regen the resident zone from its node
-    map::generate(g.zone_, cn.seed, map::ZoneId(cur), sx_, sy_);
+    if (at_rendezvous) {  // B7: the Ninth Rock is a fixed-seed desert zone, not a graph node
+        map::generate(g.zone_, kNinthRockSeed, map::ZoneId(map::kZoneDesert), sx_, sy_);
+    } else {
+        const world::Node& cn = g.graph.nodes[g.cur_node];  // regen the resident zone from its node
+        map::generate(g.zone_, cn.seed, map::ZoneId(cur), sx_, sy_);
+    }
     apply_deltas(g.zone_, cur);
     std::memcpy(g.zone_.vis, vis, sizeof vis);
     if (g.op.live() && g.op.zone == g.cur_zone)
@@ -5417,7 +5468,10 @@ void game_debug_expire_sideobj() {  // simulate the expiry despawn
     refresh_fov_and_paths();
 }
 void game_debug_add_spice(int n) { g.pl.spice += n; }        // test helper
-int game_debug_signal_guild() { return signal_guild() ? 1 : 0; }  // B7: hub tithe payment
+int game_debug_signal_guild() { return signal_guild() ? 1 : 0; }  // B7: (direct) tithe payment
+void game_debug_enter_rendezvous() { enter_rendezvous(); }   // B7: ride out to the Ninth Rock
+void game_debug_return_rendezvous() { return_from_rendezvous(); }
+int game_debug_at_rendezvous() { return g.at_rendezvous ? 1 : 0; }
 
 void game_debug_revelation(int* stage, int* inv_count) {
     if (stage) *stage = g.revelation_stage;
