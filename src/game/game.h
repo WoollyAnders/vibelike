@@ -89,6 +89,9 @@ int game_debug_signal_guild();          // B7: direct tithe payment (1 = paid)
 void game_debug_enter_rendezvous();     // B7: ride out to the Ninth Rock
 void game_debug_return_rendezvous();    // B7: return from the Ninth Rock
 int game_debug_at_rendezvous();         // B7: 1 if out at the Ninth Rock
+void game_debug_spawn_patrol(int x, int y);  // B8: place a Harkonnen patroller (Ai::Patrol) at (x,y)
+void game_debug_world_tick(int n);           // B8: advance n world steps (headless)
+int game_debug_patrol_info(int* x, int* y, int* ai, int* ax, int* ay);  // B8: count + first patroller
 void game_debug_revelation(int* stage, int* inv_count);  // B2b: Revelation stage + inv item count
 void game_debug_revelation_pick(int idx);  // B2b: choose row idx + confirm the Revelation
 int game_debug_cur_node();  // B1.3: current graph node index

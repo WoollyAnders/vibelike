@@ -111,4 +111,11 @@ inline constexpr int kGuildDebtEndgameCap = 15;   // raised once the Guild Navig
 inline constexpr int kGuildHpPerDebt = 12;        // +12% mob HP per debt level
 inline constexpr int kGuildMobDiv = 2;            // +1 escort mob per this many debt levels
 
+// --- B8: deep-desert patrols + expanded entry events ---
+// Harkonnen search parties (Ai::Patrol) pace a fixed beat and hunt on sight. They (and the
+// wormsign event) only appear at depth >= kPatrolMinDepth, matching the D1 deep-desert hazard
+// gate, so shallow/headless runs never see them and the determinism baseline is untouched.
+inline constexpr int kPatrolMinDepth = 3;   // Awaken depth at which patrols/wormsign begin
+inline constexpr int kPatrolLeash = 6;      // a patroller paces within this Chebyshev radius of its anchor
+
 }  // namespace tune

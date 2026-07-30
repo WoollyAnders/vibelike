@@ -30,7 +30,7 @@ enum class EType : uint8_t { None = 0, Player, Hound, Corpse, Thumper, Trooper, 
                              Glowglobe, ShieldTrooper, Naib, Sayyadina, Smuggler,
                              PanAdder, Hermit, HunterSeeker, SpiceCache, Loot, Boss,
                              Caravan, Envoy, Fremen, Paul };
-enum class Ai : uint8_t { Idle = 0, Wander, Hunt, Guard };
+enum class Ai : uint8_t { Idle = 0, Wander, Hunt, Guard, Patrol };  // Patrol (B8): route-walker
 
 struct Entity {
     EType type = EType::None;
@@ -1851,6 +1851,61 @@ void tick_enemy_ailments() {
 
 // ---- world turn --------------------------------------------------------------
 
+// B8: cardinal headings for patrol pacing. Ordered N,E,S,W so (h+2)&3 is the reverse.
+constexpr int kDir4[4][2] = {{0, -1}, {1, 0}, {0, 1}, {-1, 0}};
+
+// B8: a Harkonnen search party paces a fixed beat around its spawn anchor (packed into
+// e.data as (x<<8)|y; heading in the low 2 bits of e.data2), reversing at a wall or the
+// leash edge. trooper_act() flips it to Ai::Hunt the instant it sees the player, so patrols
+// "chase on sight" and fall back to their beat when they lose you. RNG-free (deterministic).
+void patrol_step(Entity& e) {
+    const map::Zone& z = zone();
+    const Entity& p = player_ent();
+    const int ax = e.data >> 8, ay = e.data & 0xFF;
+    auto step = [&](int dx, int dy) -> bool {
+        const int nx = e.x + dx, ny = e.y + dy;
+        if (!z.walkable(nx, ny) || entity_at(nx, ny, e.zone)) return false;
+        if (nx == p.x && ny == p.y) return false;
+        e.anim.facing = facing_from_tile_delta(dx, dy);
+        e.x = int16_t(nx);
+        e.y = int16_t(ny);
+        g.noise.add(e.x, e.y, 4);  // boots on gravel
+        return true;
+    };
+    int adx = e.x - ax, ady = e.y - ay;
+    if (adx < 0) adx = -adx;
+    if (ady < 0) ady = -ady;
+    if ((adx > ady ? adx : ady) > tune::kPatrolLeash) {  // strayed (usually after a chase): return
+        const int dx = ax > e.x ? 1 : ax < e.x ? -1 : 0;
+        const int dy = ay > e.y ? 1 : ay < e.y ? -1 : 0;
+        if (!step(dx, dy) && !step(dx, 0)) step(0, dy);
+        return;
+    }
+    int h = e.data2 & 3;
+    for (int attempt = 0; attempt < 2; ++attempt) {  // pace; reverse at a wall or the leash edge
+        int ndx = e.x + kDir4[h][0] - ax, ndy = e.y + kDir4[h][1] - ay;
+        if (ndx < 0) ndx = -ndx;
+        if (ndy < 0) ndy = -ndy;
+        if ((ndx > ndy ? ndx : ndy) <= tune::kPatrolLeash && step(kDir4[h][0], kDir4[h][1])) {
+            e.data2 = int16_t((e.data2 & ~3) | h);
+            return;
+        }
+        h = (h + 2) & 3;  // reverse and try the other way
+    }
+    e.data2 = int16_t((e.data2 & ~3) | h);  // boxed in: remember the flipped heading for next turn
+}
+
+// B8: drop one patroller at (x,y) — a Trooper flagged Ai::Patrol with its beat anchored here.
+bool place_patrol(int x, int y) {
+    if (x < 1 || x >= map::W - 1 || y < 1 || y >= map::H - 1) return false;
+    if (!zone().walkable(x, y) || entity_at(x, y, g.cur_zone)) return false;
+    Entity* e = alloc_entity();
+    if (!e) return false;
+    *e = Entity{EType::Trooper, Ai::Patrol, g.cur_zone, int16_t(x), int16_t(y),
+                int16_t(foe_hp(EType::Trooper)), 0, int16_t((x << 8) | y), 1};
+    return true;
+}
+
 // Troopers guard the crawler; they hunt (and shout) if they spot you close.
 void trooper_act(Entity& e) {
     const map::Zone& z = zone();
@@ -1865,7 +1920,9 @@ void trooper_act(Entity& e) {
         g.noise.add(e.x, e.y, 15);
     }
     if (e.ai == Ai::Hunt) {
-        if (pdist < 0 || pdist > 14) { e.ai = Ai::Guard; return; }
+        // lost the trail: a patroller (anchored, e.data != 0) returns to its beat; a crawler
+        // guard falls back to guarding the op.
+        if (pdist < 0 || pdist > 14) { e.ai = e.data != 0 ? Ai::Patrol : Ai::Guard; return; }
         if (pdist == 1) {
             e.anim.facing = facing_from_tile_delta(p.x - e.x, p.y - e.y);
             e.anim.set(anim::State::Attack);
@@ -1894,6 +1951,8 @@ void trooper_act(Entity& e) {
         e.x = int16_t(best_x);
         e.y = int16_t(best_y);
         g.noise.add(e.x, e.y, 4);
+    } else if (e.ai == Ai::Patrol) {
+        patrol_step(e);  // B8: pace the beat (chase-on-sight handled by the sees->Hunt flip above)
     } else if (g.op.live() && g.rng.combat.chance(1, 3)) {
         // drift back toward the crawler
         const int gx = g.op.x, gy = g.op.y;
@@ -2660,6 +2719,20 @@ void enter_zone(uint8_t id, uint64_t gen_seed, bool use_spawn, int at_x = 0, int
             if (g.pl.water > tune::kWaterMax) g.pl.water = tune::kWaterMax;
             raise_standing(2);
             g.log.push("A Fremen scout melts from the rocks, shares water, is gone.");
+        } else if (roll < 44 && drop_ilvl() >= tune::kPatrolMinDepth) {
+            // B8: a deep-desert Harkonnen search party quarters the sand and hunts on sight.
+            // Depth-gated (like the D1 hazards), so shallow/headless runs never roll it.
+            int spawned = 0;
+            for (int tries = 0; tries < 80 && spawned < 2; ++tries) {
+                const int rx = g.rng.world.range(-15, 15), ry = g.rng.world.range(-15, 15);
+                if (rx * rx + ry * ry < 49) continue;  // don't drop the beat on top of the player
+                if (place_patrol(p.x + rx, p.y + ry)) ++spawned;
+            }
+            if (spawned) g.log.push("A Harkonnen patrol quarters the sand. Keep to the rocks.");
+        } else if (roll < 50 && drop_ilvl() >= tune::kPatrolMinDepth) {
+            // B8: the deep bled is His country — wormsign on the wind (also depth-gated).
+            g.wrm.state = worm::State::Stirring;
+            g.log.push("Wormsign on the wind. The deep bled belongs to Shai-Hulud.");
         }
     }
 
@@ -5472,6 +5545,29 @@ int game_debug_signal_guild() { return signal_guild() ? 1 : 0; }  // B7: (direct
 void game_debug_enter_rendezvous() { enter_rendezvous(); }   // B7: ride out to the Ninth Rock
 void game_debug_return_rendezvous() { return_from_rendezvous(); }
 int game_debug_at_rendezvous() { return g.at_rendezvous ? 1 : 0; }
+
+void game_debug_spawn_patrol(int x, int y) { place_patrol(x, y); }  // B8: place one patroller
+void game_debug_world_tick(int n) { for (int i = 0; i < n && !g.pl.dead; ++i) world_tick(); }  // B8
+int game_debug_patrol_info(int* x, int* y, int* ai, int* ax, int* ay) {  // B8: first patroller
+    int count = 0;
+    const Entity* first = nullptr;
+    for (int i = 1; i < kMaxEnts; ++i) {
+        const Entity& e = g.ents[i];
+        if (e.hp <= 0 || e.zone != g.cur_zone) continue;
+        if (e.type != EType::Trooper && e.type != EType::ShieldTrooper) continue;
+        if (e.ai != Ai::Patrol && !(e.ai == Ai::Hunt && e.data != 0)) continue;  // patroller in either state
+        if (!count) first = &e;
+        ++count;
+    }
+    if (first) {
+        if (x) *x = first->x;
+        if (y) *y = first->y;
+        if (ai) *ai = int(first->ai);
+        if (ax) *ax = first->data >> 8;
+        if (ay) *ay = first->data & 0xFF;
+    }
+    return count;
+}
 
 void game_debug_revelation(int* stage, int* inv_count) {
     if (stage) *stage = g.revelation_stage;

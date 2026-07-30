@@ -1340,6 +1340,50 @@ int run_vendortest(audio::Mixer& mixer, const Assets& assets, const Colormaps& c
     return pass ? 0 : 1;
 }
 
+// B8: Harkonnen patrols are route-walkers (Ai::Patrol) that pace a beat around their anchor and
+// chase the moment they see you. (Ai::Patrol == 4: Idle,Wander,Hunt,Guard,Patrol.)
+int run_patroltest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    GameServices services{&mixer, &assets, &cmaps};
+
+    // (A) a patroller far from the player paces its beat: it moves, stays within the leash of its
+    //     anchor, and never flips to Hunt (the player is well out of sight).
+    game_init(31337, services);
+    game_debug_use_door();                 // hub -> a field vision-node (open desert)
+    int px = 0, py = 0; game_debug_player_pos(&px, &py);
+    const int dirx = px < 32 ? 1 : -1, diry = py < 32 ? 1 : -1;
+    for (int m = 20; m >= 14 && game_debug_patrol_info(0, 0, 0, 0, 0) == 0; --m)
+        game_debug_spawn_patrol(px + dirx * m, py + diry * m);
+    int sx = 0, sy = 0, sai = 0, ax = 0, ay = 0;
+    const int n0 = game_debug_patrol_info(&sx, &sy, &sai, &ax, &ay);
+    const bool spawned = n0 >= 1 && sai == 4 && ax == sx && ay == sy;  // fresh: pos == anchor
+
+    game_debug_world_tick(6);
+    int x1 = 0, y1 = 0, ai1 = 0, ax1 = 0, ay1 = 0;
+    const int n1 = game_debug_patrol_info(&x1, &y1, &ai1, &ax1, &ay1);
+    int cheb = x1 - ax1 < 0 ? ax1 - x1 : x1 - ax1;
+    const int cheb_y = y1 - ay1 < 0 ? ay1 - y1 : y1 - ay1;
+    if (cheb_y > cheb) cheb = cheb_y;
+    const bool moved = x1 != ax1 || y1 != ay1;
+    const bool paced = n1 >= 1 && ai1 == 4 && cheb <= 6 && moved;  // still patrolling, within leash
+
+    // (B) a patroller dropped right next to the player must see you and flip to Hunt (chase on sight).
+    game_init(31337, services);
+    game_debug_use_door();
+    int bx = 0, by = 0; game_debug_player_pos(&bx, &by);
+    const int off[8][2] = {{1,0},{-1,0},{0,1},{0,-1},{1,1},{-1,-1},{1,-1},{-1,1}};
+    for (int k = 0; k < 8 && game_debug_patrol_info(0, 0, 0, 0, 0) == 0; ++k)
+        game_debug_spawn_patrol(bx + off[k][0], by + off[k][1]);
+    game_debug_world_tick(2);
+    int cai = 0;
+    const int n2 = game_debug_patrol_info(nullptr, nullptr, &cai, nullptr, nullptr);
+    const bool chased = n2 >= 1 && cai == 2;  // Ai::Hunt
+
+    const bool pass = spawned && paced && chased;
+    std::printf("patroltest %s (spawn %d pace[ai%d leash%d moved%d] chase_ai %d)\n",
+                pass ? "PASS" : "FAIL", spawned, ai1, cheb, moved, cai);
+    return pass ? 0 : 1;
+}
+
 // A4: click-to-move pathfinds to the goal and is deterministic across runs.
 int run_clicktest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
     GameServices services{&mixer, &assets, &cmaps};
@@ -1378,7 +1422,7 @@ int main(int argc, char** argv) {
          reveltest = false, gauntlettest = false, extractiontest = false, metatest = false,
          statmodtest = false, affixtest = false, metamigratetest = false, ailmenttest = false,
          rttest = false, stuntest = false, classtest = false, guildtest = false,
-         vendortest = false;
+         vendortest = false, patroltest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
         if (SDL_strcmp(argv[i], "--seamtest") == 0) seamtest = true;
@@ -1402,6 +1446,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--classtest") == 0) classtest = true;
         if (SDL_strcmp(argv[i], "--guildtest") == 0) guildtest = true;
         if (SDL_strcmp(argv[i], "--vendortest") == 0) vendortest = true;
+        if (SDL_strcmp(argv[i], "--patroltest") == 0) patroltest = true;
         if (SDL_strcmp(argv[i], "--animdebug") == 0) animdebug = true;
         if (SDL_strcmp(argv[i], "--rpgtest") == 0) rpgtest = true;
         if (SDL_strcmp(argv[i], "--clicktest") == 0) clicktest = true;
@@ -1443,6 +1488,7 @@ int main(int argc, char** argv) {
     if (classtest) return run_classtest(mixer, assets, cmaps);
     if (guildtest) return run_guildtest(mixer, assets, cmaps);
     if (vendortest) return run_vendortest(mixer, assets, cmaps);
+    if (patroltest) return run_patroltest(mixer, assets, cmaps);
     if (rpgtest) return run_rpgtest(mixer, assets, cmaps);
     if (reveltest) return run_reveltest(mixer, assets, cmaps);
     if (gauntlettest) return run_gauntlettest(mixer, assets, cmaps);
