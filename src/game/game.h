@@ -145,6 +145,10 @@ void game_debug_craft_setup(int weapon);     // D2: put a known rare item (weapo
 int game_debug_craft_sig(int* naffix, int* vsum, int* tsum);  // D2: inv[0] affix sig; returns slot
 int game_debug_bench_divine();               // D2: Maker Hide -> reroll inv[0] affix values (1=done)
 int game_debug_bench_reforge();              // D2: Worm Tooth -> reforge inv[0] weapon (1=done)
+int game_debug_cast_ability(int ab, int tx, int ty);  // C7: 1 Voice, 2 Blink, 3 Prescience (1=cast)
+int game_debug_will();                       // C7: current Will
+void game_debug_set_will(int w);             // C7: set current Will (test setup)
+int game_debug_ability_cd();                 // C7: shared ability cooldown remaining (world turns)
 void game_debug_revelation(int* stage, int* inv_count);  // B2b: Revelation stage + inv item count
 void game_debug_revelation_pick(int idx);  // B2b: choose row idx + confirm the Revelation
 int game_debug_cur_node();  // B1.3: current graph node index

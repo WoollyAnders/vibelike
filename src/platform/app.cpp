@@ -1801,6 +1801,62 @@ int run_crafttest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cm
     return pass ? 0 : 1;
 }
 
+// C7: Will-powered prescience abilities. One shared Will pool + cooldown. 1 Voice (stun nearest seen
+// foe), 2 Blink (step toward a tile), 3 Prescient Calm (Focus-shield burst). Input/targeting/FX defer.
+int run_abilitytest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    std::remove("meta.dat");
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(55, services);  // start in the sietch: indoor light, no wildlife/escort
+
+    // (A) the Voice stuns the nearest seen foe, spends Will, and starts the shared cooldown
+    int shp; game_debug_spawn_shield_adjacent(&shp);
+    game_debug_set_will(100);
+    const int w0 = game_debug_will();
+    const bool voiced = game_debug_cast_ability(1, 0, 0) == 1;
+    const bool stunned = game_debug_enemy_stun_turns() > 0;
+    const bool will_spent = game_debug_will() == w0 - 6;   // kWillVoice
+    const bool on_cd = game_debug_ability_cd() > 0;
+
+    // (B) the shared cooldown blocks a second cast (no Will spent)
+    const int w1 = game_debug_will();
+    const bool cd_blocks = game_debug_cast_ability(3, 0, 0) == 0 && game_debug_will() == w1;
+    game_debug_clear_hostiles();
+    game_debug_world_tick(6);
+    const bool cd_cleared = game_debug_ability_cd() == 0;
+
+    // (C) Blink moves the player (try each cardinal until one has room)
+    bool blinked = false;
+    const int dirs[4][2] = {{1,0},{-1,0},{0,1},{0,-1}};
+    for (int d = 0; d < 4 && !blinked; ++d) {
+        game_debug_set_will(100);
+        game_debug_world_tick(6);  // clear any cooldown from a prior attempt
+        int ax, ay; game_debug_player_pos(&ax, &ay);
+        if (game_debug_cast_ability(2, ax + dirs[d][0] * 5, ay + dirs[d][1] * 5) == 1) {
+            int bx, by; game_debug_player_pos(&bx, &by);
+            blinked = (bx != ax || by != ay);
+        }
+    }
+
+    // (D) Will gates the cast: too little Will -> refused
+    game_debug_world_tick(6);
+    game_debug_set_will(2);
+    const bool no_will = game_debug_cast_ability(3, 0, 0) == 0;  // Prescience costs 8 > 2
+
+    // (E) Prescient Calm fires and spends its Will
+    game_debug_set_will(100);
+    game_debug_world_tick(6);
+    const int wp0 = game_debug_will();
+    const bool presc = game_debug_cast_ability(3, 0, 0) == 1 && game_debug_will() == wp0 - 8;
+
+    const bool pass = voiced && stunned && will_spent && on_cd && cd_blocks && cd_cleared &&
+                      blinked && no_will && presc;
+    std::printf("abilitytest %s (voice %d stun %d willspent %d cd %d cdblock %d cdclear %d blink %d nowill %d presc %d)\n",
+                pass ? "PASS" : "FAIL", voiced, stunned, will_spent, on_cd, cd_blocks, cd_cleared,
+                blinked, no_will, presc);
+    std::remove("meta.dat");
+    return pass ? 0 : 1;
+}
+
 // A4: click-to-move pathfinds to the goal and is deterministic across runs.
 int run_clicktest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
     GameServices services{&mixer, &assets, &cmaps};
@@ -1841,7 +1897,7 @@ int main(int argc, char** argv) {
          rttest = false, stuntest = false, classtest = false, guildtest = false,
          vendortest = false, patroltest = false, cavetest = false, trialtest = false,
          endgametest = false, striketest = false, pinnacletest = false, capstonetest = false,
-         longridetest = false, choamtest = false, crafttest = false;
+         longridetest = false, choamtest = false, crafttest = false, abilitytest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
         if (SDL_strcmp(argv[i], "--seamtest") == 0) seamtest = true;
@@ -1875,6 +1931,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--longridetest") == 0) longridetest = true;
         if (SDL_strcmp(argv[i], "--choamtest") == 0) choamtest = true;
         if (SDL_strcmp(argv[i], "--crafttest") == 0) crafttest = true;
+        if (SDL_strcmp(argv[i], "--abilitytest") == 0) abilitytest = true;
         if (SDL_strcmp(argv[i], "--animdebug") == 0) animdebug = true;
         if (SDL_strcmp(argv[i], "--rpgtest") == 0) rpgtest = true;
         if (SDL_strcmp(argv[i], "--clicktest") == 0) clicktest = true;
@@ -1926,6 +1983,7 @@ int main(int argc, char** argv) {
     if (longridetest) return run_longridetest(mixer, assets, cmaps);
     if (choamtest) return run_choamtest(mixer, assets, cmaps);
     if (crafttest) return run_crafttest(mixer, assets, cmaps);
+    if (abilitytest) return run_abilitytest(mixer, assets, cmaps);
     if (rpgtest) return run_rpgtest(mixer, assets, cmaps);
     if (reveltest) return run_reveltest(mixer, assets, cmaps);
     if (gauntlettest) return run_gauntlettest(mixer, assets, cmaps);

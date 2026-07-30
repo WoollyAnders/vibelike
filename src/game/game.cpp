@@ -172,7 +172,8 @@ struct Player {
     int spice = 0;     // grains
     int shield = 0;        // C2: current energy shield (Focus) — soaks damage before Life
     int shield_delay = 0;  // C2: turns until the shield recharges (reset on taking a hit)
-    int will = 0;          // D1: current Will (ability fuel); regens + siphons now, spent in C7
+    int will = 0;          // D1: current Will (ability fuel); C7 abilities spend it
+    int ability_cd = 0;    // C7: shared ability cooldown (world turns remaining)
     int ail_poison_dmg = 0;    // C3: combat-poison on the player — damage/turn (DT_TOX, resisted)
     int ail_poison_turns = 0;  // C3: remaining poison ticks on the player
     int ail_scorch_dmg = 0;    // C3: Scorch DoT — DT_HEAT (Heat Resistance mitigates)
@@ -2294,6 +2295,84 @@ void stun_entity(Entity& e, int turns) { if (turns > e.stun_turns) e.stun_turns 
 void stun_player(int turns) { if (turns > g.pl.ail_stun_turns) g.pl.ail_stun_turns = turns; }
 void freeze_player(int turns) { if (turns > g.pl.ail_frozen_turns) g.pl.ail_frozen_turns = turns; }
 
+// ---- C7: Will-powered prescience abilities (universal active skills) --------------------------------
+// One Will pool, one shared cooldown. Cast at a target tile; effects reuse the stun / teleport / Focus
+// systems. Deterministic + player-initiated (never auto-fired, no RNG) — off every test's det path.
+enum Ability : uint8_t { AB_NONE = 0, AB_VOICE, AB_BLINK, AB_PRESCIENCE, AB_COUNT };
+
+bool ability_is_hostile(EType t) {
+    switch (t) {
+        case EType::Hound: case EType::Trooper: case EType::ShieldTrooper: case EType::Spotter:
+        case EType::PanAdder: case EType::Hermit: case EType::HunterSeeker: case EType::Boss:
+            return true;
+        default: return false;
+    }
+}
+int ability_cost(int ab) {
+    switch (ab) {
+        case AB_VOICE: return tune::kWillVoice;
+        case AB_BLINK: return tune::kWillBlink;
+        case AB_PRESCIENCE: return tune::kWillPrescience;
+        default: return 0;
+    }
+}
+bool ability_ready() { return g.pl.ability_cd <= 0 && !g.pl.dead; }
+
+// the Voice: stun the nearest SEEN hostile within reach. Fails (no cast) if none is in range.
+bool do_voice() {
+    const Entity& p = player_ent();
+    int best = -1, bestd = tune::kVoiceRange * tune::kVoiceRange + 1;
+    for (int i = 1; i < kMaxEnts; ++i) {
+        const Entity& e = g.ents[i];
+        if (e.hp <= 0 || e.zone != g.cur_zone || !ability_is_hostile(e.type)) continue;
+        if (!(zone().vis[e.y * map::W + e.x] & map::V_VISIBLE)) continue;
+        const int dx = e.x - p.x, dy = e.y - p.y, d = dx * dx + dy * dy;
+        if (d < bestd) { bestd = d; best = i; }
+    }
+    if (best < 0) return false;
+    stun_entity(g.ents[best], tune::kVoiceStunTurns);
+    g.log.push("The Voice cracks the air. The foe locks rigid, its will not its own.");
+    return true;
+}
+
+// Prescient Step: blink toward the cursor, landing on the farthest clear tile within range.
+bool do_blink(int tx, int ty) {
+    Entity& p = player_ent();
+    if (tx == p.x && ty == p.y) return false;
+    int nx = p.x, ny = p.y, lx = p.x, ly = p.y;
+    for (int s = 0; s < tune::kBlinkRange; ++s) {
+        const int cx = tx > nx ? 1 : tx < nx ? -1 : 0, cy = ty > ny ? 1 : ty < ny ? -1 : 0;
+        const int px = nx + cx, py = ny + cy;
+        if (!zone().walkable(px, py) || entity_at(px, py, g.cur_zone)) break;
+        nx = px; ny = py; lx = nx; ly = ny;
+        if (nx == tx && ny == ty) break;
+    }
+    if (lx == p.x && ly == p.y) return false;  // couldn't move at all
+    p.x = int16_t(lx); p.y = int16_t(ly);
+    p.anim.facing = facing_from_tile_delta(tx - p.x, ty - p.y);
+    g.log.push("Prescient step: the sand blurs and you are elsewhere.");
+    return true;
+}
+
+// Cast an ability at (tx, ty). Checks the shared cooldown + Will; spends Will and starts the cooldown
+// only if the effect lands. Returns false (no cost) otherwise.
+bool cast_ability(int ab, int tx, int ty) {
+    if (!ability_ready() || ab <= AB_NONE || ab >= AB_COUNT) return false;
+    const int cost = ability_cost(ab);
+    if (g.pl.will < cost) return false;
+    bool ok = false;
+    switch (ab) {
+        case AB_VOICE: ok = do_voice(); break;
+        case AB_BLINK: ok = do_blink(tx, ty); break;
+        case AB_PRESCIENCE: gain_shield(tune::kPrescienceShield); ok = true; break;
+        default: break;
+    }
+    if (!ok) return false;
+    g.pl.will -= cost;
+    g.pl.ability_cd = tune::kAbilityCdTurns;
+    return true;
+}
+
 // RT2: Freeze duration (world-tick count) scaled by a cold hit vs the target's eff-max-Life,
 // clamped to [0.3, 3.0] s. Below the 0.3 s floor -> 0 (no freeze). Pure integer math (firewall).
 int freeze_ticks_for(int cold_dmg, int max_life) {
@@ -2823,6 +2902,7 @@ void upkeep() {
 
     // the Litany holds the body together
     if (g.pl.litany_turns > 0) --g.pl.litany_turns;
+    if (g.pl.ability_cd > 0) --g.pl.ability_cd;  // C7: the shared ability cooldown ticks down
 
     // pan adder venom burns water
     if (g.poison_turns > 0) {
@@ -5941,6 +6021,7 @@ void game_serialize(SaveWriter& w) {
     w.i32(g.pl.shield);        // C2
     w.i32(g.pl.shield_delay);  // C2
     w.i32(g.pl.will);          // D1
+    w.i32(g.pl.ability_cd);    // C7: shared ability cooldown
     w.i32(g.pl.ail_poison_dmg);    // C3
     w.i32(g.pl.ail_poison_turns);  // C3
     w.i32(g.pl.ail_scorch_dmg);    // C3
@@ -6039,6 +6120,7 @@ bool game_deserialize(SaveReader& r) {
     pl.shield = r.i32();        // C2
     pl.shield_delay = r.i32();  // C2
     pl.will = r.i32();          // D1
+    pl.ability_cd = r.i32();    // C7: shared ability cooldown
     pl.ail_poison_dmg = r.i32();    // C3
     pl.ail_poison_turns = r.i32();  // C3
     pl.ail_scorch_dmg = r.i32();    // C3
@@ -6467,6 +6549,11 @@ int game_debug_craft_sig(int* naffix, int* vsum, int* tsum) {  // inv[0] affix s
 }
 int game_debug_bench_divine() { return bench_divine(0) ? 1 : 0; }
 int game_debug_bench_reforge() { return bench_reforge(0) ? 1 : 0; }
+// --- C7 ability hooks ---
+int game_debug_cast_ability(int ab, int tx, int ty) { return cast_ability(ab, tx, ty) ? 1 : 0; }
+int game_debug_will() { return g.pl.will; }
+void game_debug_set_will(int w) { g.pl.will = w; }
+int game_debug_ability_cd() { return g.pl.ability_cd; }
 
 void game_debug_revelation(int* stage, int* inv_count) {
     if (stage) *stage = g.revelation_stage;

@@ -7,7 +7,7 @@
 #include <vector>
 
 inline constexpr uint32_t kSaveMagic = 0x54535544;  // 'DUST'
-inline constexpr uint16_t kSaveVersion = 21;  // v21: The Long Ride greed-gauntlet state (in_ride)
+inline constexpr uint16_t kSaveVersion = 22;  // v22: C7 ability cooldown (pl.ability_cd)
 
 class SaveWriter {
 public:

@@ -149,4 +149,16 @@ inline constexpr int kCourtCost = 30;           // spice to court a House into a
 inline constexpr int kHouseOpposePressure = 50; // Jihad-pressure at which an un-toppled House opposes
 inline constexpr int kDividendPerControl = 1;   // spice dividend per point of CHOAM control
 
+// --- C7: Will-powered prescience abilities (universal active skills, one shared Will pool) ---
+// Cast at the cursor; each spends Will and shares one cooldown. Effects reuse existing systems
+// (stun, teleport, Focus shield). Input binding + targeting reticle + FX are the UI phase.
+inline constexpr int kAbilityCdTurns = 4;   // shared cooldown after any cast (world turns)
+inline constexpr int kWillVoice = 6;        // the Voice — stun the nearest seen foe
+inline constexpr int kWillBlink = 5;        // Prescient Step — blink toward the cursor
+inline constexpr int kWillPrescience = 8;   // Prescient Calm — a Focus-shield burst
+inline constexpr int kVoiceRange = 6;       // the Voice's reach (tiles)
+inline constexpr int kVoiceStunTurns = 8;   // stun world-turns the Voice inflicts
+inline constexpr int kBlinkRange = 5;       // Prescient Step distance (tiles)
+inline constexpr int kPrescienceShield = 30;// Focus restored by Prescient Calm
+
 }  // namespace tune
