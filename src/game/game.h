@@ -117,6 +117,11 @@ int game_debug_in_strike();                  // B10.2: 1 while inside a strike e
 int game_debug_strike_boss_count();          // B10.2: strike objectives (bosses) in the raid zone
 void game_debug_resolve_strike();            // B10.2: clear the objective (press + return to hub)
 void game_debug_abandon_strike();            // B10.2: break off the strike (return, no press)
+int game_debug_assault_pinnacle(int f);      // B10.3: enter faction f's pinnacle if available (1=in)
+int game_debug_in_pinnacle();                // B10.3: 1 while inside a pinnacle assault
+int game_debug_pinnacle_boss_count();        // B10.3: homeworld bosses in the arena
+void game_debug_resolve_pinnacle();          // B10.3: slay the boss (shard + return to hub)
+void game_debug_abandon_pinnacle();          // B10.3: withdraw from the homeworld (no shard)
 void game_debug_revelation(int* stage, int* inv_count);  // B2b: Revelation stage + inv item count
 void game_debug_revelation_pick(int idx);  // B2b: choose row idx + confirm the Revelation
 int game_debug_cur_node();  // B1.3: current graph node index

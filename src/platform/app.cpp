@@ -1563,6 +1563,67 @@ int run_striketest(audio::Mixer& mixer, const Assets& assets, const Colormaps& c
     return pass ? 0 : 1;
 }
 
+// B10.3: a Great Power's homeworld pinnacle opens once its Jihad-pressure is full; assaulting it
+// enters a fixed-seed arena with a named boss, and slaying the boss takes that faction's Golden Path
+// shard (the Guild's fall also breaks the spice monopoly). Factions: 0 BG, 1 Tleilaxu, 2 Ixian, 4 Guild.
+int run_pinnacletest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    std::remove("meta.dat");
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(88, services);
+    game_debug_open_chosen_path();
+
+    // (A) shut until the pressure is full, then it opens
+    const bool gated = game_debug_assault_pinnacle(0) == 0;
+    game_debug_press_faction(0, 5); game_debug_press_faction(0, 5);  // 120 -> clamped to 100
+    const bool avail = game_debug_pinnacle_available(0) == 1;
+
+    // (B) assault the arena — a named boss awaits
+    const bool entered = game_debug_assault_pinnacle(0) == 1 && game_debug_in_pinnacle() == 1 &&
+                         game_debug_cur_zone() == 2;
+    const bool has_boss = game_debug_pinnacle_boss_count() >= 1;
+
+    // (C) slay the boss -> Golden Path shard + home; the pinnacle is now spent
+    game_debug_resolve_pinnacle();
+    const bool cleared = game_debug_in_pinnacle() == 0 && game_debug_cur_node() == 0 &&
+                         (game_debug_golden_shards() & (1 << 0)) != 0 &&
+                         game_debug_pinnacle_available(0) == 0;
+
+    // (D) the Guild pinnacle breaks the spice monopoly
+    game_debug_press_faction(4, 5); game_debug_press_faction(4, 5);
+    game_debug_assault_pinnacle(4);
+    const bool in_guild = game_debug_in_pinnacle() == 1;
+    game_debug_resolve_pinnacle();
+    const bool guild_broke = game_debug_guild_broken_flag() == 1 &&
+                             (game_debug_golden_shards() & (1 << 4)) != 0;
+
+    // (E) withdraw: assault faction 1, break off -> no shard, still available
+    game_debug_press_faction(1, 5); game_debug_press_faction(1, 5);
+    game_debug_assault_pinnacle(1);
+    game_debug_abandon_pinnacle();
+    const bool abandoned = game_debug_in_pinnacle() == 0 && game_debug_cur_node() == 0 &&
+                           (game_debug_golden_shards() & (1 << 1)) == 0 &&
+                           game_debug_pinnacle_available(1) == 1;
+
+    // (F) save + load inside a pinnacle restores the arena (the in_pinnacle load-regen branch)
+    game_debug_press_faction(2, 5); game_debug_press_faction(2, 5);
+    game_debug_assault_pinnacle(2);
+    InputState in;
+    auto tick1 = [&](Key k) { in.pressed[int(k)] = true; game_update(in); in.end_tick(); };
+    tick1(Key::Save);
+    tick1(Key::Load);
+    const bool roundtrip = game_debug_in_pinnacle() == 1 && game_debug_cur_zone() == 2 &&
+                           game_debug_pinnacle_boss_count() >= 1;
+    game_debug_abandon_pinnacle();
+
+    const bool pass = gated && avail && entered && has_boss && cleared && in_guild && guild_broke &&
+                      abandoned && roundtrip;
+    std::printf("pinnacletest %s (gated %d avail %d enter %d boss %d clear %d guild %d abandon %d saveload %d)\n",
+                pass ? "PASS" : "FAIL", gated, avail, entered, has_boss, cleared, guild_broke,
+                abandoned, roundtrip);
+    std::remove("meta.dat");
+    return pass ? 0 : 1;
+}
+
 // A4: click-to-move pathfinds to the goal and is deterministic across runs.
 int run_clicktest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
     GameServices services{&mixer, &assets, &cmaps};
@@ -1602,7 +1663,7 @@ int main(int argc, char** argv) {
          statmodtest = false, affixtest = false, metamigratetest = false, ailmenttest = false,
          rttest = false, stuntest = false, classtest = false, guildtest = false,
          vendortest = false, patroltest = false, cavetest = false, trialtest = false,
-         endgametest = false, striketest = false;
+         endgametest = false, striketest = false, pinnacletest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
         if (SDL_strcmp(argv[i], "--seamtest") == 0) seamtest = true;
@@ -1631,6 +1692,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--trialtest") == 0) trialtest = true;
         if (SDL_strcmp(argv[i], "--endgametest") == 0) endgametest = true;
         if (SDL_strcmp(argv[i], "--striketest") == 0) striketest = true;
+        if (SDL_strcmp(argv[i], "--pinnacletest") == 0) pinnacletest = true;
         if (SDL_strcmp(argv[i], "--animdebug") == 0) animdebug = true;
         if (SDL_strcmp(argv[i], "--rpgtest") == 0) rpgtest = true;
         if (SDL_strcmp(argv[i], "--clicktest") == 0) clicktest = true;
@@ -1677,6 +1739,7 @@ int main(int argc, char** argv) {
     if (trialtest) return run_trialtest(mixer, assets, cmaps);
     if (endgametest) return run_endgametest(mixer, assets, cmaps);
     if (striketest) return run_striketest(mixer, assets, cmaps);
+    if (pinnacletest) return run_pinnacletest(mixer, assets, cmaps);
     if (rpgtest) return run_rpgtest(mixer, assets, cmaps);
     if (reveltest) return run_reveltest(mixer, assets, cmaps);
     if (gauntlettest) return run_gauntlettest(mixer, assets, cmaps);

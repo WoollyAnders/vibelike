@@ -286,6 +286,10 @@ struct GameState {
     uint8_t strike_faction = 0;
     uint8_t strike_tier = 0;
     uint64_t strike_seed = 0;
+    // B10.3: a homeworld pinnacle assault (fixed-seed arena). Entered when a faction's Jihad-pressure
+    // is full; clearing its named boss takes that Great Power's Golden Path shard.
+    bool in_pinnacle = false;
+    uint8_t pinnacle_faction = 0;
 
     int storm_turns = 0;       // M5: Coriolis storm remaining
     int poison_turns = 0;      // pan adder venom: +thirst while active
@@ -1699,6 +1703,97 @@ bool commission_strike(int f, int tier) {
     return true;
 }
 
+// B10.3: the five homeworld pinnacles. Each is a FIXED-seed arena (a stable set-piece, unlike the
+// rolled strikes) with a named faction boss. Full mechanical identity (Voice, Face-Dancers, ...) is
+// deferred to the content phase; the MVP fields a tough named boss + honor guard per Great Power.
+constexpr uint64_t kPinnacleSeed[FAC_COUNT] = {
+    0xB0DE515700000001ull,  // Bene Gesserit — Wallach IX
+    0x71E11A0000000002ull,  // Tleilaxu — Bandalong
+    0x19000000000003ull,    // Ixian — Ix
+    0xC02217A000000004ull,  // Corrino — Kaitain / Salusa
+    0x6111D00000000005ull,  // Guild — Junction
+};
+const char* pinnacle_boss_name(int f) {
+    static const char* kNames[] = {"a Reverend Mother of Wallach IX", "a Tleilaxu Master",
+                                    "an Ixian magnate", "Emperor Shaddam IV", "a Guild Navigator"};
+    return (f >= 0 && f < FAC_COUNT) ? kNames[f] : "the enemy";
+}
+
+void spawn_pinnacle_boss(int f) {
+    map::Zone& z = zone();
+    const Entity& p = player_ent();
+    for (int tries = 0; tries < 300; ++tries) {  // the named boss, placed opposite the entry
+        const int x = g.rng.combat.range(map::W / 2, map::W - 4);
+        const int y = g.rng.combat.range(4, map::H - 4);
+        if (!z.walkable(x, y) || entity_at(x, y, g.cur_zone)) continue;
+        const uint8_t traits = BT_BRUTE | BT_STALWART | (f == FAC_GUILD ? BT_SWIFT : 0);
+        const int16_t name_pack = int16_t(0x100 + f);  // positive -> not a campaign-pinnacle tag
+        if (Entity* e = alloc_entity())
+            *e = Entity{EType::Boss, Ai::Hunt, g.cur_zone, int16_t(x), int16_t(y),
+                        int16_t(80 + f * 6), 0, int16_t((6 & 0xFF) | (traits << 8)), name_pack};
+        break;
+    }
+    for (int i = 0, tries = 0; i < 3 && tries < 400; ++tries) {  // the honor guard
+        const int x = g.rng.combat.range(6, map::W - 4), y = g.rng.combat.range(4, map::H - 4);
+        if (!z.walkable(x, y) || entity_at(x, y, g.cur_zone)) continue;
+        const int ddx = x > p.x ? x - p.x : p.x - x, ddy = y > p.y ? y - p.y : p.y - y;
+        if (ddx + ddy < 6) continue;
+        if (Entity* e = alloc_entity())
+            *e = Entity{EType::ShieldTrooper, Ai::Hunt, g.cur_zone, int16_t(x), int16_t(y),
+                        int16_t(24), 0, 0};
+        ++i;
+    }
+}
+
+void enter_pinnacle(int f) {
+    g.in_pinnacle = true;
+    g.pinnacle_faction = uint8_t(f);
+    for (int i = 1; i < kMaxEnts; ++i) g.ents[i] = Entity{};
+    g.op = harvest::Op{};
+    g.alarm_turns = 0; g.alarm_spawn_cd = 0;
+    g.delta_count = 0;
+    g.spawned_mask = uint8_t(1 << map::kZoneDeepPan);  // hand-placed arena, no auto-wildlife
+    enter_zone(map::kZoneDeepPan, kPinnacleSeed[f], /*use_spawn=*/true, 0, 0, /*roll_events=*/false);
+    spawn_pinnacle_boss(f);
+    g.log.push("You breach the homeworld of %s. Their champion answers: %s.",
+               faction_name(f), pinnacle_boss_name(f));
+    refresh_fov_and_paths();
+}
+
+// The homeworld boss falls: take the Golden Path shard (clear_pinnacle) + a rich prize, then home.
+void resolve_pinnacle() {
+    const int f = g.pinnacle_faction;
+    g.in_pinnacle = false;
+    clear_pinnacle(f);  // shard + (Guild) guild_broken; announces the shard count / capstone
+    items::Inst it = roll_item(10, 120);  // a pinnacle-tier prize
+    for (items::Inst& slot : g.pl.inv)
+        if (slot.empty() && !it.empty()) {
+            slot = it;
+            char nm[64];
+            it.full_name(nm, sizeof nm);
+            g.log.push("Pinnacle spoils: %s.", nm);
+            break;
+        }
+    g.pl.spice += 40;
+    raise_standing(10);
+    enter_node(0);
+    refresh_fov_and_paths();
+}
+
+void abandon_pinnacle() {
+    g.in_pinnacle = false;
+    g.log.push("The homeworld holds. You withdraw to fight another day.");
+    enter_node(0);
+    refresh_fov_and_paths();
+}
+
+// Assault a faction's homeworld pinnacle — only once its Jihad-pressure is full. False if not open.
+bool assault_pinnacle(int f) {
+    if (!pinnacle_available(f)) return false;
+    enter_pinnacle(f);
+    return true;
+}
+
 void spawn_boss(bool baron) {
     map::Zone& z = zone();
     for (int tries = 0; tries < 300; ++tries) {
@@ -3016,6 +3111,7 @@ void enter_node(int idx) {
     g.alarm_spawn_cd = 0;
     g.in_cave = false;           // B9: entering a real node ends any cave excursion
     g.in_strike = false;         // B10.2: entering a real node ends any strike excursion
+    g.in_pinnacle = false;       // B10.3: entering a real node ends any pinnacle assault
     g.delta_count = 0;           // tile edits (churn, breaches) reset per node
     g.spawned_mask = 0;          // let spawn_zone_wildlife repopulate this fresh node
 
@@ -3375,6 +3471,13 @@ void try_move(int dx, int dy) {
                 *victim = Entity{EType::Corpse, Ai::Idle, uint8_t(g.cur_zone),
                                  victim->x, victim->y, 0, 0, 200};
                 resolve_strike();  // press the target + melt home (wipes this zone)
+                consume_action();
+                return;
+            }
+            if (g.in_pinnacle && victim->type == EType::Boss) {  // B10.3: the homeworld boss falls
+                *victim = Entity{EType::Corpse, Ai::Idle, uint8_t(g.cur_zone),
+                                 victim->x, victim->y, 0, 0, 300};
+                resolve_pinnacle();  // take the Golden Path shard + return home
                 consume_action();
                 return;
             }
@@ -3771,6 +3874,7 @@ bool click_step_toward(int gx, int gy) {
 void open_revelation(int dest);  // fwd (defined above)
 void use_door() {
     if (g.in_strike) { abandon_strike(); return; }  // B10.2: leaving a strike unfinished = abandon it
+    if (g.in_pinnacle) { abandon_pinnacle(); return; }  // B10.3: withdraw from the homeworld
     if (g.in_cave) { exit_cave(); return; }  // B9: the cavern door climbs back out to the field
     if (g.cur_node == 0) {
         g.log.push("You drink deep of the Water. Muad'Dib's vision takes you.");
@@ -5615,6 +5719,8 @@ void game_serialize(SaveWriter& w) {
     w.u8(g.strike_faction);
     w.u8(g.strike_tier);
     w.u64(g.strike_seed);
+    w.u8(g.in_pinnacle ? 1 : 0);    // B10.3: inside a homeworld pinnacle assault
+    w.u8(g.pinnacle_faction);
     w.i32(g.storm_turns);
     w.i32(g.poison_turns);
     w.i32(g.thopter_x);
@@ -5709,6 +5815,8 @@ bool game_deserialize(SaveReader& r) {
     const uint8_t strike_faction = r.u8();
     const uint8_t strike_tier = r.u8();
     const uint64_t strike_seed = r.u64();
+    const bool in_pinnacle = r.u8() != 0;    // B10.3
+    const uint8_t pinnacle_faction = r.u8();
     const int storm_turns = r.i32();
     const int poison_turns = r.i32();
     const int thopter_x = r.i32();
@@ -5770,6 +5878,8 @@ bool game_deserialize(SaveReader& r) {
     g.strike_faction = strike_faction;
     g.strike_tier = strike_tier;
     g.strike_seed = strike_seed;
+    g.in_pinnacle = in_pinnacle;      // B10.3
+    g.pinnacle_faction = pinnacle_faction;
     g.storm_turns = storm_turns;
     g.poison_turns = poison_turns;
     g.thopter_x = int16_t(thopter_x);
@@ -5787,6 +5897,9 @@ bool game_deserialize(SaveReader& r) {
     int sx_, sy_;
     if (in_strike) {  // B10.2: a strike excursion regenerates its raid zone from the strike seed
         map::generate(g.zone_, strike_seed, map::ZoneId(map::kZoneDeepPan), sx_, sy_);
+    } else if (in_pinnacle) {  // B10.3: a pinnacle arena regenerates from its fixed per-faction seed
+        map::generate(g.zone_, kPinnacleSeed[pinnacle_faction < FAC_COUNT ? pinnacle_faction : 0],
+                      map::ZoneId(map::kZoneDeepPan), sx_, sy_);
     } else if (in_cave) {  // B9: a hidden cavern is a transient sub-zone regenerated from its own seed
         map::generate(g.zone_, cave_seed, map::ZoneId(map::kZoneCave), sx_, sy_);
     } else if (at_rendezvous) {  // B7: the Ninth Rock is a fixed-seed desert zone, not a graph node
@@ -6007,6 +6120,16 @@ int game_debug_strike_boss_count() {  // objectives present in the current strik
 }
 void game_debug_resolve_strike() { resolve_strike(); }   // simulate clearing the objective
 void game_debug_abandon_strike() { abandon_strike(); }
+int game_debug_assault_pinnacle(int f) { return assault_pinnacle(f) ? 1 : 0; }  // enter if available
+int game_debug_in_pinnacle() { return g.in_pinnacle ? 1 : 0; }
+int game_debug_pinnacle_boss_count() {
+    int n = 0;
+    for (int i = 1; i < kMaxEnts; ++i)
+        if (g.ents[i].hp > 0 && g.ents[i].zone == g.cur_zone && g.ents[i].type == EType::Boss) ++n;
+    return n;
+}
+void game_debug_resolve_pinnacle() { resolve_pinnacle(); }   // simulate slaying the homeworld boss
+void game_debug_abandon_pinnacle() { abandon_pinnacle(); }
 
 void game_debug_revelation(int* stage, int* inv_count) {
     if (stage) *stage = g.revelation_stage;
