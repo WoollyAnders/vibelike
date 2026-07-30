@@ -1463,6 +1463,66 @@ int run_trialtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cm
     return pass ? 0 : 1;
 }
 
+// Endgame (the Jihad): beating the Baron opens the Chosen Path; spice-commissioned strikes build
+// directed pressure per Great Power (factions 0 BeneGesserit,1 Tleilaxu,2 Ixian,3 Corrino,4 Guild);
+// full pressure opens that homeworld pinnacle; each pinnacle yields a Golden Path shard; all five
+// open the capstone (the alternate Paul). Data core — the strike/pinnacle zones layer on later.
+int run_endgametest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    std::remove("meta.dat");
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(2077, services);
+
+    // (A) shut until the Chosen Path — no strikes, no pinnacles
+    const bool shut = game_debug_endgame_open() == 0 &&
+                      game_debug_commission_strike(2 /*Ixian*/, 1) == 0 &&
+                      game_debug_pinnacle_available(2) == 0;
+
+    // (B) the Baron falls -> the Jihad opens
+    game_debug_open_chosen_path();
+    const bool opened = game_debug_endgame_open() == 1;
+
+    // (C) commissioned strikes press the target; an unaffordable one is refused
+    const bool broke = game_debug_commission_strike(2, 5) == 0;  // no spice yet
+    game_debug_add_spice(100000);
+    const int p0 = game_debug_jihad_pressure(2);
+    game_debug_commission_strike(2, 5);
+    const int p1 = game_debug_jihad_pressure(2);
+    const bool not_yet = game_debug_pinnacle_available(2) == 0;  // 60 < 100 -> still building
+    game_debug_commission_strike(2, 5);
+    const int p2 = game_debug_jihad_pressure(2);
+    const bool pressed = p0 == 0 && p1 == 60 && p2 == 100;
+    const bool opens_pinnacle = game_debug_pinnacle_available(2) == 1;
+
+    // (D) defeat the pinnacle: shard taken, that pinnacle now spent
+    game_debug_clear_pinnacle(2);
+    const bool shard = (game_debug_golden_shards() & (1 << 2)) != 0 &&
+                       game_debug_pinnacle_available(2) == 0;
+
+    // (E) the Guild pinnacle breaks the spice monopoly (guild_broken)
+    game_debug_clear_pinnacle(4);
+    const bool guild_broke = game_debug_guild_broken_flag() == 1;
+
+    // (F) all five shards -> the capstone opens; refusing the Golden Path finishes it
+    for (int f = 0; f < 5; ++f)
+        if (!(game_debug_golden_shards() & (1 << f))) game_debug_clear_pinnacle(f);
+    const bool capstone = game_debug_capstone_available() == 1;
+    game_debug_finish_capstone();
+    const bool refused = game_debug_capstone_available() == 0;
+
+    // (G) DME8 round-trip: the whole Jihad state survives a meta reload
+    int mb = -1, ma = -1; game_debug_meta_reload_class(&mb, &ma);
+    const bool persisted = game_debug_endgame_open() == 1 && game_debug_golden_shards() == 0x1f &&
+                           game_debug_jihad_pressure(2) == 100 && game_debug_guild_broken_flag() == 1;
+
+    const bool pass = shut && opened && broke && pressed && not_yet && opens_pinnacle && shard &&
+                      guild_broke && capstone && refused && persisted;
+    std::printf("endgametest %s (shut %d open %d press %d/%d/%d gate %d shard %d guildbroke %d cap %d refused %d persist %d)\n",
+                pass ? "PASS" : "FAIL", shut, opened, p0, p1, p2, opens_pinnacle, shard,
+                guild_broke, capstone, refused, persisted);
+    std::remove("meta.dat");
+    return pass ? 0 : 1;
+}
+
 // A4: click-to-move pathfinds to the goal and is deterministic across runs.
 int run_clicktest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
     GameServices services{&mixer, &assets, &cmaps};
@@ -1501,7 +1561,8 @@ int main(int argc, char** argv) {
          reveltest = false, gauntlettest = false, extractiontest = false, metatest = false,
          statmodtest = false, affixtest = false, metamigratetest = false, ailmenttest = false,
          rttest = false, stuntest = false, classtest = false, guildtest = false,
-         vendortest = false, patroltest = false, cavetest = false, trialtest = false;
+         vendortest = false, patroltest = false, cavetest = false, trialtest = false,
+         endgametest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
         if (SDL_strcmp(argv[i], "--seamtest") == 0) seamtest = true;
@@ -1528,6 +1589,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--patroltest") == 0) patroltest = true;
         if (SDL_strcmp(argv[i], "--cavetest") == 0) cavetest = true;
         if (SDL_strcmp(argv[i], "--trialtest") == 0) trialtest = true;
+        if (SDL_strcmp(argv[i], "--endgametest") == 0) endgametest = true;
         if (SDL_strcmp(argv[i], "--animdebug") == 0) animdebug = true;
         if (SDL_strcmp(argv[i], "--rpgtest") == 0) rpgtest = true;
         if (SDL_strcmp(argv[i], "--clicktest") == 0) clicktest = true;
@@ -1572,6 +1634,7 @@ int main(int argc, char** argv) {
     if (patroltest) return run_patroltest(mixer, assets, cmaps);
     if (cavetest) return run_cavetest(mixer, assets, cmaps);
     if (trialtest) return run_trialtest(mixer, assets, cmaps);
+    if (endgametest) return run_endgametest(mixer, assets, cmaps);
     if (rpgtest) return run_rpgtest(mixer, assets, cmaps);
     if (reveltest) return run_reveltest(mixer, assets, cmaps);
     if (gauntlettest) return run_gauntlettest(mixer, assets, cmaps);

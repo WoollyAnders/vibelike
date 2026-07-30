@@ -102,6 +102,16 @@ int game_debug_trials();                     // Desert Trials: bitmask of ordeal
 int game_debug_can_ascend();                 // Desert Trials: 1 if the Awakening rite is open
 void game_debug_trigger_trial(int which);    // Desert Trials: pass ordeal which (0/1/2) via mark_trial
 void game_debug_complete_trials();           // Desert Trials: open the gate outright (all three)
+int game_debug_endgame_open();               // endgame: 1 once the Chosen Path (Jihad) is open
+void game_debug_open_chosen_path();          // endgame: simulate the Baron's fall (open the Jihad)
+int game_debug_jihad_pressure(int f);        // endgame: per-faction directed pressure (0..100)
+int game_debug_commission_strike(int f, int tier);  // endgame: pay spice + press faction f (1=done)
+int game_debug_pinnacle_available(int f);    // endgame: 1 if faction f's pinnacle is open
+void game_debug_clear_pinnacle(int f);       // endgame: defeat f's pinnacle (shard + guild_broken)
+int game_debug_golden_shards();              // endgame: bitmask of Golden Path shards taken
+int game_debug_capstone_available();         // endgame: 1 once all five shards are gathered
+void game_debug_finish_capstone();           // endgame: refuse the Golden Path (capstone done)
+int game_debug_guild_broken_flag();          // endgame: 1 once the Guild Navigator has fallen
 void game_debug_revelation(int* stage, int* inv_count);  // B2b: Revelation stage + inv item count
 void game_debug_revelation_pick(int idx);  // B2b: choose row idx + confirm the Revelation
 int game_debug_cur_node();  // B1.3: current graph node index

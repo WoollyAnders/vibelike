@@ -1039,8 +1039,27 @@ struct Meta {
     // --- Desert Trials (DME7) --- the ascension gate (replaces the placeholder Awaken>=2 gate).
     // A bitmask of the three ordeals passed in a vision-run; all three open the Awakening rite.
     uint8_t trials_done = 0;
+    // --- Endgame (DME8) --- the Jihad. Unlocked when the Baron falls; the player commissions strikes
+    // that build directed Jihad-pressure per Great Power until that power's homeworld pinnacle opens.
+    // Each pinnacle yields a Golden Path shard; all five open the capstone (the alternate-Paul mirror).
+    uint8_t chosen_path = 0;         // 1 once the Baron falls: the Jihad (endgame) opens
+    uint8_t jihad_pressure[5] = {0, 0, 0, 0, 0};  // per-faction directed pressure (0..kPinnaclePressure)
+    uint8_t pinnacle_cleared = 0;    // bit per faction: its homeworld pinnacle defeated
+    uint8_t golden_shards = 0;       // bit per faction: Golden Path shard taken from that pinnacle
+    uint8_t capstone_done = 0;       // 1 once the alternate Paul (the Golden Path) is refused
 };
 Meta g_meta;
+
+// The five Great Powers of the Jihad endgame (the pinnacle factions).
+enum Faction : uint8_t {
+    FAC_BENE_GESSERIT = 0,  // Wallach IX — the Mother School
+    FAC_TLEILAXU,           // Bandalong — the axlotl labs
+    FAC_IXIAN,              // Ix — the forbidden machine-halls
+    FAC_CORRINO,            // Kaitain / Salusa Secundus — Shaddam + Sardaukar
+    FAC_GUILD,              // Junction — the Navigator (kill -> guild_broken)
+    FAC_COUNT,
+};
+constexpr uint8_t kAllShards = (1 << FAC_COUNT) - 1;  // 0b11111
 
 // Desert Trials: the three ordeals of the deep desert (PoE Lab-Trials analog). Passing all three
 // earns the Awakening (the sietch ascension rite). Faced inside vision-runs, persisted in meta.
@@ -1059,6 +1078,7 @@ int guild_difficulty() {
     return d < 0 ? 0 : d > cap ? cap : d;
 }
 
+inline constexpr uint32_t kMetaV8 = 0x38454D44u;  // 'DME8' (endgame: + Jihad pressure/pinnacles/shards)
 inline constexpr uint32_t kMetaV7 = 0x37454D44u;  // 'DME7' (Desert Trials: + trials_done)
 inline constexpr uint32_t kMetaV6 = 0x36454D44u;  // 'DME6' (B6: + guild tithe debt / broken)
 inline constexpr uint32_t kMetaV5 = 0x35454D44u;  // 'DME5' (C3: + base class / ascendancy)
@@ -1092,7 +1112,7 @@ void meta_load() {
     if (!f) return;
     uint32_t magic = 0;
     if (std::fread(&magic, 4, 1, f) == 1) {
-        if (magic == kMetaV7 || magic == kMetaV6 || magic == kMetaV5 || magic == kMetaV4) {  // native widened-Inst format
+        if (magic == kMetaV8 || magic == kMetaV7 || magic == kMetaV6 || magic == kMetaV5 || magic == kMetaV4) {  // native widened-Inst format
             (void)!std::fread(&g_meta.runs, 4, 1, f);
             (void)!std::fread(&g_meta.endings_seen, 1, 1, f);
             (void)!std::fread(&g_meta.stash_count, 1, 1, f);
@@ -1104,16 +1124,23 @@ void meta_load() {
             (void)!std::fread(&g_meta.st, sizeof g_meta.st, 1, f);
             (void)!std::fread(g_meta.equip, sizeof g_meta.equip, 1, f);
             (void)!std::fread(g_meta.inv, sizeof g_meta.inv, 1, f);
-            if (magic == kMetaV5 || magic == kMetaV6 || magic == kMetaV7) {  // C3: base class + ascendancy (DME4 -> 0/None)
+            if (magic == kMetaV5 || magic == kMetaV6 || magic == kMetaV7 || magic == kMetaV8) {  // C3: base class + ascendancy (DME4 -> 0/None)
                 (void)!std::fread(&g_meta.base_class, 1, 1, f);
                 (void)!std::fread(&g_meta.ascendancy, 1, 1, f);
             }
-            if (magic == kMetaV6 || magic == kMetaV7) {  // B6: guild tithe (DME5/DME4 leave them at 0)
+            if (magic == kMetaV6 || magic == kMetaV7 || magic == kMetaV8) {  // B6: guild tithe (DME5/DME4 leave them at 0)
                 (void)!std::fread(&g_meta.guild_debt, 1, 1, f);
                 (void)!std::fread(&g_meta.guild_broken, 1, 1, f);
             }
-            if (magic == kMetaV7) {  // Desert Trials (DME6 and earlier leave it at 0)
+            if (magic == kMetaV7 || magic == kMetaV8) {  // Desert Trials (DME6 and earlier leave it at 0)
                 (void)!std::fread(&g_meta.trials_done, 1, 1, f);
+            }
+            if (magic == kMetaV8) {  // endgame Jihad state (DME7 and earlier leave it all at 0)
+                (void)!std::fread(&g_meta.chosen_path, 1, 1, f);
+                (void)!std::fread(g_meta.jihad_pressure, sizeof g_meta.jihad_pressure, 1, f);
+                (void)!std::fread(&g_meta.pinnacle_cleared, 1, 1, f);
+                (void)!std::fread(&g_meta.golden_shards, 1, 1, f);
+                (void)!std::fread(&g_meta.capstone_done, 1, 1, f);
             }
         } else if (magic == kMetaV3 || magic == kMetaV2) {  // legacy 4-byte items -> convert
             (void)!std::fread(&g_meta.runs, 4, 1, f);
@@ -1145,7 +1172,7 @@ void meta_load() {
 void meta_save() {
     FILE* f = std::fopen("meta.dat", "wb");
     if (!f) return;
-    std::fwrite(&kMetaV7, 4, 1, f);
+    std::fwrite(&kMetaV8, 4, 1, f);
     std::fwrite(&g_meta.runs, 4, 1, f);
     std::fwrite(&g_meta.endings_seen, 1, 1, f);
     std::fwrite(&g_meta.stash_count, 1, 1, f);
@@ -1162,6 +1189,11 @@ void meta_save() {
     std::fwrite(&g_meta.guild_debt, 1, 1, f);    // B6 (DME6)
     std::fwrite(&g_meta.guild_broken, 1, 1, f);  // B6 (DME6)
     std::fwrite(&g_meta.trials_done, 1, 1, f);    // Desert Trials (DME7)
+    std::fwrite(&g_meta.chosen_path, 1, 1, f);           // endgame (DME8)
+    std::fwrite(g_meta.jihad_pressure, sizeof g_meta.jihad_pressure, 1, f);
+    std::fwrite(&g_meta.pinnacle_cleared, 1, 1, f);
+    std::fwrite(&g_meta.golden_shards, 1, 1, f);
+    std::fwrite(&g_meta.capstone_done, 1, 1, f);
     std::fclose(f);
 }
 
@@ -1501,7 +1533,76 @@ void award_pinnacle_clear(int node) {
         g.log.push("The path to Arrakeen deepens. Vision %d of 10 opens to Muad'Dib.",
                    g_meta.awaken_unlocked);
     }
+    if (aw >= 10 && !g_meta.chosen_path) {  // the Baron falls: the Chosen Path opens the Jihad endgame
+        g_meta.chosen_path = 1;
+        g.log.push("The Baron is dead. The Fremen legions look to you. Enact the Jihad.");
+        g.log.push("The Jihad Table and the Long Ride open to Muad'Dib at the sietch.");
+    }
     meta_save();
+}
+
+// ---- Endgame: the Jihad (spice-commissioned strikes -> directed pressure -> pinnacles) ----------
+
+bool endgame_open() { return g_meta.chosen_path != 0; }
+
+// A commissioned strike at `tier` (1..kStrikeTiers) presses its target Great Power. At full pressure
+// that faction's homeworld pinnacle opens. Pressure is persistent (meta), capped, per-faction.
+void press_faction(int f, int tier) {
+    if (f < 0 || f >= FAC_COUNT || tier < 1) return;
+    int p = g_meta.jihad_pressure[f] + tier * tune::kStrikePressPerTier;
+    if (p > tune::kPinnaclePressure) p = tune::kPinnaclePressure;
+    g_meta.jihad_pressure[f] = uint8_t(p);
+    if (p >= tune::kPinnaclePressure && !(g_meta.pinnacle_cleared & (1 << f)))
+        g.log.push("Jihad-pressure peaks. A homeworld pinnacle opens at the Jihad Table.");
+    meta_save();
+}
+
+// The spice cost to commission a strike at `tier` (higher tier = harder + richer).
+int strike_cost(int tier) { return tier * tune::kStrikeSpiceBase; }
+
+// A faction's homeworld pinnacle is available once the Jihad is open, its pressure is full, and it
+// has not already fallen.
+bool pinnacle_available(int f) {
+    return endgame_open() && f >= 0 && f < FAC_COUNT &&
+           g_meta.jihad_pressure[f] >= tune::kPinnaclePressure &&
+           !(g_meta.pinnacle_cleared & (1 << f));
+}
+
+// Defeat a faction's pinnacle: mark it cleared, take its Golden Path shard, and — for the Guild —
+// break the spice monopoly (raising the tithe cap; the hook shipped in B6).
+void clear_pinnacle(int f) {
+    if (f < 0 || f >= FAC_COUNT) return;
+    g_meta.pinnacle_cleared |= uint8_t(1 << f);
+    g_meta.golden_shards |= uint8_t(1 << f);
+    if (f == FAC_GUILD) g_meta.guild_broken = 1;  // the Navigator falls -> the monopoly breaks
+    g.log.push("The homeworld falls. A shard of the Golden Path is yours (%d/5).",
+               __builtin_popcount(g_meta.golden_shards));
+    if ((g_meta.golden_shards & kAllShards) == kAllShards)
+        g.log.push("All five shards gathered. The Golden Path can be confronted.");
+    meta_save();
+}
+
+// The grand capstone (the alternate Paul who accepted the Golden Path) opens once all five shards
+// are gathered and it has not yet been refused.
+bool capstone_available() {
+    return endgame_open() && (g_meta.golden_shards & kAllShards) == kAllShards && !g_meta.capstone_done;
+}
+void finish_capstone() {
+    g_meta.capstone_done = 1;
+    g.log.push("You face your other self — and refuse the Golden Path. One day, Leto will not.");
+    meta_save();
+}
+
+// Commission a strike at the Jihad Table: pay spice, launch, and (on clear) press the target Power.
+// The procedural strike EXCURSION (a rolled off-world zone) layers on in B10.2; the data core here
+// commits the commission and resolves its pressure. Returns false if the Jihad is shut or unaffordable.
+bool commission_strike(int f, int tier) {
+    if (!endgame_open() || f < 0 || f >= FAC_COUNT || tier < 1 || tier > tune::kStrikeTiers) return false;
+    const int cost = strike_cost(tier);
+    if (g.pl.spice < cost) return false;
+    g.pl.spice -= cost;
+    press_faction(f, tier);  // B10.2 will move this to the strike's on-clear hook
+    return true;
 }
 
 void spawn_boss(bool baron) {
@@ -5765,6 +5866,20 @@ void game_debug_trigger_trial(int which) {  // Trials: pass one ordeal via the r
     mark_trial(which == 0 ? TRIAL_SANDWALK : which == 1 ? TRIAL_STORM : TRIAL_WORM);
 }
 void game_debug_complete_trials() { g_meta.trials_done = TRIAL_ALL; }  // Trials: open the gate outright
+
+// --- Endgame (Jihad) hooks ---
+int game_debug_endgame_open() { return endgame_open() ? 1 : 0; }
+void game_debug_open_chosen_path() { g_meta.chosen_path = 1; meta_save(); }  // simulate the Baron's fall
+int game_debug_jihad_pressure(int f) {
+    return (f >= 0 && f < FAC_COUNT) ? g_meta.jihad_pressure[f] : -1;
+}
+int game_debug_commission_strike(int f, int tier) { return commission_strike(f, tier) ? 1 : 0; }
+int game_debug_pinnacle_available(int f) { return pinnacle_available(f) ? 1 : 0; }
+void game_debug_clear_pinnacle(int f) { clear_pinnacle(f); }
+int game_debug_golden_shards() { return g_meta.golden_shards; }
+int game_debug_capstone_available() { return capstone_available() ? 1 : 0; }
+void game_debug_finish_capstone() { finish_capstone(); }
+int game_debug_guild_broken_flag() { return g_meta.guild_broken; }
 
 void game_debug_revelation(int* stage, int* inv_count) {
     if (stage) *stage = g.revelation_stage;

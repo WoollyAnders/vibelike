@@ -118,4 +118,12 @@ inline constexpr int kGuildMobDiv = 2;            // +1 escort mob per this many
 inline constexpr int kPatrolMinDepth = 3;   // Awaken depth at which patrols/wormsign begin
 inline constexpr int kPatrolLeash = 6;      // a patroller paces within this Chebyshev radius of its anchor
 
+// --- Endgame: the Jihad (spice-commissioned strikes -> directed faction pressure -> pinnacles) ---
+// Each cleared strike presses its target Great Power; at kPinnaclePressure that power's homeworld
+// pinnacle opens. Higher-tier strikes press harder (and cost more spice / hit harder).
+inline constexpr int kPinnaclePressure = 100;   // pressure at which a faction's pinnacle opens
+inline constexpr int kStrikePressPerTier = 12;  // pressure a cleared strike adds, x its tier (1..)
+inline constexpr int kStrikeTiers = 5;          // commission tiers (difficulty/reward ladder)
+inline constexpr int kStrikeSpiceBase = 20;     // spice to commission a tier-1 strike (x tier)
+
 }  // namespace tune
