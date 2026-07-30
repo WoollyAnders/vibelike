@@ -139,4 +139,14 @@ inline constexpr int kJacurutuBaseChance = 3;   // % Jacurutu (Maker Hide) at le
 inline constexpr int kJacurutuPerLeg = 2;       // +2% per leg
 inline constexpr int kJacurutuMax = 40;         // Jacurutu-chance cap
 
+// --- Endgame: the Landsraad / CHOAM politics layer (the economic face of the conquest) ---
+// CHOAM control is derived: each toppled homeworld is a seized directorship; each courted House adds
+// its votes. Allies pay dividends; a Great Power you are actively warring (high pressure, un-toppled)
+// opposes you in the Landsraad and reinforces your strikes with hired forces.
+inline constexpr int kChoamPerPinnacle = 16;    // CHOAM control per toppled homeworld (conquest)
+inline constexpr int kChoamPerAlly = 6;         // CHOAM control per courted House (diplomacy)
+inline constexpr int kCourtCost = 30;           // spice to court a House into a CHOAM alliance
+inline constexpr int kHouseOpposePressure = 50; // Jihad-pressure at which an un-toppled House opposes
+inline constexpr int kDividendPerControl = 1;   // spice dividend per point of CHOAM control
+
 }  // namespace tune

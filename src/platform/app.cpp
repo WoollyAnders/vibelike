@@ -1706,6 +1706,55 @@ int run_longridetest(audio::Mixer& mixer, const Assets& assets, const Colormaps&
     return pass ? 0 : 1;
 }
 
+// Landsraad / CHOAM: the Imperial politics layer. CHOAM control is derived from toppled homeworlds
+// (conquest) + courted Houses (diplomacy); a Great Power you are actively warring opposes you (and
+// reinforces your strikes), a courted one is an ally that pays dividends. Factions 0..4.
+int run_choamtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    std::remove("meta.dat");
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(9, services);
+    game_debug_open_chosen_path();
+    game_debug_add_spice(1000);
+
+    // (A) baseline: no control, everyone neutral
+    const bool base = game_debug_choam_control() == 0 && game_debug_house_stance(0) == 0 &&
+                      game_debug_opposing_houses() == 0;
+
+    // (B) warring a Power (pressure >= threshold, un-toppled) makes it an opponent you cannot court
+    game_debug_press_faction(2, 5);  // 60 >= kHouseOpposePressure
+    const bool opposes = game_debug_house_stance(2) == 2 && game_debug_opposing_houses() == 1;
+    const bool cant_court_opponent = game_debug_court_house(2) == 0 && game_debug_house_stance(2) == 2;
+
+    // (C) court a neutral House: it becomes an ally, control rises, spice is paid
+    int hp, mhp, wa, mwa, lv, sp0; game_debug_player_stats(&hp, &mhp, &wa, &mwa, &lv, &sp0);
+    const int ctrl0 = game_debug_choam_control();
+    const bool courted = game_debug_court_house(0) == 1 && game_debug_house_stance(0) == 1;
+    int sp1; game_debug_player_stats(&hp, &mhp, &wa, &mwa, &lv, &sp1);
+    const bool paid = (sp0 - sp1) == 30;                           // kCourtCost
+    const bool control_rose = game_debug_choam_control() == ctrl0 + 6;  // kChoamPerAlly
+
+    // (D) toppling a homeworld seizes a directorship — a bigger jump in control
+    const int ctrl1 = game_debug_choam_control();
+    game_debug_clear_pinnacle(3);
+    const bool conquest = game_debug_choam_control() == ctrl1 + 16;  // kChoamPerPinnacle
+
+    // (E) the CHOAM dividend scales with control
+    const int div = game_debug_collect_dividend();
+    const bool dividend = div == game_debug_choam_control();       // kDividendPerControl == 1
+
+    // (F) DME10 round-trip: the alliance survives a meta reload
+    int mb = -1, ma = -1; game_debug_meta_reload_class(&mb, &ma);
+    const bool persisted = game_debug_house_stance(0) == 1 && game_debug_choam_control() == 22;
+
+    const bool pass = base && opposes && cant_court_opponent && courted && paid && control_rose &&
+                      conquest && dividend && persisted;
+    std::printf("choamtest %s (base %d oppose %d noCourt %d court %d paid %d rose %d conquest %d div %d persist %d)\n",
+                pass ? "PASS" : "FAIL", base, opposes, cant_court_opponent, courted, paid,
+                control_rose, conquest, dividend, persisted);
+    std::remove("meta.dat");
+    return pass ? 0 : 1;
+}
+
 // A4: click-to-move pathfinds to the goal and is deterministic across runs.
 int run_clicktest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
     GameServices services{&mixer, &assets, &cmaps};
@@ -1746,7 +1795,7 @@ int main(int argc, char** argv) {
          rttest = false, stuntest = false, classtest = false, guildtest = false,
          vendortest = false, patroltest = false, cavetest = false, trialtest = false,
          endgametest = false, striketest = false, pinnacletest = false, capstonetest = false,
-         longridetest = false;
+         longridetest = false, choamtest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
         if (SDL_strcmp(argv[i], "--seamtest") == 0) seamtest = true;
@@ -1778,6 +1827,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--pinnacletest") == 0) pinnacletest = true;
         if (SDL_strcmp(argv[i], "--capstonetest") == 0) capstonetest = true;
         if (SDL_strcmp(argv[i], "--longridetest") == 0) longridetest = true;
+        if (SDL_strcmp(argv[i], "--choamtest") == 0) choamtest = true;
         if (SDL_strcmp(argv[i], "--animdebug") == 0) animdebug = true;
         if (SDL_strcmp(argv[i], "--rpgtest") == 0) rpgtest = true;
         if (SDL_strcmp(argv[i], "--clicktest") == 0) clicktest = true;
@@ -1827,6 +1877,7 @@ int main(int argc, char** argv) {
     if (pinnacletest) return run_pinnacletest(mixer, assets, cmaps);
     if (capstonetest) return run_capstonetest(mixer, assets, cmaps);
     if (longridetest) return run_longridetest(mixer, assets, cmaps);
+    if (choamtest) return run_choamtest(mixer, assets, cmaps);
     if (rpgtest) return run_rpgtest(mixer, assets, cmaps);
     if (reveltest) return run_reveltest(mixer, assets, cmaps);
     if (gauntlettest) return run_gauntlettest(mixer, assets, cmaps);

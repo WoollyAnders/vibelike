@@ -1069,6 +1069,9 @@ struct Meta {
     // --- The Long Ride (DME9) ---
     uint8_t maker_hides = 0;         // Jacurutu jackpots banked (the Divine reagent; D2 crafting)
     uint8_t best_ride_leg = 0;       // deepest Long Ride leg reached (a persistent record)
+    // --- Landsraad / CHOAM (DME10) --- the Imperial politics layer, powered by CHOAM. House alliances
+    // persist; CHOAM control is DERIVED from toppled homeworlds (conquest) + courted Houses (diplomacy).
+    uint8_t house_allied = 0;        // bit per faction: courted as a CHOAM ally
 };
 Meta g_meta;
 
@@ -1100,6 +1103,7 @@ int guild_difficulty() {
     return d < 0 ? 0 : d > cap ? cap : d;
 }
 
+inline constexpr uint32_t kMetaVA = 0x41454D44u;  // 'DMEA' (Landsraad/CHOAM: + house_allied)
 inline constexpr uint32_t kMetaV9 = 0x39454D44u;  // 'DME9' (Long Ride: + maker_hides / best_ride_leg)
 inline constexpr uint32_t kMetaV8 = 0x38454D44u;  // 'DME8' (endgame: + Jihad pressure/pinnacles/shards)
 inline constexpr uint32_t kMetaV7 = 0x37454D44u;  // 'DME7' (Desert Trials: + trials_done)
@@ -1135,7 +1139,7 @@ void meta_load() {
     if (!f) return;
     uint32_t magic = 0;
     if (std::fread(&magic, 4, 1, f) == 1) {
-        if (magic == kMetaV9 || magic == kMetaV8 || magic == kMetaV7 || magic == kMetaV6 || magic == kMetaV5 || magic == kMetaV4) {  // native widened-Inst format
+        if (magic == kMetaVA || magic == kMetaV9 || magic == kMetaV8 || magic == kMetaV7 || magic == kMetaV6 || magic == kMetaV5 || magic == kMetaV4) {  // native widened-Inst format
             (void)!std::fread(&g_meta.runs, 4, 1, f);
             (void)!std::fread(&g_meta.endings_seen, 1, 1, f);
             (void)!std::fread(&g_meta.stash_count, 1, 1, f);
@@ -1147,27 +1151,30 @@ void meta_load() {
             (void)!std::fread(&g_meta.st, sizeof g_meta.st, 1, f);
             (void)!std::fread(g_meta.equip, sizeof g_meta.equip, 1, f);
             (void)!std::fread(g_meta.inv, sizeof g_meta.inv, 1, f);
-            if (magic >= kMetaV5 && magic <= kMetaV9) {  // C3: base class + ascendancy (DME4 -> 0/None)
+            if (magic >= kMetaV5 && magic <= kMetaVA) {  // C3: base class + ascendancy (DME4 -> 0/None)
                 (void)!std::fread(&g_meta.base_class, 1, 1, f);
                 (void)!std::fread(&g_meta.ascendancy, 1, 1, f);
             }
-            if (magic >= kMetaV6 && magic <= kMetaV9) {  // B6: guild tithe (DME5/DME4 leave them at 0)
+            if (magic >= kMetaV6 && magic <= kMetaVA) {  // B6: guild tithe (DME5/DME4 leave them at 0)
                 (void)!std::fread(&g_meta.guild_debt, 1, 1, f);
                 (void)!std::fread(&g_meta.guild_broken, 1, 1, f);
             }
-            if (magic >= kMetaV7 && magic <= kMetaV9) {  // Desert Trials (DME6 and earlier leave it at 0)
+            if (magic >= kMetaV7 && magic <= kMetaVA) {  // Desert Trials (DME6 and earlier leave it at 0)
                 (void)!std::fread(&g_meta.trials_done, 1, 1, f);
             }
-            if (magic == kMetaV8 || magic == kMetaV9) {  // endgame Jihad state (DME7 and earlier -> 0)
+            if (magic >= kMetaV8 && magic <= kMetaVA) {  // endgame Jihad state (DME7 and earlier -> 0)
                 (void)!std::fread(&g_meta.chosen_path, 1, 1, f);
                 (void)!std::fread(g_meta.jihad_pressure, sizeof g_meta.jihad_pressure, 1, f);
                 (void)!std::fread(&g_meta.pinnacle_cleared, 1, 1, f);
                 (void)!std::fread(&g_meta.golden_shards, 1, 1, f);
                 (void)!std::fread(&g_meta.capstone_done, 1, 1, f);
             }
-            if (magic == kMetaV9) {  // The Long Ride (DME8 and earlier leave it at 0)
+            if (magic >= kMetaV9 && magic <= kMetaVA) {  // The Long Ride (DME8 and earlier leave it at 0)
                 (void)!std::fread(&g_meta.maker_hides, 1, 1, f);
                 (void)!std::fread(&g_meta.best_ride_leg, 1, 1, f);
+            }
+            if (magic == kMetaVA) {  // Landsraad/CHOAM (DME9 and earlier leave it at 0)
+                (void)!std::fread(&g_meta.house_allied, 1, 1, f);
             }
         } else if (magic == kMetaV3 || magic == kMetaV2) {  // legacy 4-byte items -> convert
             (void)!std::fread(&g_meta.runs, 4, 1, f);
@@ -1199,7 +1206,7 @@ void meta_load() {
 void meta_save() {
     FILE* f = std::fopen("meta.dat", "wb");
     if (!f) return;
-    std::fwrite(&kMetaV9, 4, 1, f);
+    std::fwrite(&kMetaVA, 4, 1, f);
     std::fwrite(&g_meta.runs, 4, 1, f);
     std::fwrite(&g_meta.endings_seen, 1, 1, f);
     std::fwrite(&g_meta.stash_count, 1, 1, f);
@@ -1223,6 +1230,7 @@ void meta_save() {
     std::fwrite(&g_meta.capstone_done, 1, 1, f);
     std::fwrite(&g_meta.maker_hides, 1, 1, f);      // The Long Ride (DME9)
     std::fwrite(&g_meta.best_ride_leg, 1, 1, f);
+    std::fwrite(&g_meta.house_allied, 1, 1, f);     // Landsraad/CHOAM (DMEA)
     std::fclose(f);
 }
 
@@ -1624,6 +1632,7 @@ void finish_capstone() {
 
 // fwds (defined below): the strike excursion enters a raid zone and resolves back to the hub node 0.
 void enter_zone(uint8_t id, uint64_t gen_seed, bool use_spawn, int at_x, int at_y, bool roll_events);
+int opposing_houses();  // Landsraad: Great Powers opposing you reinforce your strikes (defined below)
 
 const char* faction_name(int f) {
     static const char* kNames[] = {"the Bene Gesserit", "the Tleilaxu", "the Ixians",
@@ -1649,7 +1658,8 @@ void spawn_strike_force(int tier) {
                         int16_t(hp), 0, int16_t((tier & 0xFF) | (traits << 8)), name_pack};
         break;
     }
-    const int troops = 2 + tier;  // the escort
+    int troops = 2 + tier + opposing_houses();  // the escort — opposing Houses reinforce the strike
+    if (troops > 8) troops = 8;
     for (int i = 0, tries = 0; i < troops && tries < 400; ++tries) {
         const int x = g.rng.combat.range(6, map::W - 4), y = g.rng.combat.range(4, map::H - 4);
         if (!z.walkable(x, y) || entity_at(x, y, g.cur_zone)) continue;
@@ -1932,6 +1942,59 @@ void ride_bank() {
     g.in_ride = false;
     g.ride_haul = 0;
     meta_save();
+}
+
+// ---- The Landsraad / CHOAM: the Imperial politics layer (the economic face of the conquest) -------
+// Not a boss — a standing. CHOAM control is DERIVED: each toppled homeworld is a seized directorship,
+// each courted House adds its votes. A Great Power you are actively warring (high pressure, not yet
+// toppled) OPPOSES you in the council; a courted one is an ALLY that pays dividends.
+
+enum HouseStance : uint8_t { HOUSE_NEUTRAL = 0, HOUSE_ALLY, HOUSE_OPPONENT };
+
+int house_stance(int f) {
+    if (f < 0 || f >= FAC_COUNT) return HOUSE_NEUTRAL;
+    if (g_meta.house_allied & (1 << f)) return HOUSE_ALLY;
+    if (!(g_meta.pinnacle_cleared & (1 << f)) && g_meta.jihad_pressure[f] >= tune::kHouseOpposePressure)
+        return HOUSE_OPPONENT;  // you're storming them: they fight you in the Landsraad
+    return HOUSE_NEUTRAL;
+}
+
+// CHOAM control (0..100): directorships seized by conquest + votes from courted allies.
+int choam_control() {
+    int c = __builtin_popcount(g_meta.pinnacle_cleared) * tune::kChoamPerPinnacle +
+            __builtin_popcount(g_meta.house_allied) * tune::kChoamPerAlly;
+    return c < 0 ? 0 : c > 100 ? 100 : c;
+}
+
+// How many Great Powers currently oppose you in the council (their forces reinforce your strikes).
+int opposing_houses() {
+    int n = 0;
+    for (int f = 0; f < FAC_COUNT; ++f)
+        if (house_stance(f) == HOUSE_OPPONENT) ++n;
+    return n;
+}
+
+// Court a House into a CHOAM alliance: costs spice. You cannot ally with a Power you are actively
+// storming (an opponent), nor one already allied. Returns false (no charge) otherwise.
+bool court_house(int f) {
+    if (!endgame_open() || f < 0 || f >= FAC_COUNT) return false;
+    if (house_stance(f) != HOUSE_NEUTRAL) return false;  // opponents can't be bought; allies already in
+    if (g.pl.spice < tune::kCourtCost) return false;
+    g.pl.spice -= tune::kCourtCost;
+    g_meta.house_allied |= uint8_t(1 << f);
+    g.log.push("%s joins your bloc in the Landsraad. CHOAM control: %d%%.",
+               faction_name(f), choam_control());
+    meta_save();
+    return true;
+}
+
+// Collect the CHOAM dividend — the economic boon of your bloc, scaled by control. Returns the spice.
+int collect_dividend() {
+    if (!endgame_open()) return 0;
+    const int div = choam_control() * tune::kDividendPerControl;
+    g.pl.spice += div;
+    g.log.push("The CHOAM dividend pays out: %d spice from your directorships.", div);
+    return div;
 }
 
 void spawn_boss(bool baron) {
@@ -6309,6 +6372,12 @@ int game_debug_ride_leg() { return g.ride_leg; }
 int game_debug_ride_haul() { return g.ride_haul; }
 int game_debug_maker_hides() { return g_meta.maker_hides; }
 int game_debug_best_ride_leg() { return g_meta.best_ride_leg; }
+// --- Landsraad / CHOAM hooks ---
+int game_debug_choam_control() { return choam_control(); }
+int game_debug_house_stance(int f) { return house_stance(f); }   // 0 neutral, 1 ally, 2 opponent
+int game_debug_court_house(int f) { return court_house(f) ? 1 : 0; }
+int game_debug_collect_dividend() { return collect_dividend(); }
+int game_debug_opposing_houses() { return opposing_houses(); }
 
 void game_debug_revelation(int* stage, int* inv_count) {
     if (stage) *stage = g.revelation_stage;

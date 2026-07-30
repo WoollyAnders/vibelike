@@ -134,6 +134,11 @@ int game_debug_ride_leg();                   // Long Ride: current leg
 int game_debug_ride_haul();                  // Long Ride: current un-banked spice haul
 int game_debug_maker_hides();                // Long Ride: Maker Hides banked (Jacurutu jackpots)
 int game_debug_best_ride_leg();              // Long Ride: deepest leg reached (record)
+int game_debug_choam_control();              // Landsraad: CHOAM control 0..100 (conquest + allies)
+int game_debug_house_stance(int f);          // Landsraad: 0 neutral / 1 ally / 2 opponent
+int game_debug_court_house(int f);           // Landsraad: court House f into your bloc (1 = done)
+int game_debug_collect_dividend();           // Landsraad: collect the CHOAM dividend (spice)
+int game_debug_opposing_houses();            // Landsraad: count of Great Powers opposing you
 void game_debug_revelation(int* stage, int* inv_count);  // B2b: Revelation stage + inv item count
 void game_debug_revelation_pick(int idx);  // B2b: choose row idx + confirm the Revelation
 int game_debug_cur_node();  // B1.3: current graph node index
