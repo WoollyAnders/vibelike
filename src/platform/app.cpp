@@ -210,6 +210,8 @@ constexpr Binding kBindings[] = {
     {SDL_SCANCODE_P, Key::Character},
     {SDL_SCANCODE_F5, Key::Save},
     {SDL_SCANCODE_F9, Key::Load},
+    {SDL_SCANCODE_Q, Key::Ability1}, {SDL_SCANCODE_E, Key::Ability2}, {SDL_SCANCODE_F, Key::Ability3},
+    {SDL_SCANCODE_1, Key::Flask1},   {SDL_SCANCODE_2, Key::Flask2},   {SDL_SCANCODE_3, Key::Flask3},
 };
 
 void map_scancode(InputState& in, SDL_Scancode sc, bool is_down) {
@@ -1911,6 +1913,40 @@ int run_flasktest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cm
     return pass ? 0 : 1;
 }
 
+// Input wiring: the flask keys (1/2/3) reach use_flask and the ability keys (Q/E/F) reach
+// cast_ability, so the C7 abilities + flasks are actually playable from the keyboard.
+int run_inputtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    std::remove("meta.dat");
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(123, services);
+    InputState in;
+    auto frame = [&](Key k) { in.pressed[int(k)] = true; game_update(in); in.end_tick(); };
+
+    // (A) a flask key heals and spends the flask
+    int hp, mhp, wa, mwa, lv, sp; game_debug_player_stats(&hp, &mhp, &wa, &mwa, &lv, &sp);
+    game_debug_hurt(mhp / 3);
+    game_debug_player_stats(&hp, &mhp, &wa, &mwa, &lv, &sp);
+    const int fc0 = game_debug_flask_charges(0);
+    frame(Key::Flask1);
+    int hp2; game_debug_player_stats(&hp2, &mhp, &wa, &mwa, &lv, &sp);
+    const bool flask_key = hp2 > hp && game_debug_flask_charges(0) == fc0 - 3;
+
+    // (B) an ability key casts (Q = the Voice stuns an adjacent foe)
+    int shp; game_debug_spawn_shield_adjacent(&shp);
+    game_debug_set_will(100);
+    bool ability_key = false;
+    for (int i = 0; i < 8 && !ability_key; ++i) {
+        frame(Key::Ability1);
+        if (game_debug_enemy_stun_turns() > 0) ability_key = true;
+    }
+
+    const bool pass = flask_key && ability_key;
+    std::printf("inputtest %s (flask_key %d ability_key %d)\n", pass ? "PASS" : "FAIL",
+                flask_key, ability_key);
+    std::remove("meta.dat");
+    return pass ? 0 : 1;
+}
+
 // A4: click-to-move pathfinds to the goal and is deterministic across runs.
 int run_clicktest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
     GameServices services{&mixer, &assets, &cmaps};
@@ -1952,7 +1988,7 @@ int main(int argc, char** argv) {
          vendortest = false, patroltest = false, cavetest = false, trialtest = false,
          endgametest = false, striketest = false, pinnacletest = false, capstonetest = false,
          longridetest = false, choamtest = false, crafttest = false, abilitytest = false,
-         flasktest = false;
+         flasktest = false, inputtest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
         if (SDL_strcmp(argv[i], "--seamtest") == 0) seamtest = true;
@@ -1988,6 +2024,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--crafttest") == 0) crafttest = true;
         if (SDL_strcmp(argv[i], "--abilitytest") == 0) abilitytest = true;
         if (SDL_strcmp(argv[i], "--flasktest") == 0) flasktest = true;
+        if (SDL_strcmp(argv[i], "--inputtest") == 0) inputtest = true;
         if (SDL_strcmp(argv[i], "--animdebug") == 0) animdebug = true;
         if (SDL_strcmp(argv[i], "--rpgtest") == 0) rpgtest = true;
         if (SDL_strcmp(argv[i], "--clicktest") == 0) clicktest = true;
@@ -2041,6 +2078,7 @@ int main(int argc, char** argv) {
     if (crafttest) return run_crafttest(mixer, assets, cmaps);
     if (abilitytest) return run_abilitytest(mixer, assets, cmaps);
     if (flasktest) return run_flasktest(mixer, assets, cmaps);
+    if (inputtest) return run_inputtest(mixer, assets, cmaps);
     if (rpgtest) return run_rpgtest(mixer, assets, cmaps);
     if (reveltest) return run_reveltest(mixer, assets, cmaps);
     if (gauntlettest) return run_gauntlettest(mixer, assets, cmaps);

@@ -4906,6 +4906,21 @@ bool game_update(const InputState& in) {
         g.log.push(g.pl.sandwalk ? "You break your rhythm. Walk without wormsign."
                                  : "You stride freely again.");
     }
+    // C7: cast a prescience ability at the cursor tile (Voice ignores it, Blink aims at it).
+    else if (ready && in.was_pressed(Key::Ability1)) {
+        if (cast_ability(AB_VOICE, g.hover_tx, g.hover_ty)) consume_action();
+    }
+    else if (ready && in.was_pressed(Key::Ability2)) {
+        if (cast_ability(AB_BLINK, g.hover_tx, g.hover_ty)) consume_action();
+    }
+    else if (ready && in.was_pressed(Key::Ability3)) {
+        if (cast_ability(AB_PRESCIENCE, g.hover_tx, g.hover_ty)) consume_action();
+    }
+
+    // Flasks quaff instantly (not gated by the action cooldown) — independent of the move/act chain.
+    if (in.was_pressed(Key::Flask1)) use_flask(0);
+    if (in.was_pressed(Key::Flask2)) use_flask(1);
+    if (in.was_pressed(Key::Flask3)) use_flask(2);
 
     if (in.was_pressed(Key::Save)) {
         SaveWriter w;
@@ -5677,10 +5692,17 @@ void pass_ui(RenderCtx& r) {
                       g.pl.riding ? "  [RIDING]" : "",
                       g.pl.st.statpts + g.pl.st.talentpts > 0 ? "  [P: spend pts]" : "");
         draw_text_shadow(ctx, buf, 4, ui::kPanelY - 22, 136, 1);
+        // C7 + flasks readout: the Will pool, the three flask charges, and ability readiness.
+        char abuf[96];
+        std::snprintf(abuf, sizeof abuf, "Will %d/%d   flasks [L%d W%d U%d]   abilities %s",
+                      g.pl.will, player_max_will(),
+                      g.pl.flask_charges[0], g.pl.flask_charges[1], g.pl.flask_charges[2],
+                      g.pl.ability_cd > 0 ? "(cooldown)" : "ready Q/E/F");
+        draw_text_shadow(ctx, abuf, 4, ui::kPanelY - 40, 208, 1);
         if (g.hover_tx >= 0)
             if (const char* what = describe_at(g.hover_tx, g.hover_ty))
                 draw_text_shadow(ctx, what, fb::W / 2 - int(std::strlen(what)) * kCh,
-                                 ui::kPanelY - 46, 24, 1);  // lifted off the level/task row
+                                 ui::kPanelY - 62, 24, 1);  // lifted off the level/task row
         if (g.sideobj_kind != 0) {
             std::snprintf(buf, sizeof buf, "%s in the %s (%d)",
                           g.sideobj_kind == 1 ? "CARAVAN" : "GUILD ENVOY",
