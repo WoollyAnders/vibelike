@@ -290,6 +290,9 @@ struct GameState {
     // is full; clearing its named boss takes that Great Power's Golden Path shard.
     bool in_pinnacle = false;
     uint8_t pinnacle_faction = 0;
+    // B10.4: the Golden Path capstone — the alternate-Paul mirror boss. Entered once all five shards
+    // are gathered; defeating it refuses the Path (the game's apex trophy).
+    bool in_capstone = false;
 
     int storm_turns = 0;       // M5: Coriolis storm remaining
     int poison_turns = 0;      // pan adder venom: +thirst while active
@@ -1794,6 +1797,67 @@ bool assault_pinnacle(int f) {
     return true;
 }
 
+// B10.4: the Golden Path capstone. Deep in prescience Paul sees the Path — and its cost — and refuses
+// it; the boss is that refusal made flesh, an alternate Paul who ACCEPTED it (a mirror of the player's
+// own power). Fixed-seed arena; slaying it is the apex trophy (finish_capstone). Content-phase art +
+// full mirror-of-your-kit AI are deferred; the MVP fields one very strong lone boss scaled to you.
+inline constexpr uint64_t kCapstoneSeed = 0x60D0E9A7480000FFull;
+void enter_capstone() {
+    g.in_capstone = true;
+    for (int i = 1; i < kMaxEnts; ++i) g.ents[i] = Entity{};
+    g.op = harvest::Op{};
+    g.alarm_turns = 0; g.alarm_spawn_cd = 0;
+    g.delta_count = 0;
+    g.spawned_mask = uint8_t(1 << map::kZoneDeepPan);
+    enter_zone(map::kZoneDeepPan, kCapstoneSeed, /*use_spawn=*/true, 0, 0, /*roll_events=*/false);
+    map::Zone& z = zone();
+    const Entity& p = player_ent();
+    for (int tries = 0; tries < 400; ++tries) {  // the mirror: HP scaled to the player's own power
+        const int x = g.rng.combat.range(map::W / 2, map::W - 4);
+        const int y = g.rng.combat.range(4, map::H - 4);
+        if (!z.walkable(x, y) || entity_at(x, y, g.cur_zone)) continue;
+        const int ddx = x > p.x ? x - p.x : p.x - x, ddy = y > p.y ? y - p.y : p.y - y;
+        if (ddx + ddy < 10) continue;
+        const uint8_t traits = BT_BRUTE | BT_STALWART | BT_SWIFT;
+        const int hp = 120 + g.pl.st.level * 5;
+        if (Entity* e = alloc_entity())
+            *e = Entity{EType::Boss, Ai::Hunt, g.cur_zone, int16_t(x), int16_t(y),
+                        int16_t(hp), 0, int16_t((8 & 0xFF) | (traits << 8)), int16_t(0x1FF)};
+        break;
+    }
+    g.log.push("The vision resolves: yourself, crowned on a throne of bone — the Paul who WALKED");
+    g.log.push("the Golden Path. He turns his prescient eyes on you. Refuse him.");
+    refresh_fov_and_paths();
+}
+void resolve_capstone() {
+    g.in_capstone = false;
+    finish_capstone();  // refuse the Golden Path (the apex trophy)
+    items::Inst it = roll_item(10, 200);  // the ultimate spoils
+    for (items::Inst& slot : g.pl.inv)
+        if (slot.empty() && !it.empty()) {
+            slot = it;
+            char nm[64];
+            it.full_name(nm, sizeof nm);
+            g.log.push("The other-Paul dissolves into sand, leaving: %s.", nm);
+            break;
+        }
+    raise_standing(20);
+    enter_node(0);
+    refresh_fov_and_paths();
+}
+void abandon_capstone() {
+    g.in_capstone = false;
+    g.log.push("You are not ready to face what you might become. You withdraw.");
+    enter_node(0);
+    refresh_fov_and_paths();
+}
+// Confront the Golden Path — only once all five shards are gathered. False if not yet available.
+bool confront_capstone() {
+    if (!capstone_available()) return false;
+    enter_capstone();
+    return true;
+}
+
 void spawn_boss(bool baron) {
     map::Zone& z = zone();
     for (int tries = 0; tries < 300; ++tries) {
@@ -3112,6 +3176,7 @@ void enter_node(int idx) {
     g.in_cave = false;           // B9: entering a real node ends any cave excursion
     g.in_strike = false;         // B10.2: entering a real node ends any strike excursion
     g.in_pinnacle = false;       // B10.3: entering a real node ends any pinnacle assault
+    g.in_capstone = false;       // B10.4: entering a real node ends any capstone confrontation
     g.delta_count = 0;           // tile edits (churn, breaches) reset per node
     g.spawned_mask = 0;          // let spawn_zone_wildlife repopulate this fresh node
 
@@ -3478,6 +3543,13 @@ void try_move(int dx, int dy) {
                 *victim = Entity{EType::Corpse, Ai::Idle, uint8_t(g.cur_zone),
                                  victim->x, victim->y, 0, 0, 300};
                 resolve_pinnacle();  // take the Golden Path shard + return home
+                consume_action();
+                return;
+            }
+            if (g.in_capstone && victim->type == EType::Boss) {  // B10.4: the alternate Paul falls
+                *victim = Entity{EType::Corpse, Ai::Idle, uint8_t(g.cur_zone),
+                                 victim->x, victim->y, 0, 0, 400};
+                resolve_capstone();  // refuse the Golden Path (apex trophy) + return home
                 consume_action();
                 return;
             }
@@ -3875,6 +3947,7 @@ void open_revelation(int dest);  // fwd (defined above)
 void use_door() {
     if (g.in_strike) { abandon_strike(); return; }  // B10.2: leaving a strike unfinished = abandon it
     if (g.in_pinnacle) { abandon_pinnacle(); return; }  // B10.3: withdraw from the homeworld
+    if (g.in_capstone) { abandon_capstone(); return; }  // B10.4: withdraw from the Golden Path
     if (g.in_cave) { exit_cave(); return; }  // B9: the cavern door climbs back out to the field
     if (g.cur_node == 0) {
         g.log.push("You drink deep of the Water. Muad'Dib's vision takes you.");
@@ -5721,6 +5794,7 @@ void game_serialize(SaveWriter& w) {
     w.u64(g.strike_seed);
     w.u8(g.in_pinnacle ? 1 : 0);    // B10.3: inside a homeworld pinnacle assault
     w.u8(g.pinnacle_faction);
+    w.u8(g.in_capstone ? 1 : 0);    // B10.4: inside the Golden Path capstone
     w.i32(g.storm_turns);
     w.i32(g.poison_turns);
     w.i32(g.thopter_x);
@@ -5817,6 +5891,7 @@ bool game_deserialize(SaveReader& r) {
     const uint64_t strike_seed = r.u64();
     const bool in_pinnacle = r.u8() != 0;    // B10.3
     const uint8_t pinnacle_faction = r.u8();
+    const bool in_capstone = r.u8() != 0;    // B10.4
     const int storm_turns = r.i32();
     const int poison_turns = r.i32();
     const int thopter_x = r.i32();
@@ -5880,6 +5955,7 @@ bool game_deserialize(SaveReader& r) {
     g.strike_seed = strike_seed;
     g.in_pinnacle = in_pinnacle;      // B10.3
     g.pinnacle_faction = pinnacle_faction;
+    g.in_capstone = in_capstone;      // B10.4
     g.storm_turns = storm_turns;
     g.poison_turns = poison_turns;
     g.thopter_x = int16_t(thopter_x);
@@ -5900,6 +5976,8 @@ bool game_deserialize(SaveReader& r) {
     } else if (in_pinnacle) {  // B10.3: a pinnacle arena regenerates from its fixed per-faction seed
         map::generate(g.zone_, kPinnacleSeed[pinnacle_faction < FAC_COUNT ? pinnacle_faction : 0],
                       map::ZoneId(map::kZoneDeepPan), sx_, sy_);
+    } else if (in_capstone) {  // B10.4: the Golden Path arena regenerates from its fixed seed
+        map::generate(g.zone_, kCapstoneSeed, map::ZoneId(map::kZoneDeepPan), sx_, sy_);
     } else if (in_cave) {  // B9: a hidden cavern is a transient sub-zone regenerated from its own seed
         map::generate(g.zone_, cave_seed, map::ZoneId(map::kZoneCave), sx_, sy_);
     } else if (at_rendezvous) {  // B7: the Ninth Rock is a fixed-seed desert zone, not a graph node
@@ -6130,6 +6208,10 @@ int game_debug_pinnacle_boss_count() {
 }
 void game_debug_resolve_pinnacle() { resolve_pinnacle(); }   // simulate slaying the homeworld boss
 void game_debug_abandon_pinnacle() { abandon_pinnacle(); }
+int game_debug_confront_capstone() { return confront_capstone() ? 1 : 0; }  // enter if all shards gathered
+int game_debug_in_capstone() { return g.in_capstone ? 1 : 0; }
+void game_debug_resolve_capstone() { resolve_capstone(); }   // simulate defeating the alternate Paul
+int game_debug_capstone_done() { return g_meta.capstone_done; }
 
 void game_debug_revelation(int* stage, int* inv_count) {
     if (stage) *stage = g.revelation_stage;

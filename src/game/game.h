@@ -122,6 +122,10 @@ int game_debug_in_pinnacle();                // B10.3: 1 while inside a pinnacle
 int game_debug_pinnacle_boss_count();        // B10.3: homeworld bosses in the arena
 void game_debug_resolve_pinnacle();          // B10.3: slay the boss (shard + return to hub)
 void game_debug_abandon_pinnacle();          // B10.3: withdraw from the homeworld (no shard)
+int game_debug_confront_capstone();          // B10.4: enter the Golden Path if all shards gathered
+int game_debug_in_capstone();                // B10.4: 1 while facing the alternate Paul
+void game_debug_resolve_capstone();          // B10.4: defeat the mirror (refuse the Path + return)
+int game_debug_capstone_done();              // B10.4: 1 once the Golden Path is refused
 void game_debug_revelation(int* stage, int* inv_count);  // B2b: Revelation stage + inv item count
 void game_debug_revelation_pick(int idx);  // B2b: choose row idx + confirm the Revelation
 int game_debug_cur_node();  // B1.3: current graph node index

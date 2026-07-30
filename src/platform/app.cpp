@@ -1624,6 +1624,43 @@ int run_pinnacletest(audio::Mixer& mixer, const Assets& assets, const Colormaps&
     return pass ? 0 : 1;
 }
 
+// B10.4: gathering all five Golden Path shards opens the capstone — the alternate-Paul mirror boss.
+// Defeating it refuses the Path (the apex trophy). A fixed-seed arena; one confrontation only.
+int run_capstonetest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    std::remove("meta.dat");
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(404, services);
+    game_debug_open_chosen_path();
+
+    // (A) shut until all five shards are gathered
+    const bool gated = game_debug_confront_capstone() == 0;
+    for (int f = 0; f < 5; ++f) game_debug_clear_pinnacle(f);  // take all five shards
+    const bool avail = game_debug_capstone_available() == 1;
+
+    // (B) confront: the mirror boss awaits in its arena
+    const bool entered = game_debug_confront_capstone() == 1 && game_debug_in_capstone() == 1 &&
+                         game_debug_cur_zone() == 2 && game_debug_pinnacle_boss_count() >= 1;
+
+    // (C) save + load inside the capstone restores it (the in_capstone load-regen branch)
+    InputState in;
+    auto tick1 = [&](Key k) { in.pressed[int(k)] = true; game_update(in); in.end_tick(); };
+    tick1(Key::Save);
+    tick1(Key::Load);
+    const bool roundtrip = game_debug_in_capstone() == 1 && game_debug_cur_zone() == 2 &&
+                           game_debug_pinnacle_boss_count() >= 1;
+
+    // (D) defeat the mirror -> the Path is refused; the capstone is spent
+    game_debug_resolve_capstone();
+    const bool done = game_debug_in_capstone() == 0 && game_debug_cur_node() == 0 &&
+                      game_debug_capstone_done() == 1 && game_debug_capstone_available() == 0;
+
+    const bool pass = gated && avail && entered && roundtrip && done;
+    std::printf("capstonetest %s (gated %d avail %d enter %d saveload %d done %d)\n",
+                pass ? "PASS" : "FAIL", gated, avail, entered, roundtrip, done);
+    std::remove("meta.dat");
+    return pass ? 0 : 1;
+}
+
 // A4: click-to-move pathfinds to the goal and is deterministic across runs.
 int run_clicktest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
     GameServices services{&mixer, &assets, &cmaps};
@@ -1663,7 +1700,7 @@ int main(int argc, char** argv) {
          statmodtest = false, affixtest = false, metamigratetest = false, ailmenttest = false,
          rttest = false, stuntest = false, classtest = false, guildtest = false,
          vendortest = false, patroltest = false, cavetest = false, trialtest = false,
-         endgametest = false, striketest = false, pinnacletest = false;
+         endgametest = false, striketest = false, pinnacletest = false, capstonetest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
         if (SDL_strcmp(argv[i], "--seamtest") == 0) seamtest = true;
@@ -1693,6 +1730,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--endgametest") == 0) endgametest = true;
         if (SDL_strcmp(argv[i], "--striketest") == 0) striketest = true;
         if (SDL_strcmp(argv[i], "--pinnacletest") == 0) pinnacletest = true;
+        if (SDL_strcmp(argv[i], "--capstonetest") == 0) capstonetest = true;
         if (SDL_strcmp(argv[i], "--animdebug") == 0) animdebug = true;
         if (SDL_strcmp(argv[i], "--rpgtest") == 0) rpgtest = true;
         if (SDL_strcmp(argv[i], "--clicktest") == 0) clicktest = true;
@@ -1740,6 +1778,7 @@ int main(int argc, char** argv) {
     if (endgametest) return run_endgametest(mixer, assets, cmaps);
     if (striketest) return run_striketest(mixer, assets, cmaps);
     if (pinnacletest) return run_pinnacletest(mixer, assets, cmaps);
+    if (capstonetest) return run_capstonetest(mixer, assets, cmaps);
     if (rpgtest) return run_rpgtest(mixer, assets, cmaps);
     if (reveltest) return run_reveltest(mixer, assets, cmaps);
     if (gauntlettest) return run_gauntlettest(mixer, assets, cmaps);
