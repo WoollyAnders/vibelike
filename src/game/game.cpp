@@ -29,7 +29,7 @@ constexpr int kMaxDeltas = 192;
 enum class EType : uint8_t { None = 0, Player, Hound, Corpse, Thumper, Trooper, Spotter,
                              Glowglobe, ShieldTrooper, Naib, Sayyadina, Smuggler,
                              PanAdder, Hermit, HunterSeeker, SpiceCache, Loot, Boss,
-                             Caravan, Envoy, Fremen, Paul };
+                             Caravan, Envoy, Fremen, Paul, CaveMouth };
 enum class Ai : uint8_t { Idle = 0, Wander, Hunt, Guard, Patrol };  // Patrol (B8): route-walker
 
 struct Entity {
@@ -274,6 +274,12 @@ struct GameState {
     int32_t sideobj_expires = 0;
     bool sideobj_spawned = false;  // entity placed in-zone
     bool at_rendezvous = false;    // B7: the player is out at the Ninth Rock (Guild spice exchange)
+    // B9: a transient hidden-cavern excursion off a field node. cur_node is unchanged while inside;
+    // the field zone resumes (at cave_ret_*) on exit. cave_seed drives the cavern layout + load-regen.
+    bool in_cave = false;
+    uint64_t cave_seed = 0;
+    int16_t cave_ret_x = 0, cave_ret_y = 0;
+    uint8_t cave_ret_zone = 0;
 
     int storm_turns = 0;       // M5: Coriolis storm remaining
     int poison_turns = 0;      // pan adder venom: +thirst while active
@@ -618,6 +624,7 @@ void spawn_zone_wildlife(map::Zone& z, uint8_t zone_id) {
         place_npc_near(EType::Fremen, z, zone_id, 26, 32, 5);  // great hall (west)
         return;
     }
+    if (zone_id == map::kZoneCave) return;  // B9: caves are hand-populated (see populate_cave)
     if (zone_id == map::kZoneDesert)
         place_npc_near(EType::Smuggler, z, zone_id, 12, 30);  // camp off the door road
     const int want = zone_id == map::kZoneDeepPan ? 4 : tune::kHoundCount;
@@ -2636,7 +2643,8 @@ bool worm_occupies(int x, int y) {
 // ---- player actions ------------------------------------------------------------
 
 // use_spawn: reposition the player at the zone's default spawn point.
-void enter_zone(uint8_t id, uint64_t gen_seed, bool use_spawn, int at_x = 0, int at_y = 0) {
+void enter_zone(uint8_t id, uint64_t gen_seed, bool use_spawn, int at_x = 0, int at_y = 0,
+                bool roll_events = true) {
     g.cur_zone = id;
     int sx, sy;
     map::generate(zone(), gen_seed, map::ZoneId(id), sx, sy);
@@ -2666,9 +2674,11 @@ void enter_zone(uint8_t id, uint64_t gen_seed, bool use_spawn, int at_x = 0, int
     p.zone = id;
     recompute_shade(id, hour_now());
 
-    // one weighted desert-event roll per entry (outdoors only)
+    // one weighted desert-event roll per entry (outdoors only). Suppressed (roll_events=false) for
+    // indoor cave entries and when resuming a field zone after a cave excursion (B9), so a detour
+    // neither rolls a storm underground nor re-rolls the field's entry event on the way back.
     g.storm_turns = 0;
-    if (id != map::kZoneSietch) {
+    if (roll_events && id != map::kZoneSietch) {
         const int roll = int(g.rng.world.below(100));
         if (roll < 12) {
             g.storm_turns = g.rng.world.range(60, 120);
@@ -2733,6 +2743,18 @@ void enter_zone(uint8_t id, uint64_t gen_seed, bool use_spawn, int at_x = 0, int
             // B8: the deep bled is His country — wormsign on the wind (also depth-gated).
             g.wrm.state = worm::State::Stirring;
             g.log.push("Wormsign on the wind. The deep bled belongs to Shai-Hulud.");
+        } else if (roll < 54 && drop_ilvl() >= tune::kPatrolMinDepth) {
+            // B9: a hidden cavern mouth — a rare, optional risk/reward detour (depth-gated).
+            for (int tries = 0; tries < 60; ++tries) {
+                const int x = p.x + g.rng.world.range(-12, 12), y = p.y + g.rng.world.range(-12, 12);
+                if (x < 2 || x >= map::W - 2 || y < 2 || y >= map::H - 2) continue;
+                if (!zone().walkable(x, y) || entity_at(x, y, id)) continue;
+                if (Entity* e = alloc_entity()) {
+                    *e = Entity{EType::CaveMouth, Ai::Idle, id, int16_t(x), int16_t(y), 1, 0, 0};
+                    g.log.push("A dark fissure gapes in the rock — a cavern mouth. (Step in to enter.)");
+                }
+                break;
+            }
         }
     }
 
@@ -2755,6 +2777,7 @@ void enter_node(int idx) {
     g.op = harvest::Op{};        // the harvester op is per-node (retired in B3)
     g.alarm_turns = 0;
     g.alarm_spawn_cd = 0;
+    g.in_cave = false;           // B9: entering a real node ends any cave excursion
     g.delta_count = 0;           // tile edits (churn, breaches) reset per node
     g.spawned_mask = 0;          // let spawn_zone_wildlife repopulate this fresh node
 
@@ -2814,6 +2837,84 @@ void return_from_rendezvous() {
     g.sideobj_kind = 0; g.sideobj_spawned = false;
     g.log.push("You slip back across the sand toward home.");
     enter_node(0);  // wake in the sietch hub (wipes the rendezvous agent)
+    refresh_fov_and_paths();
+}
+
+// B9: stock a freshly-entered cavern — the payoff (a rolled item + raw spice) with a lurking
+// guardian for the risk. Drawn from the global world stream, so a given playthrough re-simulates
+// the same cave; contents then live in g.ents (serialized), so save/load needs no re-population.
+void populate_cave() {
+    int16_t tiles[map::N];
+    int nt = 0;
+    const Entity& p = player_ent();
+    for (int y = 2; y < map::H - 2; ++y)
+        for (int x = 2; x < map::W - 2; ++x) {
+            if (!zone().walkable(x, y) || entity_at(x, y, g.cur_zone)) continue;
+            const int dd = (x - p.x) * (x - p.x) + (y - p.y) * (y - p.y);
+            if (dd < 16) continue;  // keep the entry clear
+            if (nt < map::N) tiles[nt++] = int16_t(y * map::W + x);
+        }
+    if (nt == 0) return;
+    auto pick = [&]() -> int {
+        const int k = int(g.rng.world.below(uint32_t(nt)));
+        const int t = tiles[k];
+        tiles[k] = tiles[--nt];  // sample without replacement
+        return t;
+    };
+    // the payoff: one rolled item, biased a tier up and toward magic/rare (the reason to detour)
+    if (nt > 0)
+        for (int i = 1; i < kMaxEnts; ++i)
+            if (g.ents[i].type == EType::None) {
+                const int t = pick();
+                items::Inst it = roll_item(drop_ilvl() + 2, 50 + run_difficulty() * 6);
+                g.ents[i] = Entity{EType::Loot, Ai::Idle, g.cur_zone,
+                                   int16_t(t % map::W), int16_t(t / map::W), 1, 0,
+                                   int16_t(it.def), 0};
+                g.loot_inst[i] = it;
+                break;
+            }
+    for (int c = 0; c < 3 && nt > 0; ++c) {
+        const int t = pick();
+        if (Entity* e = alloc_entity())
+            *e = Entity{EType::SpiceCache, Ai::Idle, g.cur_zone,
+                        int16_t(t % map::W), int16_t(t / map::W), 1, 0, 2};
+    }
+    if (nt > 0) {  // the guardian
+        const int t = pick();
+        if (Entity* e = alloc_entity())
+            *e = Entity{EType::PanAdder, Ai::Idle, g.cur_zone,
+                        int16_t(t % map::W), int16_t(t / map::W),
+                        int16_t(foe_hp(EType::PanAdder)), 0, 0};
+    }
+}
+
+// B9: duck into a hidden cavern found in a deep field node. A transient excursion (cur_node is
+// unchanged) — the field zone's entities stay parked in g.ents (filtered out by zone) and resume
+// when you climb back out at cave_ret_*. The cave layout is a pure function of cave_seed.
+void enter_cave() {
+    const Entity& p = player_ent();
+    g.cave_ret_zone = g.cur_zone;
+    g.cave_ret_x = p.x;
+    g.cave_ret_y = p.y;
+    g.cave_seed = world::node_hash(g.graph.nodes[g.cur_node].seed,
+                                   uint64_t(p.x * map::W + p.y) + 0xCA1Eull);
+    g.in_cave = true;
+    // remove the cave-mouth we entered by (it lived in the field zone); do NOT wipe field mobs
+    for (int i = 1; i < kMaxEnts; ++i)
+        if (g.ents[i].type == EType::CaveMouth) g.ents[i] = Entity{};
+    enter_zone(map::kZoneCave, g.cave_seed, /*use_spawn=*/true, 0, 0, /*roll_events=*/false);
+    populate_cave();
+    g.log.push("You squeeze through a fissure into a hidden cavern. The air lies still and cool.");
+    refresh_fov_and_paths();
+}
+void exit_cave() {
+    g.in_cave = false;
+    for (int i = 1; i < kMaxEnts; ++i)  // clear the cave's own occupants; field mobs remain
+        if (g.ents[i].zone == map::kZoneCave) g.ents[i] = Entity{};
+    const uint64_t fseed = g.graph.nodes[g.cur_node].seed;
+    enter_zone(g.cave_ret_zone, fseed, /*use_spawn=*/false, g.cave_ret_x, g.cave_ret_y,
+               /*roll_events=*/false);  // resume the field node where we left it
+    g.log.push("You climb back into the open, richer for the detour.");
     refresh_fov_and_paths();
 }
 
@@ -2943,6 +3044,11 @@ void try_move(int dx, int dy) {
             g.log.push("'%d grains buys blindness. You carry %d. Return heavier.'",
                        bribe, g.pl.spice);
         }
+        consume_action();
+        return;
+    }
+    if (entity_at(nx, ny, g.cur_zone, EType::CaveMouth)) {  // B9: step into the fissure = enter
+        enter_cave();
         consume_action();
         return;
     }
@@ -3419,6 +3525,7 @@ bool click_step_toward(int gx, int gy) {
 // adjacent to a door they clicked (water seals the sietch — you leave by the door).
 void open_revelation(int dest);  // fwd (defined above)
 void use_door() {
+    if (g.in_cave) { exit_cave(); return; }  // B9: the cavern door climbs back out to the field
     if (g.cur_node == 0) {
         g.log.push("You drink deep of the Water. Muad'Dib's vision takes you.");
         begin_run();
@@ -3555,6 +3662,7 @@ const char* describe_at(int tx, int ty) {
             case EType::Hermit: return "spice-mad hermit";
             case EType::HunterSeeker: return "HUNTER-SEEKER";
             case EType::SpiceCache: return "raw spice (G: gather)";
+            case EType::CaveMouth: return "hidden cavern (step in to enter)";
             case EType::Boss: {
                 if (e.data2 == -1) return "BARON HARKONNEN";
                 static char bbuf[96];
@@ -4315,7 +4423,8 @@ void pass_entities(RenderCtx& r) {
         // contact shadow to ground standing actors (skip flat/flying/pickup types)
         switch (e.type) {
             case EType::Glowglobe: case EType::HunterSeeker: case EType::Corpse:
-            case EType::SpiceCache: case EType::Loot: case EType::Thumper: break;
+            case EType::SpiceCache: case EType::Loot: case EType::Thumper:
+            case EType::CaveMouth: break;
             default:
                 if (!(e.type == EType::Player && g.pl.riding))
                     ground_shadow(r.ctx.frame, sx, sy + 16, 18, 8);
@@ -4385,6 +4494,9 @@ void pass_entities(RenderCtx& r) {
             }
             case EType::SpiceCache:
                 g.draw_list.add(r.assets->get("spicecache"), 0, sx, sy + 12, light, 0);
+                break;
+            case EType::CaveMouth:  // B9: a dark fissure in the rock (placeholder sprite until E2)
+                g.draw_list.add(&sheet_or_ph(r, "cavemouth"), 0, sx, sy + 12, light, 1);
                 break;
             case EType::Boss: {
                 const int pidx = boss_is_pinnacle(e.data2) ? boss_pinnacle_idx(e.data2) : -1;
@@ -5246,6 +5358,11 @@ void game_serialize(SaveWriter& w) {
     w.i32(g.sideobj_expires);
     w.u8(g.sideobj_spawned ? 1 : 0);
     w.u8(g.at_rendezvous ? 1 : 0);  // B7: out at the Ninth Rock
+    w.u8(g.in_cave ? 1 : 0);        // B9: inside a hidden cavern
+    w.u64(g.cave_seed);
+    w.i32(g.cave_ret_x);
+    w.i32(g.cave_ret_y);
+    w.u8(g.cave_ret_zone);
     w.i32(g.storm_turns);
     w.i32(g.poison_turns);
     w.i32(g.thopter_x);
@@ -5331,6 +5448,11 @@ bool game_deserialize(SaveReader& r) {
     const int so_exp = r.i32();
     const bool so_spawned = r.u8() != 0;
     const bool at_rendezvous = r.u8() != 0;  // B7
+    const bool in_cave = r.u8() != 0;        // B9
+    const uint64_t cave_seed = r.u64();
+    const int cave_ret_x = r.i32();
+    const int cave_ret_y = r.i32();
+    const uint8_t cave_ret_zone = r.u8();
     const int storm_turns = r.i32();
     const int poison_turns = r.i32();
     const int thopter_x = r.i32();
@@ -5383,6 +5505,11 @@ bool game_deserialize(SaveReader& r) {
     g.sideobj_expires = so_exp;
     g.sideobj_spawned = so_spawned;
     g.at_rendezvous = at_rendezvous;  // B7
+    g.in_cave = in_cave;              // B9
+    g.cave_seed = cave_seed;
+    g.cave_ret_x = int16_t(cave_ret_x);
+    g.cave_ret_y = int16_t(cave_ret_y);
+    g.cave_ret_zone = cave_ret_zone;
     g.storm_turns = storm_turns;
     g.poison_turns = poison_turns;
     g.thopter_x = int16_t(thopter_x);
@@ -5398,7 +5525,9 @@ bool game_deserialize(SaveReader& r) {
     g.delta_count = delta_count;
     std::memcpy(g.deltas, deltas, sizeof g.deltas);
     int sx_, sy_;
-    if (at_rendezvous) {  // B7: the Ninth Rock is a fixed-seed desert zone, not a graph node
+    if (in_cave) {  // B9: a hidden cavern is a transient sub-zone regenerated from its own seed
+        map::generate(g.zone_, cave_seed, map::ZoneId(map::kZoneCave), sx_, sy_);
+    } else if (at_rendezvous) {  // B7: the Ninth Rock is a fixed-seed desert zone, not a graph node
         map::generate(g.zone_, kNinthRockSeed, map::ZoneId(map::kZoneDesert), sx_, sy_);
     } else {
         const world::Node& cn = g.graph.nodes[g.cur_node];  // regen the resident zone from its node
@@ -5567,6 +5696,23 @@ int game_debug_patrol_info(int* x, int* y, int* ai, int* ax, int* ay) {  // B8: 
         if (ay) *ay = first->data & 0xFF;
     }
     return count;
+}
+
+int game_debug_cur_zone() { return g.cur_zone; }  // B9
+void game_debug_enter_cave() { enter_cave(); }     // B9: duck into a hidden cavern
+void game_debug_exit_cave() { exit_cave(); }       // B9: climb back out to the field
+int game_debug_in_cave() { return g.in_cave ? 1 : 0; }
+void game_debug_spawn_cave_mouth(int x, int y) {   // B9: place a cavern mouth in the current zone
+    if (Entity* e = alloc_entity())
+        *e = Entity{EType::CaveMouth, Ai::Idle, g.cur_zone, int16_t(x), int16_t(y), 1, 0, 0};
+}
+int game_debug_cave_reward_count() {  // B9: loot + spice piles present in the current zone
+    int n = 0;
+    for (int i = 1; i < kMaxEnts; ++i) {
+        const Entity& e = g.ents[i];
+        if (e.zone == g.cur_zone && (e.type == EType::Loot || e.type == EType::SpiceCache)) ++n;
+    }
+    return n;
 }
 
 void game_debug_revelation(int* stage, int* inv_count) {

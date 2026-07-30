@@ -1384,6 +1384,53 @@ int run_patroltest(audio::Mixer& mixer, const Assets& assets, const Colormaps& c
     return pass ? 0 : 1;
 }
 
+// B9: a rare hidden cavern is a transient sub-zone (kZoneCave == 3). Stepping into a cave mouth in a
+// field node drops you into a stocked cavern (loot + spice, a guardian); the cavern door climbs you
+// back out to the same field spot. cur_node never changes — it's an excursion, not a node move.
+int run_cavetest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    GameServices services{&mixer, &assets, &cmaps};
+
+    // (A) enter from a field node: land in the cave zone, stocked, cur_node unchanged.
+    game_init(9001, services);
+    game_debug_use_door();                 // hub -> field vision-node
+    const int node = game_debug_cur_node();
+    int px = 0, py = 0; game_debug_player_pos(&px, &py);
+    game_debug_enter_cave();
+    const bool inside = game_debug_in_cave() == 1 && game_debug_cur_zone() == 3;
+    const int reward = game_debug_cave_reward_count();
+    const bool node_kept = game_debug_cur_node() == node;
+
+    // (B) climb back out: field zone resumes at the return spot, the cave flag clears.
+    game_debug_exit_cave();
+    int rx = 0, ry = 0; game_debug_player_pos(&rx, &ry);
+    const bool back = game_debug_in_cave() == 0 && game_debug_cur_zone() != 3 &&
+                      game_debug_cur_node() == node && rx == px && ry == py;
+
+    // (C) deterministic: the identical run yields the identical cavern contents.
+    game_init(9001, services);
+    game_debug_use_door();
+    game_debug_enter_cave();
+    const int reward2 = game_debug_cave_reward_count();
+    const bool deterministic = reward2 == reward;
+
+    // (D) save + load while inside the cavern restores it (exercises the in_cave load-regen branch).
+    game_init(9001, services);
+    game_debug_use_door();
+    game_debug_enter_cave();
+    const int r_before = game_debug_cave_reward_count();
+    InputState in;
+    auto tick1 = [&](Key k) { in.pressed[int(k)] = true; game_update(in); in.end_tick(); };
+    tick1(Key::Save);
+    tick1(Key::Load);
+    const bool roundtrip = game_debug_in_cave() == 1 && game_debug_cur_zone() == 3 &&
+                           game_debug_cave_reward_count() == r_before;
+
+    const bool pass = inside && reward > 0 && node_kept && back && deterministic && roundtrip;
+    std::printf("cavetest %s (in %d zone3 reward %d node_kept %d back %d det[%d==%d] saveload %d)\n",
+                pass ? "PASS" : "FAIL", inside, reward, node_kept, back, reward, reward2, roundtrip);
+    return pass ? 0 : 1;
+}
+
 // A4: click-to-move pathfinds to the goal and is deterministic across runs.
 int run_clicktest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
     GameServices services{&mixer, &assets, &cmaps};
@@ -1422,7 +1469,7 @@ int main(int argc, char** argv) {
          reveltest = false, gauntlettest = false, extractiontest = false, metatest = false,
          statmodtest = false, affixtest = false, metamigratetest = false, ailmenttest = false,
          rttest = false, stuntest = false, classtest = false, guildtest = false,
-         vendortest = false, patroltest = false;
+         vendortest = false, patroltest = false, cavetest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
         if (SDL_strcmp(argv[i], "--seamtest") == 0) seamtest = true;
@@ -1447,6 +1494,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--guildtest") == 0) guildtest = true;
         if (SDL_strcmp(argv[i], "--vendortest") == 0) vendortest = true;
         if (SDL_strcmp(argv[i], "--patroltest") == 0) patroltest = true;
+        if (SDL_strcmp(argv[i], "--cavetest") == 0) cavetest = true;
         if (SDL_strcmp(argv[i], "--animdebug") == 0) animdebug = true;
         if (SDL_strcmp(argv[i], "--rpgtest") == 0) rpgtest = true;
         if (SDL_strcmp(argv[i], "--clicktest") == 0) clicktest = true;
@@ -1489,6 +1537,7 @@ int main(int argc, char** argv) {
     if (guildtest) return run_guildtest(mixer, assets, cmaps);
     if (vendortest) return run_vendortest(mixer, assets, cmaps);
     if (patroltest) return run_patroltest(mixer, assets, cmaps);
+    if (cavetest) return run_cavetest(mixer, assets, cmaps);
     if (rpgtest) return run_rpgtest(mixer, assets, cmaps);
     if (reveltest) return run_reveltest(mixer, assets, cmaps);
     if (gauntlettest) return run_gauntlettest(mixer, assets, cmaps);

@@ -129,12 +129,61 @@ void generate_desert(Zone& z, uint64_t seed, ZoneId id, int& spawn_x, int& spawn
         }
 }
 
+// B9: a rare hidden cavern — a small enclosed pocket carved off a deep-desert field node. Solid
+// sandstone with a central chamber and a few seed-chosen offshoots joined by short corridors; the
+// player enters (and leaves) by a door at the south rim. Deterministic from the seed alone (only
+// hash_combine, no RNG stream), so save/load and re-entry reproduce the identical layout.
+void generate_cave(Zone& z, uint64_t seed, int& spawn_x, int& spawn_y) {
+    const uint32_t s = uint32_t(seed ^ (seed >> 32));
+    for (int i = 0; i < N; ++i) {
+        z.floor[i] = 8;
+        z.flags[i] = TF_BLOCK | TF_WALL | TF_OPAQUE | TF_INDOOR;
+    }
+    // central chamber, roughly centred with a seed-jittered size
+    const int cw = 8 + int(hash_combine(s, 1) % 5);   // 8..12
+    const int ch = 7 + int(hash_combine(s, 2) % 5);   // 7..11
+    const int cx = 32, cy = 30;
+    carve_room(z, cx - cw, cy - ch, cx + cw, cy + ch);
+    // three offshoot pockets, each linked back to the chamber by a thin corridor
+    for (int k = 0; k < 3; ++k) {
+        const uint32_t h = hash_combine(s, uint32_t(10 + k));
+        const int ang = int(h % 4);                         // N/E/S/W offshoot
+        const int dist = 12 + int((h >> 3) % 6);            // 12..17 from centre
+        const int rw = 3 + int((h >> 6) % 3), rh = 3 + int((h >> 9) % 3);
+        int ox = cx, oy = cy;
+        if (ang == 0) oy = cy - dist;
+        else if (ang == 1) ox = cx + dist;
+        else if (ang == 2) oy = cy + dist;
+        else ox = cx - dist;
+        if (ox < 6 || ox > W - 7 || oy < 6 || oy > H - 7) continue;
+        carve_room(z, ox - rw, oy - rh, ox + rw, oy + rh);
+        // corridor from the chamber edge to the pocket (carve a 3-wide lane)
+        int lx = cx, ly = cy;
+        while (lx != ox || ly != oy) {
+            for (int w = -1; w <= 1; ++w) {
+                carve_room(z, lx + (ang % 2 ? 0 : w), ly + (ang % 2 ? w : 0),
+                           lx + (ang % 2 ? 0 : w), ly + (ang % 2 ? w : 0));
+            }
+            if (lx != ox) lx += ox > lx ? 1 : -1;
+            else if (ly != oy) ly += oy > ly ? 1 : -1;
+        }
+    }
+    // the way out: a door at the south rim of the central chamber
+    const int dx0 = cx, dy0 = cy + ch;
+    z.flags[dy0 * W + dx0] |= TF_DOOR;
+    z.floor[dy0 * W + dx0] = 9;
+    spawn_x = cx;
+    spawn_y = cy + ch - 1;  // just inside the door
+}
+
 }  // namespace
 
 void generate(Zone& z, uint64_t seed, ZoneId id, int& spawn_x, int& spawn_y) {
     std::memset(z.vis, 0, sizeof z.vis);
     if (id == kZoneSietch)
         generate_sietch(z, spawn_x, spawn_y);
+    else if (id == kZoneCave)
+        generate_cave(z, seed, spawn_x, spawn_y);
     else
         generate_desert(z, seed, id, spawn_x, spawn_y);
 }
