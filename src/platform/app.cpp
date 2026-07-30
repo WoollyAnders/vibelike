@@ -1947,6 +1947,47 @@ int run_inputtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cm
     return pass ? 0 : 1;
 }
 
+// Hub UIs: the War Council table opens the Jihad Table / Landsraad / crafting Bench menus, which
+// drive commission_strike / assault_pinnacle / court_house / bench_* through the keyboard menu path.
+int run_menutest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    std::remove("meta.dat");
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(21, services);
+    game_debug_open_chosen_path();
+    game_debug_add_spice(1000);
+    InputState in;
+    auto key = [&](Key k) { in.pressed[int(k)] = true; game_update(in); in.end_tick(); };
+
+    // (A) the War Council routes to the Jihad Table
+    game_debug_open_menu(8, 0);
+    key(Key::Confirm);
+    const bool to_table = game_debug_menu_open() == 9;
+
+    // (B) confirming a faction row commissions a strike (enters the raid; menu closes)
+    game_debug_open_menu(9, 0);
+    key(Key::Confirm);
+    const bool commissioned = game_debug_in_strike() == 1 && game_debug_menu_open() == 0;
+    game_debug_abandon_strike();
+
+    // (C) the Landsraad menu courts a neutral House into an alliance
+    game_debug_open_menu(10, 1);
+    key(Key::Confirm);
+    const bool courted = game_debug_house_stance(1) == 1;  // ALLY
+
+    // (D) the crafting bench (Divine mode) spends a Maker Hide on the selected item
+    game_debug_craft_setup(0 /*armor*/);
+    game_debug_give_material(0, 1);
+    game_debug_open_menu(11, 0);
+    key(Key::Confirm);
+    const bool crafted = game_debug_material(0) == 0;
+
+    const bool pass = to_table && commissioned && courted && crafted;
+    std::printf("menutest %s (to_table %d strike %d court %d craft %d)\n",
+                pass ? "PASS" : "FAIL", to_table, commissioned, courted, crafted);
+    std::remove("meta.dat");
+    return pass ? 0 : 1;
+}
+
 // A4: click-to-move pathfinds to the goal and is deterministic across runs.
 int run_clicktest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
     GameServices services{&mixer, &assets, &cmaps};
@@ -1988,7 +2029,7 @@ int main(int argc, char** argv) {
          vendortest = false, patroltest = false, cavetest = false, trialtest = false,
          endgametest = false, striketest = false, pinnacletest = false, capstonetest = false,
          longridetest = false, choamtest = false, crafttest = false, abilitytest = false,
-         flasktest = false, inputtest = false;
+         flasktest = false, inputtest = false, menutest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
         if (SDL_strcmp(argv[i], "--seamtest") == 0) seamtest = true;
@@ -2025,6 +2066,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--abilitytest") == 0) abilitytest = true;
         if (SDL_strcmp(argv[i], "--flasktest") == 0) flasktest = true;
         if (SDL_strcmp(argv[i], "--inputtest") == 0) inputtest = true;
+        if (SDL_strcmp(argv[i], "--menutest") == 0) menutest = true;
         if (SDL_strcmp(argv[i], "--animdebug") == 0) animdebug = true;
         if (SDL_strcmp(argv[i], "--rpgtest") == 0) rpgtest = true;
         if (SDL_strcmp(argv[i], "--clicktest") == 0) clicktest = true;
@@ -2079,6 +2121,7 @@ int main(int argc, char** argv) {
     if (abilitytest) return run_abilitytest(mixer, assets, cmaps);
     if (flasktest) return run_flasktest(mixer, assets, cmaps);
     if (inputtest) return run_inputtest(mixer, assets, cmaps);
+    if (menutest) return run_menutest(mixer, assets, cmaps);
     if (rpgtest) return run_rpgtest(mixer, assets, cmaps);
     if (reveltest) return run_reveltest(mixer, assets, cmaps);
     if (gauntlettest) return run_gauntlettest(mixer, assets, cmaps);

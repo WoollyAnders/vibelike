@@ -29,7 +29,7 @@ constexpr int kMaxDeltas = 192;
 enum class EType : uint8_t { None = 0, Player, Hound, Corpse, Thumper, Trooper, Spotter,
                              Glowglobe, ShieldTrooper, Naib, Sayyadina, Smuggler,
                              PanAdder, Hermit, HunterSeeker, SpiceCache, Loot, Boss,
-                             Caravan, Envoy, Fremen, Paul, CaveMouth };
+                             Caravan, Envoy, Fremen, Paul, CaveMouth, WarRoom };
 enum class Ai : uint8_t { Idle = 0, Wander, Hunt, Guard, Patrol };  // Patrol (B8): route-walker
 
 struct Entity {
@@ -261,7 +261,10 @@ struct GameState {
 
     campaign::State season;    // M4: the harvest season
     int menu_open = 0;  // 1 naib / 2 sayyadina / 3 smuggler / 5 char / 6 inv / 7 vault
+                        // 8 war council / 9 jihad table / 10 landsraad / 11 crafting bench
     int menu_sel = 0;
+    int jihad_tier = 1;  // transient UI: the commission tier chosen at the Jihad Table (Left/Right)
+    int bench_mode = 0;  // transient UI: 0 = Divine (Maker Hide), 1 = Reforge (Worm Tooth)
     int vault_page = 0;
     int last_decay_day = 0;
 
@@ -367,6 +370,7 @@ uint8_t facing_from_tile_delta(int dx, int dy);
 void apply_deltas(map::Zone& z, uint8_t zone_id);
 void end_season(uint8_t ending);
 void spawn_zone_wildlife(map::Zone& z, uint8_t zone_id);
+bool endgame_open();  // fwd: the Jihad (endgame) is open once the Baron has fallen
 
 worm::Tuning worm_tuning() {
     worm::Tuning t;
@@ -644,6 +648,9 @@ void spawn_zone_wildlife(map::Zone& z, uint8_t zone_id) {
         place_npc_near(EType::Fremen, z, zone_id, 53, 32, 3);  // storeroom
         place_npc_near(EType::Fremen, z, zone_id, 36, 28, 4);  // great hall (east)
         place_npc_near(EType::Fremen, z, zone_id, 26, 32, 5);  // great hall (west)
+        // The War Council table — appears only once the Jihad opens (the Baron has fallen). Gated so
+        // pre-endgame play (and the sietch-bound determinism tests) never see it.
+        if (endgame_open()) place_npc_near(EType::WarRoom, z, zone_id, 38, 24);
         return;
     }
     if (zone_id == map::kZoneCave) return;  // B9: caves are hand-populated (see populate_cave)
@@ -4401,6 +4408,7 @@ const char* describe_at(int tx, int ty) {
             case EType::HunterSeeker: return "HUNTER-SEEKER";
             case EType::SpiceCache: return "raw spice (G: gather)";
             case EType::CaveMouth: return "hidden cavern (step in to enter)";
+            case EType::WarRoom: return "the War Council (enact the Jihad)";
             case EType::Boss: {
                 if (e.data2 == -1) return "BARON HARKONNEN";
                 static char bbuf[96];
@@ -4543,13 +4551,53 @@ bool game_update(const InputState& in) {
     // vendor menus pause the world (browsing is free)
     if (g.menu_open) {
         // 5 = character sheet, 6 = inventory, 7 = the vault
-        int counts[8] = {0, 6, 3, 5, 4, 3 + kTalentCount + 1, 13, 13};  // B7: Naib +"Signal the Guild"
+        int counts[12] = {0, 6, 3, 5, 4, 3 + kTalentCount + 1, 13, 13,
+                          4, 5 + 1 + 1, 5 + 1 + 1, 12 + 1};  // 8 council, 9 table, 10 landsraad, 11 bench
         const int n = counts[g.menu_open];
         // A6: mouse — hovering a row selects it, left-click confirms it, right-click closes.
         const int mrow = menu_row_under_mouse(in);
         if (mrow >= 0) g.menu_sel = mrow;
         const bool mclick = mrow >= 0 && in.mouse_pressed[0];
         if (in.mouse_pressed[2] || in.mouse_pressed[1]) { g.menu_open = 0; return true; }
+        if (g.menu_open >= 8 && g.menu_open <= 11) {  // endgame hub menus (keyboard-driven)
+            if (in.was_pressed(Key::Up)) g.menu_sel = (g.menu_sel + n - 1) % n;
+            if (in.was_pressed(Key::Down)) g.menu_sel = (g.menu_sel + 1) % n;
+            if (in.was_pressed(Key::Cancel)) { g.menu_open = 0; return true; }
+            if (g.menu_open == 9) {  // Left/Right: commission tier
+                if (in.was_pressed(Key::Left) && g.jihad_tier > 1) --g.jihad_tier;
+                if (in.was_pressed(Key::Right) && g.jihad_tier < tune::kStrikeTiers) ++g.jihad_tier;
+            } else if (g.menu_open == 11) {  // Left/Right: bench mode (Divine / Reforge)
+                if (in.was_pressed(Key::Left) || in.was_pressed(Key::Right)) g.bench_mode ^= 1;
+            }
+            if (in.was_pressed(Key::Confirm) || mclick) {
+                const int sel = g.menu_sel;
+                if (g.menu_open == 8) {  // the War Council hub
+                    if (sel <= 2) { g.menu_open = 9 + sel; g.menu_sel = 0; }
+                    else g.menu_open = 0;
+                } else if (g.menu_open == 9) {  // the Jihad Table
+                    if (sel < FAC_COUNT) {
+                        if (pinnacle_available(sel)) { g.menu_open = 0; assault_pinnacle(sel); }
+                        else if (commission_strike(sel, g.jihad_tier)) g.menu_open = 0;
+                        else g.log.push("Not enough spice to commission that strike.");
+                    } else if (sel == FAC_COUNT) {
+                        if (capstone_available()) { g.menu_open = 0; confront_capstone(); }
+                        else g.log.push("The Golden Path needs all five shards first.");
+                    } else { g.menu_open = 8; g.menu_sel = 0; }
+                } else if (g.menu_open == 10) {  // the Landsraad
+                    if (sel < FAC_COUNT) {
+                        if (!court_house(sel)) g.log.push("That House cannot be courted now.");
+                    } else if (sel == FAC_COUNT) { collect_dividend(); }
+                    else { g.menu_open = 8; g.menu_sel = 0; }
+                } else {  // 11: the crafting bench
+                    if (sel < 12) {
+                        const bool ok = g.bench_mode == 0 ? bench_divine(sel) : bench_reforge(sel);
+                        if (!ok) g.log.push(g.bench_mode == 0 ? "No Maker Hide, or nothing to reroll."
+                                                              : "No Worm Tooth, or that is not a weapon.");
+                    } else { g.menu_open = 8; g.menu_sel = 0; }
+                }
+            }
+            return true;
+        }
         if (g.menu_open == 5) {
             // 0..2 stats, 3..11 talents, 12 close
             if (in.was_pressed(Key::Up)) g.menu_sel = (g.menu_sel + n - 1) % n;
@@ -4836,6 +4884,7 @@ bool game_update(const InputState& in) {
         else if (zone().at(g.hover_tx, g.hover_ty) & map::TF_DOOR) g.interact_kind = 4;
         else if (entity_at(g.hover_tx, g.hover_ty, g.cur_zone, EType::Fremen)) g.interact_kind = 5;
         else if (entity_at(g.hover_tx, g.hover_ty, g.cur_zone, EType::Paul)) g.interact_kind = 6;
+        else if (entity_at(g.hover_tx, g.hover_ty, g.cur_zone, EType::WarRoom)) g.interact_kind = 7;
         else g.interact_kind = 0;
     } else if (cursor_in_world && in.mouse_down[0] &&
                (g.hover_tx != g.move_goal_x || g.hover_ty != g.move_goal_y)) {
@@ -4882,8 +4931,11 @@ bool game_update(const InputState& in) {
                         constexpr int kN = int(sizeof kFremenBarks / sizeof *kFremenBarks);
                         g.log.push("%s", kFremenBarks[(f->data % kN + kN) % kN]);
                     }
+                } else if (g.interact_kind == 7) {  // the War Council table -> the Jihad hub menu (8)
+                    g.menu_open = 8;
+                    g.menu_sel = 0;
                 } else {
-                    g.menu_open = g.interact_kind;
+                    g.menu_open = g.interact_kind;  // 1 Naib / 2 Sayyadina / 3 Smuggler
                     g.menu_sel = 0;
                 }
                 g.move_goal_x = -1;
@@ -5177,7 +5229,7 @@ void pass_entities(RenderCtx& r) {
         switch (e.type) {
             case EType::Glowglobe: case EType::HunterSeeker: case EType::Corpse:
             case EType::SpiceCache: case EType::Loot: case EType::Thumper:
-            case EType::CaveMouth: break;
+            case EType::CaveMouth: case EType::WarRoom: break;
             default:
                 if (!(e.type == EType::Player && g.pl.riding))
                     ground_shadow(r.ctx.frame, sx, sy + 16, 18, 8);
@@ -5250,6 +5302,9 @@ void pass_entities(RenderCtx& r) {
                 break;
             case EType::CaveMouth:  // B9: a dark fissure in the rock (placeholder sprite until E2)
                 g.draw_list.add(&sheet_or_ph(r, "cavemouth"), 0, sx, sy + 12, light, 1);
+                break;
+            case EType::WarRoom:  // the War Council table (placeholder sprite until E2)
+                g.draw_list.add(&sheet_or_ph(r, "wartable"), 0, sx, sy + 12, light, 1);
                 break;
             case EType::Boss: {
                 const int pidx = boss_is_pinnacle(e.data2) ? boss_pinnacle_idx(e.data2) : -1;
@@ -5779,8 +5834,72 @@ void pass_ui(RenderCtx& r) {
         }
     }
 
+    // Endgame hub menus (War Council / Jihad Table / Landsraad / Bench) — dynamic, keyboard-driven.
+    if (g.menu_open >= 8 && g.menu_open <= 11) {
+        const int x0 = fb::W / 2 - 340, y0 = 200;
+        fill_rect(ctx, x0, y0, 680, 460, 2);
+        fill_rect(ctx, x0, y0, 680, 2, 228);
+        fill_rect(ctx, x0, y0 + 458, 680, 2, 228);
+        static const char* kFac[] = {"Bene Gesserit (Wallach IX)", "Tleilaxu (Bandalong)",
+                                     "Ixians (Ix)", "House Corrino (Kaitain)", "Spacing Guild (Junction)"};
+        char buf[96];
+        auto row = [&](int i, const char* text, bool sel) {
+            if (sel) fill_rect(ctx, x0 + 16, y0 + 78 + i * 30 - 4, 648, 26, 4);
+            draw_text(ctx, text, x0 + 28, y0 + 78 + i * 30, uint8_t(sel ? 245 : 20));
+        };
+        if (g.menu_open == 8) {
+            draw_text_shadow(ctx, "THE WAR COUNCIL", x0 + 24, y0 + 16, 230, 1);
+            draw_text(ctx, "Enact the Jihad. Muad'Dib's legions await your word.", x0 + 24, y0 + 46, 14);
+            const char* rows[4] = {"The Jihad Table  (strikes & pinnacles)",
+                                   "The Landsraad  (CHOAM politics)",
+                                   "The Crafting Bench", "Leave"};
+            for (int i = 0; i < 4; ++i) row(i, rows[i], g.menu_sel == i);
+        } else if (g.menu_open == 9) {
+            draw_text_shadow(ctx, "THE JIHAD TABLE", x0 + 24, y0 + 16, 230, 1);
+            std::snprintf(buf, sizeof buf, "spice %d   commission tier %d  (<-/-> change)   shards %d/5",
+                          g.pl.spice, g.jihad_tier, __builtin_popcount(g_meta.golden_shards));
+            draw_text(ctx, buf, x0 + 24, y0 + 46, 14);
+            for (int f = 0; f < FAC_COUNT; ++f) {
+                if (pinnacle_available(f))
+                    std::snprintf(buf, sizeof buf, "ASSAULT %s  [PINNACLE OPEN]", kFac[f]);
+                else
+                    std::snprintf(buf, sizeof buf, "Strike %s  (%d sp)  [%d%%]", kFac[f],
+                                  g.jihad_tier * tune::kStrikeSpiceBase, int(g_meta.jihad_pressure[f]));
+                row(f, buf, g.menu_sel == f);
+            }
+            row(FAC_COUNT, capstone_available() ? "CONFRONT THE GOLDEN PATH" : "(the Golden Path: 5 shards)",
+                g.menu_sel == FAC_COUNT);
+            row(FAC_COUNT + 1, "Back", g.menu_sel == FAC_COUNT + 1);
+        } else if (g.menu_open == 10) {
+            draw_text_shadow(ctx, "THE LANDSRAAD", x0 + 24, y0 + 16, 230, 1);
+            std::snprintf(buf, sizeof buf, "CHOAM control %d%%   spice %d", choam_control(), g.pl.spice);
+            draw_text(ctx, buf, x0 + 24, y0 + 46, 14);
+            for (int f = 0; f < FAC_COUNT; ++f) {
+                const int st = house_stance(f);
+                std::snprintf(buf, sizeof buf, "Court %s  (%d sp)  [%s]", kFac[f], tune::kCourtCost,
+                              st == HOUSE_ALLY ? "ALLY" : st == HOUSE_OPPONENT ? "OPPOSED" : "neutral");
+                row(f, buf, g.menu_sel == f);
+            }
+            std::snprintf(buf, sizeof buf, "Collect CHOAM dividend  (~%d sp)", choam_control());
+            row(FAC_COUNT, buf, g.menu_sel == FAC_COUNT);
+            row(FAC_COUNT + 1, "Back", g.menu_sel == FAC_COUNT + 1);
+        } else {  // 11: the crafting bench
+            draw_text_shadow(ctx, "THE CRAFTING BENCH", x0 + 24, y0 + 16, 230, 1);
+            std::snprintf(buf, sizeof buf, "Maker Hides %d   Worm Teeth %d   mode: %s  (<-/-> change)",
+                          g_meta.maker_hides, g_meta.worm_teeth,
+                          g.bench_mode == 0 ? "DIVINE (reroll values)" : "REFORGE (weapon)");
+            draw_text(ctx, buf, x0 + 24, y0 + 46, 14);
+            for (int i = 0; i < 12; ++i) {
+                char nm[48];
+                g.pl.inv[i].full_name(nm, sizeof nm);
+                std::snprintf(buf, sizeof buf, "%d. %s", i + 1, g.pl.inv[i].empty() ? "-" : nm);
+                row(i, buf, g.menu_sel == i);
+            }
+            row(12, "Back", g.menu_sel == 12);
+        }
+    } else
     // Character sheet / inventory / vault overlays (dynamic content).
-    if (g.menu_open >= 5) {
+    if (g.menu_open >= 5 && g.menu_open <= 7) {
         const int x0 = fb::W / 2 - 380, y0 = 140;
         fill_rect(ctx, x0, y0, 760, 640, 2);
         fill_rect(ctx, x0, y0, 760, 2, 228);
@@ -6615,6 +6734,9 @@ int game_debug_cast_ability(int ab, int tx, int ty) { return cast_ability(ab, tx
 int game_debug_will() { return g.pl.will; }
 void game_debug_set_will(int w) { g.pl.will = w; }
 int game_debug_ability_cd() { return g.pl.ability_cd; }
+// --- hub-menu hooks ---
+void game_debug_open_menu(int m, int sel) { g.menu_open = m; g.menu_sel = sel; }
+int game_debug_menu_open() { return g.menu_open; }
 // --- flask hooks ---
 int game_debug_use_flask(int slot) { return use_flask(slot) ? 1 : 0; }
 int game_debug_flask_charges(int slot) {

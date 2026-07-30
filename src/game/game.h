@@ -149,6 +149,8 @@ int game_debug_cast_ability(int ab, int tx, int ty);  // C7: 1 Voice, 2 Blink, 3
 int game_debug_will();                       // C7: current Will
 void game_debug_set_will(int w);             // C7: set current Will (test setup)
 int game_debug_ability_cd();                 // C7: shared ability cooldown remaining (world turns)
+void game_debug_open_menu(int m, int sel);   // hub UIs: force a menu open at a row (8-11 endgame)
+int game_debug_menu_open();                  // hub UIs: current open menu id (0 = none)
 int game_debug_use_flask(int slot);          // flasks: 0 Life / 1 Will / 2 Utility (1 = drunk)
 int game_debug_flask_charges(int slot);      // flasks: current charges in a slot
 void game_debug_set_flask_charges(int slot, int c);  // flasks: set charges (test setup)
