@@ -280,6 +280,12 @@ struct GameState {
     uint64_t cave_seed = 0;
     int16_t cave_ret_x = 0, cave_ret_y = 0;
     uint8_t cave_ret_zone = 0;
+    // B10.2: a Jihad strike excursion. Commissioned at the hub; you raid a procedural off-world zone
+    // and clearing its objective presses the target Great Power. cur_node stays 0 (the hub) throughout.
+    bool in_strike = false;
+    uint8_t strike_faction = 0;
+    uint8_t strike_tier = 0;
+    uint64_t strike_seed = 0;
 
     int storm_turns = 0;       // M5: Coriolis storm remaining
     int poison_turns = 0;      // pan adder venom: +thirst while active
@@ -1593,15 +1599,103 @@ void finish_capstone() {
     meta_save();
 }
 
-// Commission a strike at the Jihad Table: pay spice, launch, and (on clear) press the target Power.
-// The procedural strike EXCURSION (a rolled off-world zone) layers on in B10.2; the data core here
-// commits the commission and resolves its pressure. Returns false if the Jihad is shut or unaffordable.
+// fwds (defined below): the strike excursion enters a raid zone and resolves back to the hub node 0.
+void enter_zone(uint8_t id, uint64_t gen_seed, bool use_spawn, int at_x, int at_y, bool roll_events);
+
+const char* faction_name(int f) {
+    static const char* kNames[] = {"the Bene Gesserit", "the Tleilaxu", "the Ixians",
+                                    "House Corrino", "the Spacing Guild"};
+    return (f >= 0 && f < FAC_COUNT) ? kNames[f] : "the enemy";
+}
+
+// B10.2: stock a strike zone — the faction's champion (the objective; killing it clears the strike)
+// plus a trooper escort, both scaled by the strike tier.
+void spawn_strike_force(int tier) {
+    map::Zone& z = zone();
+    const Entity& p = player_ent();
+    for (int tries = 0; tries < 300; ++tries) {  // the objective: a scaled champion, placed to the east
+        const int x = g.rng.combat.range(map::W / 2, map::W - 4);
+        const int y = g.rng.combat.range(4, map::H - 4);
+        if (!z.walkable(x, y) || entity_at(x, y, g.cur_zone)) continue;
+        const uint8_t traits = uint8_t(1 << g.rng.loot.below(5)) | uint8_t(1 << g.rng.loot.below(5));
+        const int16_t name_pack = int16_t(g.rng.loot.below(8) | (g.rng.loot.below(8) << 4) |
+                                          (g.rng.loot.below(8) << 8));  // positive -> not a pinnacle tag
+        const int hp = 18 + tier * 8 + ((traits & BT_STALWART) ? 10 : 0);
+        if (Entity* e = alloc_entity())
+            *e = Entity{EType::Boss, Ai::Hunt, g.cur_zone, int16_t(x), int16_t(y),
+                        int16_t(hp), 0, int16_t((tier & 0xFF) | (traits << 8)), name_pack};
+        break;
+    }
+    const int troops = 2 + tier;  // the escort
+    for (int i = 0, tries = 0; i < troops && tries < 400; ++tries) {
+        const int x = g.rng.combat.range(6, map::W - 4), y = g.rng.combat.range(4, map::H - 4);
+        if (!z.walkable(x, y) || entity_at(x, y, g.cur_zone)) continue;
+        const int ddx = x > p.x ? x - p.x : p.x - x, ddy = y > p.y ? y - p.y : p.y - y;
+        if (ddx + ddy < 6) continue;  // breathing room on the drop
+        if (Entity* e = alloc_entity())
+            *e = Entity{EType::Trooper, Ai::Hunt, g.cur_zone, int16_t(x), int16_t(y),
+                        int16_t(8 + tier * 3), 0, 0};
+        ++i;
+    }
+}
+
+void enter_strike(int f, int tier) {
+    g.in_strike = true;
+    g.strike_faction = uint8_t(f);
+    g.strike_tier = uint8_t(tier);
+    g.strike_seed = world::node_hash(g.seed ^ (uint64_t(f) << 20) ^ (uint64_t(tier) << 12),
+                                     uint64_t(g.pl.turn));
+    for (int i = 1; i < kMaxEnts; ++i) g.ents[i] = Entity{};  // wipe the hub's occupants
+    g.op = harvest::Op{};
+    g.alarm_turns = 0; g.alarm_spawn_cd = 0;
+    g.delta_count = 0;
+    g.spawned_mask = uint8_t(1 << map::kZoneDeepPan);  // skip auto-wildlife; the strike force is hand-placed
+    enter_zone(map::kZoneDeepPan, g.strike_seed, /*use_spawn=*/true, 0, 0, /*roll_events=*/false);
+    spawn_strike_force(tier);
+    g.log.push("The Fedaykin strike at %s. Kill their champion; the desert takes you home after.",
+               faction_name(f));
+    refresh_fov_and_paths();
+}
+
+void enter_node(int idx);  // fwd (defined below) — strike resolution returns to the hub node 0
+
+// The strike objective falls: press the target Power, take a tier-scaled prize, melt back to the hub.
+void resolve_strike() {
+    const int f = g.strike_faction, tier = g.strike_tier;
+    g.in_strike = false;
+    press_faction(f, tier);
+    items::Inst it = roll_item(tier + 2, 40 + tier * 12);  // the richer-at-higher-tier payoff
+    for (items::Inst& slot : g.pl.inv)
+        if (slot.empty() && !it.empty()) {
+            slot = it;
+            char nm[64];
+            it.full_name(nm, sizeof nm);
+            g.log.push("Strike spoils: %s.", nm);
+            break;
+        }
+    g.pl.spice += tier * 4;
+    raise_standing(4);
+    g.log.push("The strike succeeds. The Jihad tightens on %s.", faction_name(f));
+    enter_node(0);  // the Fedaykin melt back to the sietch
+    refresh_fov_and_paths();
+}
+
+// Break off a strike before the objective falls: home empty-handed, no pressure gained.
+void abandon_strike() {
+    g.in_strike = false;
+    g.log.push("You break off the strike and melt back into the desert, the deed undone.");
+    enter_node(0);
+    refresh_fov_and_paths();
+}
+
+// Commission a strike at the Jihad Table: pay spice, then raid. Returns false (no charge) if the
+// Jihad is shut or the commission is unaffordable. Pressure is applied on clear (resolve_strike).
 bool commission_strike(int f, int tier) {
     if (!endgame_open() || f < 0 || f >= FAC_COUNT || tier < 1 || tier > tune::kStrikeTiers) return false;
     const int cost = strike_cost(tier);
     if (g.pl.spice < cost) return false;
     g.pl.spice -= cost;
-    press_faction(f, tier);  // B10.2 will move this to the strike's on-clear hook
+    enter_strike(f, tier);
     return true;
 }
 
@@ -2921,6 +3015,7 @@ void enter_node(int idx) {
     g.alarm_turns = 0;
     g.alarm_spawn_cd = 0;
     g.in_cave = false;           // B9: entering a real node ends any cave excursion
+    g.in_strike = false;         // B10.2: entering a real node ends any strike excursion
     g.delta_count = 0;           // tile edits (churn, breaches) reset per node
     g.spawned_mask = 0;          // let spawn_zone_wildlife repopulate this fresh node
 
@@ -3273,6 +3368,13 @@ void try_move(int dx, int dy) {
                 *victim = Entity{EType::Corpse, Ai::Idle, uint8_t(g.cur_zone),
                                  victim->x, victim->y, 0, 0, 400};
                 end_season(campaign::kVictory);
+                consume_action();
+                return;
+            }
+            if (g.in_strike && victim->type == EType::Boss) {  // B10.2: the strike objective falls
+                *victim = Entity{EType::Corpse, Ai::Idle, uint8_t(g.cur_zone),
+                                 victim->x, victim->y, 0, 0, 200};
+                resolve_strike();  // press the target + melt home (wipes this zone)
                 consume_action();
                 return;
             }
@@ -3668,6 +3770,7 @@ bool click_step_toward(int gx, int gy) {
 // adjacent to a door they clicked (water seals the sietch — you leave by the door).
 void open_revelation(int dest);  // fwd (defined above)
 void use_door() {
+    if (g.in_strike) { abandon_strike(); return; }  // B10.2: leaving a strike unfinished = abandon it
     if (g.in_cave) { exit_cave(); return; }  // B9: the cavern door climbs back out to the field
     if (g.cur_node == 0) {
         g.log.push("You drink deep of the Water. Muad'Dib's vision takes you.");
@@ -5508,6 +5611,10 @@ void game_serialize(SaveWriter& w) {
     w.i32(g.cave_ret_x);
     w.i32(g.cave_ret_y);
     w.u8(g.cave_ret_zone);
+    w.u8(g.in_strike ? 1 : 0);      // B10.2: inside a Jihad strike excursion
+    w.u8(g.strike_faction);
+    w.u8(g.strike_tier);
+    w.u64(g.strike_seed);
     w.i32(g.storm_turns);
     w.i32(g.poison_turns);
     w.i32(g.thopter_x);
@@ -5598,6 +5705,10 @@ bool game_deserialize(SaveReader& r) {
     const int cave_ret_x = r.i32();
     const int cave_ret_y = r.i32();
     const uint8_t cave_ret_zone = r.u8();
+    const bool in_strike = r.u8() != 0;      // B10.2
+    const uint8_t strike_faction = r.u8();
+    const uint8_t strike_tier = r.u8();
+    const uint64_t strike_seed = r.u64();
     const int storm_turns = r.i32();
     const int poison_turns = r.i32();
     const int thopter_x = r.i32();
@@ -5655,6 +5766,10 @@ bool game_deserialize(SaveReader& r) {
     g.cave_ret_x = int16_t(cave_ret_x);
     g.cave_ret_y = int16_t(cave_ret_y);
     g.cave_ret_zone = cave_ret_zone;
+    g.in_strike = in_strike;          // B10.2
+    g.strike_faction = strike_faction;
+    g.strike_tier = strike_tier;
+    g.strike_seed = strike_seed;
     g.storm_turns = storm_turns;
     g.poison_turns = poison_turns;
     g.thopter_x = int16_t(thopter_x);
@@ -5670,7 +5785,9 @@ bool game_deserialize(SaveReader& r) {
     g.delta_count = delta_count;
     std::memcpy(g.deltas, deltas, sizeof g.deltas);
     int sx_, sy_;
-    if (in_cave) {  // B9: a hidden cavern is a transient sub-zone regenerated from its own seed
+    if (in_strike) {  // B10.2: a strike excursion regenerates its raid zone from the strike seed
+        map::generate(g.zone_, strike_seed, map::ZoneId(map::kZoneDeepPan), sx_, sy_);
+    } else if (in_cave) {  // B9: a hidden cavern is a transient sub-zone regenerated from its own seed
         map::generate(g.zone_, cave_seed, map::ZoneId(map::kZoneCave), sx_, sy_);
     } else if (at_rendezvous) {  // B7: the Ninth Rock is a fixed-seed desert zone, not a graph node
         map::generate(g.zone_, kNinthRockSeed, map::ZoneId(map::kZoneDesert), sx_, sy_);
@@ -5880,6 +5997,16 @@ int game_debug_golden_shards() { return g_meta.golden_shards; }
 int game_debug_capstone_available() { return capstone_available() ? 1 : 0; }
 void game_debug_finish_capstone() { finish_capstone(); }
 int game_debug_guild_broken_flag() { return g_meta.guild_broken; }
+void game_debug_press_faction(int f, int tier) { press_faction(f, tier); }  // data-core press (no raid)
+int game_debug_in_strike() { return g.in_strike ? 1 : 0; }
+int game_debug_strike_boss_count() {  // objectives present in the current strike zone
+    int n = 0;
+    for (int i = 1; i < kMaxEnts; ++i)
+        if (g.ents[i].hp > 0 && g.ents[i].zone == g.cur_zone && g.ents[i].type == EType::Boss) ++n;
+    return n;
+}
+void game_debug_resolve_strike() { resolve_strike(); }   // simulate clearing the objective
+void game_debug_abandon_strike() { abandon_strike(); }
 
 void game_debug_revelation(int* stage, int* inv_count) {
     if (stage) *stage = g.revelation_stage;

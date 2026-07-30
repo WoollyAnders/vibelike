@@ -1481,14 +1481,15 @@ int run_endgametest(audio::Mixer& mixer, const Assets& assets, const Colormaps& 
     game_debug_open_chosen_path();
     const bool opened = game_debug_endgame_open() == 1;
 
-    // (C) commissioned strikes press the target; an unaffordable one is refused
+    // (C) a strike commission is refused with no spice; directed pressure builds toward the pinnacle
+    // (pressure applies on a strike's CLEAR — the raid itself is exercised by striketest, so here we
+    // drive the data-core press directly).
     const bool broke = game_debug_commission_strike(2, 5) == 0;  // no spice yet
-    game_debug_add_spice(100000);
     const int p0 = game_debug_jihad_pressure(2);
-    game_debug_commission_strike(2, 5);
+    game_debug_press_faction(2, 5);
     const int p1 = game_debug_jihad_pressure(2);
     const bool not_yet = game_debug_pinnacle_available(2) == 0;  // 60 < 100 -> still building
-    game_debug_commission_strike(2, 5);
+    game_debug_press_faction(2, 5);
     const int p2 = game_debug_jihad_pressure(2);
     const bool pressed = p0 == 0 && p1 == 60 && p2 == 100;
     const bool opens_pinnacle = game_debug_pinnacle_available(2) == 1;
@@ -1519,6 +1520,45 @@ int run_endgametest(audio::Mixer& mixer, const Assets& assets, const Colormaps& 
     std::printf("endgametest %s (shut %d open %d press %d/%d/%d gate %d shard %d guildbroke %d cap %d refused %d persist %d)\n",
                 pass ? "PASS" : "FAIL", shut, opened, p0, p1, p2, opens_pinnacle, shard,
                 guild_broke, capstone, refused, persisted);
+    std::remove("meta.dat");
+    return pass ? 0 : 1;
+}
+
+// B10.2: a commissioned Jihad strike drops you into a procedural raid zone (an objective champion +
+// escort); clearing the objective presses the target Great Power and melts you home, while bailing
+// out the door abandons the strike (no pressure gained). Factions: 3 = House Corrino.
+int run_striketest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    std::remove("meta.dat");
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(31, services);
+    game_debug_open_chosen_path();
+    game_debug_add_spice(1000);
+
+    int hp, mhp, wa, mwa, lv, sp0; game_debug_player_stats(&hp, &mhp, &wa, &mwa, &lv, &sp0);
+    const int ok = game_debug_commission_strike(3 /*Corrino*/, 3);
+    int sp1; game_debug_player_stats(&hp, &mhp, &wa, &mwa, &lv, &sp1);
+    const bool entered = ok == 1 && game_debug_in_strike() == 1 && game_debug_cur_zone() == 2;
+    const bool paid = sp0 - sp1 == 60;                     // strike_cost(3) = 3 * kStrikeSpiceBase
+    const bool has_obj = game_debug_strike_boss_count() >= 1;
+    const int press_before = game_debug_jihad_pressure(3);
+
+    // clear the objective -> press the target + melt back to the hub
+    game_debug_resolve_strike();
+    const bool resolved = game_debug_in_strike() == 0 && game_debug_cur_node() == 0 &&
+                          game_debug_jihad_pressure(3) == press_before + 36;  // 3 * kStrikePressPerTier
+
+    // abandon path: commission again, then break off via the door -> pressure unchanged
+    game_debug_add_spice(1000);
+    game_debug_commission_strike(3, 2);
+    const bool re_entered = game_debug_in_strike() == 1;
+    const int press_mid = game_debug_jihad_pressure(3);
+    game_debug_abandon_strike();
+    const bool abandoned = game_debug_in_strike() == 0 && game_debug_cur_node() == 0 &&
+                           game_debug_jihad_pressure(3) == press_mid;
+
+    const bool pass = entered && paid && has_obj && resolved && re_entered && abandoned;
+    std::printf("striketest %s (entered %d paid %d obj %d resolved %d reenter %d abandoned %d)\n",
+                pass ? "PASS" : "FAIL", entered, paid, has_obj, resolved, re_entered, abandoned);
     std::remove("meta.dat");
     return pass ? 0 : 1;
 }
@@ -1562,7 +1602,7 @@ int main(int argc, char** argv) {
          statmodtest = false, affixtest = false, metamigratetest = false, ailmenttest = false,
          rttest = false, stuntest = false, classtest = false, guildtest = false,
          vendortest = false, patroltest = false, cavetest = false, trialtest = false,
-         endgametest = false;
+         endgametest = false, striketest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
         if (SDL_strcmp(argv[i], "--seamtest") == 0) seamtest = true;
@@ -1590,6 +1630,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--cavetest") == 0) cavetest = true;
         if (SDL_strcmp(argv[i], "--trialtest") == 0) trialtest = true;
         if (SDL_strcmp(argv[i], "--endgametest") == 0) endgametest = true;
+        if (SDL_strcmp(argv[i], "--striketest") == 0) striketest = true;
         if (SDL_strcmp(argv[i], "--animdebug") == 0) animdebug = true;
         if (SDL_strcmp(argv[i], "--rpgtest") == 0) rpgtest = true;
         if (SDL_strcmp(argv[i], "--clicktest") == 0) clicktest = true;
@@ -1635,6 +1676,7 @@ int main(int argc, char** argv) {
     if (cavetest) return run_cavetest(mixer, assets, cmaps);
     if (trialtest) return run_trialtest(mixer, assets, cmaps);
     if (endgametest) return run_endgametest(mixer, assets, cmaps);
+    if (striketest) return run_striketest(mixer, assets, cmaps);
     if (rpgtest) return run_rpgtest(mixer, assets, cmaps);
     if (reveltest) return run_reveltest(mixer, assets, cmaps);
     if (gauntlettest) return run_gauntlettest(mixer, assets, cmaps);

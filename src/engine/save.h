@@ -7,7 +7,7 @@
 #include <vector>
 
 inline constexpr uint32_t kSaveMagic = 0x54535544;  // 'DUST'
-inline constexpr uint16_t kSaveVersion = 17;  // v17: B9 hidden caves (in_cave + cave_seed/return)
+inline constexpr uint16_t kSaveVersion = 18;  // v18: B10.2 Jihad strike excursion (in_strike + seed)
 
 class SaveWriter {
 public:

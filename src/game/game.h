@@ -112,6 +112,11 @@ int game_debug_golden_shards();              // endgame: bitmask of Golden Path 
 int game_debug_capstone_available();         // endgame: 1 once all five shards are gathered
 void game_debug_finish_capstone();           // endgame: refuse the Golden Path (capstone done)
 int game_debug_guild_broken_flag();          // endgame: 1 once the Guild Navigator has fallen
+void game_debug_press_faction(int f, int tier);  // endgame: press faction f directly (data-core)
+int game_debug_in_strike();                  // B10.2: 1 while inside a strike excursion
+int game_debug_strike_boss_count();          // B10.2: strike objectives (bosses) in the raid zone
+void game_debug_resolve_strike();            // B10.2: clear the objective (press + return to hub)
+void game_debug_abandon_strike();            // B10.2: break off the strike (return, no press)
 void game_debug_revelation(int* stage, int* inv_count);  // B2b: Revelation stage + inv item count
 void game_debug_revelation_pick(int idx);  // B2b: choose row idx + confirm the Revelation
 int game_debug_cur_node();  // B1.3: current graph node index
