@@ -161,4 +161,15 @@ inline constexpr int kVoiceStunTurns = 8;   // stun world-turns the Voice inflic
 inline constexpr int kBlinkRange = 5;       // Prescient Step distance (tiles)
 inline constexpr int kPrescienceShield = 30;// Focus restored by Prescient Calm
 
+// --- Flasks: a three-slot belt (Life / Will / Utility) that recharges from kills + time ---
+// Used on the number keys (input binding is the UI phase); the charge economy + effects are here.
+inline constexpr int kFlaskSlots = 3;
+inline constexpr int kFlaskMaxCharges = 6;      // full belt per flask
+inline constexpr int kFlaskUseCost = 3;         // charges per sip (two sips per full flask)
+inline constexpr int kFlaskChargePerKill = 1;   // charges each flask gains per kill
+inline constexpr int kFlaskRechargeTurns = 8;   // + a slow time trickle: 1 charge every N turns
+inline constexpr int kFlaskLifeHeal = 40;       // Life flask: HP restored
+inline constexpr int kFlaskWillRestore = 12;    // Will flask: Will restored
+inline constexpr int kFlaskUtilShield = 20;     // Utility flask: Focus ward (also cleanses ailments)
+
 }  // namespace tune

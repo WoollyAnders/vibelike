@@ -1857,6 +1857,60 @@ int run_abilitytest(audio::Mixer& mixer, const Assets& assets, const Colormaps& 
     return pass ? 0 : 1;
 }
 
+// Flasks: a three-slot belt (0 Life, 1 Will, 2 Utility) with charges that refill from kills + time.
+// Each sip spends kFlaskUseCost charges. (Input binding on the number keys is the UI phase.)
+int run_flasktest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    std::remove("meta.dat");
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(88, services);
+
+    // (A) the belt starts full
+    const bool full = game_debug_flask_charges(0) == 6 && game_debug_flask_charges(1) == 6 &&
+                      game_debug_flask_charges(2) == 6;
+
+    // (B) the Life flask heals and spends its charges
+    int hp, mhp, wa, mwa, lv, sp; game_debug_player_stats(&hp, &mhp, &wa, &mwa, &lv, &sp);
+    game_debug_hurt(mhp / 3);
+    game_debug_player_stats(&hp, &mhp, &wa, &mwa, &lv, &sp);
+    const int c0 = game_debug_flask_charges(0);
+    const bool drank = game_debug_use_flask(0) == 1;
+    int hp2; game_debug_player_stats(&hp2, &mhp, &wa, &mwa, &lv, &sp);
+    const bool healed = hp2 > hp;
+    const bool spent = game_debug_flask_charges(0) == c0 - 3;   // kFlaskUseCost
+
+    // (C) too few charges -> the sip is refused
+    game_debug_set_flask_charges(0, 2);
+    const bool empty_gate = game_debug_use_flask(0) == 0 && game_debug_flask_charges(0) == 2;
+
+    // (D) the Will flask restores Will
+    game_debug_set_will(0);
+    game_debug_set_flask_charges(1, 6);
+    const bool will_drank = game_debug_use_flask(1) == 1 && game_debug_will() > 0;
+
+    // (E) the Utility flask flushes ailments (a Stun here) and wards
+    game_debug_stun_player(10);
+    game_debug_set_flask_charges(2, 6);
+    const bool util_drank = game_debug_use_flask(2) == 1 && game_debug_player_stun_turns() == 0;
+
+    // (F) charges refill (the on-kill / flask_gain mechanism)
+    game_debug_set_flask_charges(1, 0);
+    game_debug_flask_gain(2);
+    const bool recharged = game_debug_flask_charges(1) == 2;
+
+    // (G) a slow time trickle refills over turns
+    game_debug_set_flask_charges(1, 0);
+    game_debug_world_tick(9);   // crosses a kFlaskRechargeTurns boundary
+    const bool trickle = game_debug_flask_charges(1) >= 1;
+
+    const bool pass = full && drank && healed && spent && empty_gate && will_drank && util_drank &&
+                      recharged && trickle;
+    std::printf("flasktest %s (full %d life[drink %d heal %d spent %d] gate %d will %d util %d recharge %d trickle %d)\n",
+                pass ? "PASS" : "FAIL", full, drank, healed, spent, empty_gate, will_drank,
+                util_drank, recharged, trickle);
+    std::remove("meta.dat");
+    return pass ? 0 : 1;
+}
+
 // A4: click-to-move pathfinds to the goal and is deterministic across runs.
 int run_clicktest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
     GameServices services{&mixer, &assets, &cmaps};
@@ -1897,7 +1951,8 @@ int main(int argc, char** argv) {
          rttest = false, stuntest = false, classtest = false, guildtest = false,
          vendortest = false, patroltest = false, cavetest = false, trialtest = false,
          endgametest = false, striketest = false, pinnacletest = false, capstonetest = false,
-         longridetest = false, choamtest = false, crafttest = false, abilitytest = false;
+         longridetest = false, choamtest = false, crafttest = false, abilitytest = false,
+         flasktest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
         if (SDL_strcmp(argv[i], "--seamtest") == 0) seamtest = true;
@@ -1932,6 +1987,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--choamtest") == 0) choamtest = true;
         if (SDL_strcmp(argv[i], "--crafttest") == 0) crafttest = true;
         if (SDL_strcmp(argv[i], "--abilitytest") == 0) abilitytest = true;
+        if (SDL_strcmp(argv[i], "--flasktest") == 0) flasktest = true;
         if (SDL_strcmp(argv[i], "--animdebug") == 0) animdebug = true;
         if (SDL_strcmp(argv[i], "--rpgtest") == 0) rpgtest = true;
         if (SDL_strcmp(argv[i], "--clicktest") == 0) clicktest = true;
@@ -1984,6 +2040,7 @@ int main(int argc, char** argv) {
     if (choamtest) return run_choamtest(mixer, assets, cmaps);
     if (crafttest) return run_crafttest(mixer, assets, cmaps);
     if (abilitytest) return run_abilitytest(mixer, assets, cmaps);
+    if (flasktest) return run_flasktest(mixer, assets, cmaps);
     if (rpgtest) return run_rpgtest(mixer, assets, cmaps);
     if (reveltest) return run_reveltest(mixer, assets, cmaps);
     if (gauntlettest) return run_gauntlettest(mixer, assets, cmaps);

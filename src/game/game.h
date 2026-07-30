@@ -149,6 +149,10 @@ int game_debug_cast_ability(int ab, int tx, int ty);  // C7: 1 Voice, 2 Blink, 3
 int game_debug_will();                       // C7: current Will
 void game_debug_set_will(int w);             // C7: set current Will (test setup)
 int game_debug_ability_cd();                 // C7: shared ability cooldown remaining (world turns)
+int game_debug_use_flask(int slot);          // flasks: 0 Life / 1 Will / 2 Utility (1 = drunk)
+int game_debug_flask_charges(int slot);      // flasks: current charges in a slot
+void game_debug_set_flask_charges(int slot, int c);  // flasks: set charges (test setup)
+void game_debug_flask_gain(int n);           // flasks: add n charges to every flask (capped)
 void game_debug_revelation(int* stage, int* inv_count);  // B2b: Revelation stage + inv item count
 void game_debug_revelation_pick(int idx);  // B2b: choose row idx + confirm the Revelation
 int game_debug_cur_node();  // B1.3: current graph node index

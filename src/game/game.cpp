@@ -174,6 +174,8 @@ struct Player {
     int shield_delay = 0;  // C2: turns until the shield recharges (reset on taking a hit)
     int will = 0;          // D1: current Will (ability fuel); C7 abilities spend it
     int ability_cd = 0;    // C7: shared ability cooldown (world turns remaining)
+    int flask_charges[tune::kFlaskSlots] = {tune::kFlaskMaxCharges, tune::kFlaskMaxCharges,
+                                            tune::kFlaskMaxCharges};  // Life / Will / Utility belt
     int ail_poison_dmg = 0;    // C3: combat-poison on the player — damage/turn (DT_TOX, resisted)
     int ail_poison_turns = 0;  // C3: remaining poison ticks on the player
     int ail_scorch_dmg = 0;    // C3: Scorch DoT — DT_HEAT (Heat Resistance mitigates)
@@ -2373,6 +2375,39 @@ bool cast_ability(int ab, int tx, int ty) {
     return true;
 }
 
+// ---- Flasks: the three-slot belt (Life / Will / Utility) --------------------------------------------
+// Charges refill from kills (flask_gain on each kill) + a slow time trickle (upkeep). Not part of the
+// state hash (deterministic + no RNG, like the ability cooldown) — keeps the cross-build baseline.
+void flask_gain(int n) {
+    if (n <= 0) return;
+    for (int i = 0; i < tune::kFlaskSlots; ++i) {
+        g.pl.flask_charges[i] += n;
+        if (g.pl.flask_charges[i] > tune::kFlaskMaxCharges) g.pl.flask_charges[i] = tune::kFlaskMaxCharges;
+    }
+}
+bool use_flask(int slot) {
+    if (slot < 0 || slot >= tune::kFlaskSlots || g.pl.dead) return false;
+    if (g.pl.flask_charges[slot] < tune::kFlaskUseCost) return false;
+    g.pl.flask_charges[slot] -= tune::kFlaskUseCost;
+    switch (slot) {
+        case 0:  // Life
+            gain_hp(tune::kFlaskLifeHeal);
+            g.log.push("You drink deep — a Life flask. The body knits.");
+            break;
+        case 1:  // Will
+            gain_will(tune::kFlaskWillRestore);
+            g.log.push("A Will flask — prescience sharpens.");
+            break;
+        default:  // Utility: flush every ailment + raise a Focus ward
+            g.pl.ail_poison_turns = g.pl.ail_scorch_turns = g.pl.ail_bleed_turns = 0;
+            g.pl.ail_blind_turns = g.pl.ail_stun_turns = g.pl.ail_frozen_turns = 0;
+            gain_shield(tune::kFlaskUtilShield);
+            g.log.push("A Utility flask — the venoms flush, the mind steadies.");
+            break;
+    }
+    return true;
+}
+
 // RT2: Freeze duration (world-tick count) scaled by a cold hit vs the target's eff-max-Life,
 // clamped to [0.3, 3.0] s. Below the 0.3 s floor -> 0 (no freeze). Pure integer math (firewall).
 int freeze_ticks_for(int cold_dmg, int max_life) {
@@ -2903,6 +2938,7 @@ void upkeep() {
     // the Litany holds the body together
     if (g.pl.litany_turns > 0) --g.pl.litany_turns;
     if (g.pl.ability_cd > 0) --g.pl.ability_cd;  // C7: the shared ability cooldown ticks down
+    if (g.pl.turn % tune::kFlaskRechargeTurns == 0) flask_gain(1);  // flasks: a slow time trickle
 
     // pan adder venom burns water
     if (g.poison_turns > 0) {
@@ -3786,6 +3822,7 @@ void try_move(int dx, int dy) {
             // D1 on-kill: Life on Kill + Focus on Kill.
             gain_hp(affix_total(items::AK_LIFE_ON_KILL));
             gain_shield(affix_total(items::AK_FOCUS_ON_KILL));
+            flask_gain(tune::kFlaskChargePerKill);  // flasks charge from the kill
             if (foe) {
                 int xp = foe->xp;
                 if (g.pl.st.level > foe->level + 2) xp /= 2;
@@ -6022,6 +6059,7 @@ void game_serialize(SaveWriter& w) {
     w.i32(g.pl.shield_delay);  // C2
     w.i32(g.pl.will);          // D1
     w.i32(g.pl.ability_cd);    // C7: shared ability cooldown
+    for (int i = 0; i < tune::kFlaskSlots; ++i) w.i32(g.pl.flask_charges[i]);  // flask belt
     w.i32(g.pl.ail_poison_dmg);    // C3
     w.i32(g.pl.ail_poison_turns);  // C3
     w.i32(g.pl.ail_scorch_dmg);    // C3
@@ -6121,6 +6159,7 @@ bool game_deserialize(SaveReader& r) {
     pl.shield_delay = r.i32();  // C2
     pl.will = r.i32();          // D1
     pl.ability_cd = r.i32();    // C7: shared ability cooldown
+    for (int i = 0; i < tune::kFlaskSlots; ++i) pl.flask_charges[i] = r.i32();  // flask belt
     pl.ail_poison_dmg = r.i32();    // C3
     pl.ail_poison_turns = r.i32();  // C3
     pl.ail_scorch_dmg = r.i32();    // C3
@@ -6554,6 +6593,15 @@ int game_debug_cast_ability(int ab, int tx, int ty) { return cast_ability(ab, tx
 int game_debug_will() { return g.pl.will; }
 void game_debug_set_will(int w) { g.pl.will = w; }
 int game_debug_ability_cd() { return g.pl.ability_cd; }
+// --- flask hooks ---
+int game_debug_use_flask(int slot) { return use_flask(slot) ? 1 : 0; }
+int game_debug_flask_charges(int slot) {
+    return (slot >= 0 && slot < tune::kFlaskSlots) ? g.pl.flask_charges[slot] : -1;
+}
+void game_debug_set_flask_charges(int slot, int c) {
+    if (slot >= 0 && slot < tune::kFlaskSlots) g.pl.flask_charges[slot] = c;
+}
+void game_debug_flask_gain(int n) { flask_gain(n); }
 
 void game_debug_revelation(int* stage, int* inv_count) {
     if (stage) *stage = g.revelation_stage;
