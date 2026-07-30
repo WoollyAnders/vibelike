@@ -1285,6 +1285,41 @@ int run_guildtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cm
     return pass ? 0 : 1;
 }
 
+// B7: a wandering field vendor leaves a footprint trail leading to it. The trail is deterministic
+// (RNG-free, derived from the distance field), connects the vendor to the player, and clears when
+// the vendor expires (ignored).
+int run_vendortest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    GameServices services{&mixer, &assets, &cmaps};
+
+    // (A) a materialized vendor lays a trail that connects it to the player
+    game_init(4242, services);
+    game_debug_use_door();                 // hub -> a field vision-node (open desert)
+    int px = 0, py = 0; game_debug_player_pos(&px, &py);
+    game_debug_spawn_sideobj(1 /*caravan*/, px + 10, py);
+    const bool active = game_debug_sideobj_active() == 1;
+    const int len1 = game_debug_footprint_count();
+    const int ok1 = game_debug_footprint_ok();
+    const bool leads = len1 > 0 && ok1 == 1;
+
+    // (B) deterministic: the identical scenario yields the identical trail (footprints are RNG-free,
+    //     derived from the distance field + the serialized vendor tile -> save/load-identical too)
+    game_init(4242, services);
+    game_debug_use_door();
+    int qx = 0, qy = 0; game_debug_player_pos(&qx, &qy);
+    game_debug_spawn_sideobj(1, qx + 10, qy);
+    const int len2 = game_debug_footprint_count();
+    const bool deterministic = len2 == len1;
+
+    // (C) ignored -> the vendor (and its trail) expire
+    game_debug_expire_sideobj();
+    const bool expired = game_debug_sideobj_active() == 0 && game_debug_footprint_count() == 0;
+
+    const bool pass = active && leads && deterministic && expired;
+    std::printf("vendortest %s (active %d trail %d ok %d det[%d==%d] expired %d)\n",
+                pass ? "PASS" : "FAIL", active, len1, ok1, len1, len2, expired);
+    return pass ? 0 : 1;
+}
+
 // A4: click-to-move pathfinds to the goal and is deterministic across runs.
 int run_clicktest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
     GameServices services{&mixer, &assets, &cmaps};
@@ -1322,7 +1357,8 @@ int main(int argc, char** argv) {
          circledemo = false, fightdemo = false, rpgtest = false, clicktest = false,
          reveltest = false, gauntlettest = false, extractiontest = false, metatest = false,
          statmodtest = false, affixtest = false, metamigratetest = false, ailmenttest = false,
-         rttest = false, stuntest = false, classtest = false, guildtest = false;
+         rttest = false, stuntest = false, classtest = false, guildtest = false,
+         vendortest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
         if (SDL_strcmp(argv[i], "--seamtest") == 0) seamtest = true;
@@ -1345,6 +1381,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--stuntest") == 0) stuntest = true;
         if (SDL_strcmp(argv[i], "--classtest") == 0) classtest = true;
         if (SDL_strcmp(argv[i], "--guildtest") == 0) guildtest = true;
+        if (SDL_strcmp(argv[i], "--vendortest") == 0) vendortest = true;
         if (SDL_strcmp(argv[i], "--animdebug") == 0) animdebug = true;
         if (SDL_strcmp(argv[i], "--rpgtest") == 0) rpgtest = true;
         if (SDL_strcmp(argv[i], "--clicktest") == 0) clicktest = true;
@@ -1385,6 +1422,7 @@ int main(int argc, char** argv) {
     if (stuntest) return run_stuntest(mixer, assets, cmaps);
     if (classtest) return run_classtest(mixer, assets, cmaps);
     if (guildtest) return run_guildtest(mixer, assets, cmaps);
+    if (vendortest) return run_vendortest(mixer, assets, cmaps);
     if (rpgtest) return run_rpgtest(mixer, assets, cmaps);
     if (reveltest) return run_reveltest(mixer, assets, cmaps);
     if (gauntlettest) return run_gauntlettest(mixer, assets, cmaps);

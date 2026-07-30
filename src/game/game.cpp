@@ -286,6 +286,11 @@ struct GameState {
     int delta_count = 0;
 
     int16_t dmap[map::N];
+    // B7: footprint trail from a materialized wandering vendor to the player. Transient/derived from
+    // dmap each refresh (RNG-free) — NOT serialized; recomputed on load, so it's save/load-identical.
+    static constexpr int kMaxFootprints = 96;
+    int16_t footprints_x[kMaxFootprints] = {}, footprints_y[kMaxFootprints] = {};
+    int footprint_count = 0;
     iso::Camera cam;
     iso::DrawList draw_list;
     particles::Pool particles;
@@ -954,11 +959,43 @@ void recompute_light() {
     light::compute(z, srcs, n, light::kAmbientByHour[hour_now()], g.lightmap);
 }
 
+// B7: lay the wandering vendor's footprint trail. Reuses the player-centered dmap just computed:
+// walk from the vendor tile steepest-downhill (toward the player) collecting tiles — the shortest
+// path between them, no extra Dijkstra, RNG-free. Only when a vendor is materialized in this zone.
+void compute_footprints() {
+    g.footprint_count = 0;
+    if (!g.sideobj_spawned || g.sideobj_zone != g.cur_zone) return;
+    int cx = g.sideobj_x, cy = g.sideobj_y;
+    if (cx < 0 || cx >= map::W || cy < 0 || cy >= map::H) return;
+    if (g.dmap[cy * map::W + cx] < 0) return;  // vendor unreachable — no trail
+    const Entity& p = player_ent();
+    for (int steps = 0; steps < GameState::kMaxFootprints; ++steps) {
+        if (cx == p.x && cy == p.y) break;                 // reached the player
+        if (!(cx == g.sideobj_x && cy == g.sideobj_y)) {   // skip the vendor's own tile
+            g.footprints_x[g.footprint_count] = int16_t(cx);
+            g.footprints_y[g.footprint_count] = int16_t(cy);
+            ++g.footprint_count;
+        }
+        int best = g.dmap[cy * map::W + cx], bx = cx, by = cy;  // step toward the player (lower dmap)
+        for (int dy = -1; dy <= 1; ++dy)
+            for (int dx = -1; dx <= 1; ++dx) {
+                if (!dx && !dy) continue;
+                const int nx = cx + dx, ny = cy + dy;
+                if (nx < 0 || nx >= map::W || ny < 0 || ny >= map::H) continue;
+                const int d = g.dmap[ny * map::W + nx];
+                if (d >= 0 && d < best) { best = d; bx = nx; by = ny; }
+            }
+        if (bx == cx && by == cy) break;  // no downhill step (stuck)
+        cx = bx; cy = by;
+    }
+}
+
 void refresh_fov_and_paths() {
     map::compute_fov(zone(), player_ent().x, player_ent().y, fov_radius());
     // An enclosed indoor room is lit whole (no black no-man's-land in the sietch).
     map::reveal_room(zone(), player_ent().x, player_ent().y);
     map::compute_dijkstra(zone(), player_ent().x, player_ent().y, g.dmap);
+    compute_footprints();  // B7: vendor trail (derived from dmap)
     recompute_light();
 }
 
@@ -3974,6 +4011,24 @@ void pass_ground_decals(RenderCtx& r) {
                 light_at(g.wrm.x, g.wrm.y));
 }
 
+// B7: a wandering field vendor leaves footprints leading to it — a ground overlay (like the worm
+// ripples) drawn only on tiles the player has seen. Placeholder sprite until real art (E2).
+void pass_footprints(RenderCtx& r) {
+    if (g.footprint_count <= 0) return;
+    const SpriteSheet* fp = r.assets->get("footprint");
+    if (!fp) fp = r.assets->get("ripple");  // reuse the ripple decal as a placeholder
+    if (!fp) return;
+    int sx, sy;
+    for (int i = 0; i < g.footprint_count; ++i) {
+        const int tx = g.footprints_x[i], ty = g.footprints_y[i];
+        if (tx < 0 || tx >= map::W || ty < 0 || ty >= map::H) continue;
+        const int idx = ty * map::W + tx;
+        if (!(r.z->vis[idx] & (map::V_VISIBLE | map::V_REMEMBERED))) continue;
+        iso::tile_to_screen(tx, ty, g.cam, sx, sy);
+        draw_sprite(r.ctx, *fp, 0, sx, sy, tile_light(r, idx));
+    }
+}
+
 // A4: a pulsing iso-diamond reticle on the tile under the mouse cursor.
 void pass_cursor(RenderCtx& r) {
     if (g.hover_tx < 0 || g.choosing || g.menu_open) return;
@@ -4964,6 +5019,7 @@ void game_render(Framebuffer& frame) {
 
     pass_ground(r);
     pass_ground_decals(r);
+    pass_footprints(r);  // B7: wandering-vendor trail overlay
     pass_walls(r);      // \
     pass_objects(r);    //  > populate the y-sorted scene list
     pass_decor(r);      //  > sietch furniture + exit door
@@ -5296,6 +5352,51 @@ void game_debug_add_guild_debt(int n) {  // simulate n unpaid runs, honoring the
 void game_debug_pay_guild(int reduce) { guild_tithe_pay(reduce); }  // pay the tithe down
 void game_debug_break_guild() { g_meta.guild_broken = 1; meta_save(); }  // Guild Navigator falls (B10)
 int game_debug_foe_hp(int etype) { return foe_hp(EType(etype)); }  // scaled HP at the current depth+tithe
+
+// B7: wandering-vendor / footprint-trail hooks (vendortest).
+void game_debug_spawn_sideobj(int kind, int x, int y) {  // place + materialize a vendor near (x,y)
+    g.sideobj_kind = kind;
+    g.sideobj_zone = g.cur_zone;
+    g.sideobj_expires = g.pl.turn + 220;
+    g.sideobj_spawned = false;
+    const EType et = kind == 1 ? EType::Caravan : EType::Envoy;
+    for (int rr = 0; rr <= 12 && !g.sideobj_spawned; ++rr)
+        for (int dy = -rr; dy <= rr && !g.sideobj_spawned; ++dy)
+            for (int dx = -rr; dx <= rr && !g.sideobj_spawned; ++dx) {
+                const int nx = x + dx, ny = y + dy;
+                if (nx < 1 || nx >= map::W - 1 || ny < 1 || ny >= map::H - 1) continue;
+                if (!zone().walkable(nx, ny) || entity_at(nx, ny, g.cur_zone)) continue;
+                for (int i = 1; i < kMaxEnts; ++i)
+                    if (g.ents[i].type == EType::None) {
+                        g.ents[i] = Entity{et, Ai::Idle, uint8_t(g.cur_zone),
+                                           int16_t(nx), int16_t(ny), 10, 0, 0};
+                        g.sideobj_x = int16_t(nx); g.sideobj_y = int16_t(ny);
+                        g.sideobj_spawned = true;
+                        break;
+                    }
+            }
+    refresh_fov_and_paths();  // lays the footprint trail
+}
+int game_debug_footprint_count() { return g.footprint_count; }
+int game_debug_sideobj_active() { return g.sideobj_kind; }
+int game_debug_footprint_ok() {  // trail connects vendor <-> player (first tile by the vendor, last by the player)
+    if (g.footprint_count <= 0) return 0;
+    auto adj = [](int ax, int ay, int bx, int by) {
+        const int dx = ax > bx ? ax - bx : bx - ax, dy = ay > by ? ay - by : by - ay;
+        return dx <= 1 && dy <= 1;
+    };
+    const Entity& p = player_ent();
+    const int last = g.footprint_count - 1;
+    return adj(g.footprints_x[0], g.footprints_y[0], g.sideobj_x, g.sideobj_y) &&
+           adj(g.footprints_x[last], g.footprints_y[last], p.x, p.y) ? 1 : 0;
+}
+void game_debug_expire_sideobj() {  // simulate the expiry despawn
+    for (int i = 1; i < kMaxEnts; ++i)
+        if (g.ents[i].type == EType::Caravan || g.ents[i].type == EType::Envoy)
+            g.ents[i].type = EType::None;
+    g.sideobj_kind = 0; g.sideobj_spawned = false;
+    refresh_fov_and_paths();
+}
 
 void game_debug_revelation(int* stage, int* inv_count) {
     if (stage) *stage = g.revelation_stage;

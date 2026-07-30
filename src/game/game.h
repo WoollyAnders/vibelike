@@ -79,6 +79,11 @@ void game_debug_add_guild_debt(int n);  // B6: accrue n unpaid runs
 void game_debug_pay_guild(int reduce);  // B6: pay the tithe down
 void game_debug_break_guild();          // B6: Guild Navigator falls -> raise the cap
 int game_debug_foe_hp(int etype);       // B6: scaled foe HP at the current depth + tithe
+void game_debug_spawn_sideobj(int kind, int x, int y);  // B7: place+materialize a wandering vendor
+int game_debug_footprint_count();       // B7: footprint-trail length
+int game_debug_footprint_ok();          // B7: 1 if the trail connects the vendor to the player
+int game_debug_sideobj_active();        // B7: current sideobj kind (0 = none)
+void game_debug_expire_sideobj();       // B7: simulate the vendor's expiry despawn
 void game_debug_revelation(int* stage, int* inv_count);  // B2b: Revelation stage + inv item count
 void game_debug_revelation_pick(int idx);  // B2b: choose row idx + confirm the Revelation
 int game_debug_cur_node();  // B1.3: current graph node index
