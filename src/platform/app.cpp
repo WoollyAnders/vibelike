@@ -1278,9 +1278,17 @@ int run_guildtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cm
     const bool persisted = game_debug_guild_debt() == tune::kGuildDebtEndgameCap &&
                            game_debug_guild_difficulty() == tune::kGuildDebtEndgameCap;  // broken persisted
 
-    const bool pass = fresh && harder && paid && camp_capped && end_capped && persisted;
-    std::printf("guildtest %s (fresh %d hp %d->%d diff4 %d paid %d camp %d end %d persist %d)\n",
-                pass ? "PASS" : "FAIL", fresh, hp0, hp4, diff4, paid, camp_capped, end_capped, persisted);
+    // (F) B7 hub-signal: with spice, signalling the Guild from the sietch pays the tithe down
+    const int debt_before = game_debug_guild_debt();
+    const bool broke_signal = game_debug_signal_guild() == 0;  // no spice -> can't pay
+    game_debug_add_spice(500);
+    const bool signalled = game_debug_signal_guild() == 1 && game_debug_guild_debt() < debt_before;
+
+    const bool pass = fresh && harder && paid && camp_capped && end_capped && persisted &&
+                      broke_signal && signalled;
+    std::printf("guildtest %s (fresh %d hp %d->%d diff4 %d paid %d camp %d end %d persist %d signal[%d %d])\n",
+                pass ? "PASS" : "FAIL", fresh, hp0, hp4, diff4, paid, camp_capped, end_capped, persisted,
+                broke_signal, signalled);
     std::remove("meta.dat");
     return pass ? 0 : 1;
 }

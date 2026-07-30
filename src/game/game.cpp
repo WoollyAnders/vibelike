@@ -1193,6 +1193,16 @@ void grant_xp(int amount) {
 // the loot tables. Risk feeds reward.
 int run_difficulty() { return g.season.denied + g.season.alert / 25 + guild_difficulty(); }  // B6: unpaid tithe -> richer loot
 
+// B7: signal the Spacing Guild from the sietch hub to pay the tithe down on demand (the reliable
+// counterpart to bumping the wandering field Envoy). Costs spice; returns false if you can't afford it.
+bool signal_guild() {
+    const int cost = 8 + run_difficulty();
+    if (g.pl.spice < cost) return false;
+    g.pl.spice -= cost;
+    guild_tithe_pay(tune::kGuildBribeReduce);
+    return true;
+}
+
 // D1: item level of a drop = the current graph node's Awaken level (1..10). Deeper runs roll
 // higher tiers. run_difficulty() still feeds the rarity bonus.
 int drop_ilvl() {
@@ -3474,7 +3484,7 @@ int menu_row_under_mouse(const InputState& in) {
     if (g.menu_open >= 1 && g.menu_open <= 4) {           // vendor lists (R2: 2x)
         const int x0 = fb::W / 2 - 300, y0 = 280;
         if (mx < x0 + 16 || mx > x0 + 16 + 568) return -1;
-        const int counts[5] = {0, 5, 3, 5, 4};
+        const int counts[5] = {0, 6, 3, 5, 4};  // B7: Naib gained "Signal the Guild"
         for (int i = 0; i < counts[g.menu_open]; ++i) {
             const int ry = y0 + 80 + i * 32 - 4;
             if (my >= ry && my < ry + 32) return i;
@@ -3565,7 +3575,7 @@ bool game_update(const InputState& in) {
     // vendor menus pause the world (browsing is free)
     if (g.menu_open) {
         // 5 = character sheet, 6 = inventory, 7 = the vault
-        int counts[8] = {0, 5, 3, 5, 4, 3 + kTalentCount + 1, 13, 13};
+        int counts[8] = {0, 6, 3, 5, 4, 3 + kTalentCount + 1, 13, 13};  // B7: Naib +"Signal the Guild"
         const int n = counts[g.menu_open];
         // A6: mouse — hovering a row selects it, left-click confirms it, right-click closes.
         const int mrow = menu_row_under_mouse(in);
@@ -3711,7 +3721,16 @@ bool game_update(const InputState& in) {
                     g.menu_sel = 0;
                     g.vault_page = 0;
                     break;
-                case 14: g.menu_open = 0; break;  // leave
+                case 14: {  // Naib: signal the Guild to pay the tithe (reliable hub payment)
+                    const int cost = 8 + run_difficulty();
+                    if (signal_guild())
+                        g.log.push("You signal the Guild from Sietch Tabr. -%d spice; the tithe eases.",
+                                   cost);
+                    else
+                        g.log.push("'The Guild answers only for spice. You carry %d.'", g.pl.spice);
+                    break;
+                }
+                case 15: g.menu_open = 0; break;  // leave
                 case 20:  // Sayyadina: spice tribute
                     if (g.pl.spice >= 5) {
                         g.pl.spice -= 5;
@@ -4871,10 +4890,10 @@ void pass_ui(RenderCtx& r) {
     } else
     // Vendor menu overlay.
     if (g.menu_open) {
-        static const char* kMenus[5][5] = {
+        static const char* kMenus[5][6] = {
             {},
             {"Tribute 200 water  (+10 standing)", "Ask about the season",
-             "A task for the tribe", "Open the tribe vault", "Leave"},
+             "A task for the tribe", "Open the tribe vault", "Signal the Guild (pay the tithe)", "Leave"},
             {"Offer 5 spice  (+12 standing)", "Healing trance  (6 spice)", "Leave", nullptr},
             {"Demolition charge  (5 spice)", "Two thumpers  (3 spice)",
              "Toxin vial  (2 spice)", "Glowglobe  (3 spice)", "Leave"},
@@ -4891,7 +4910,7 @@ void pass_ui(RenderCtx& r) {
         char res[48];
         std::snprintf(res, sizeof res, "water %d  spice %d", g.pl.water, g.pl.spice);
         draw_text(ctx, res, x0 + 24, y0 + 44, 14);
-        for (int i = 0; i < 5 && kMenus[g.menu_open][i]; ++i) {
+        for (int i = 0; i < 6 && kMenus[g.menu_open][i]; ++i) {
             const bool sel = i == g.menu_sel;
             if (sel) fill_rect(ctx, x0 + 16, y0 + 80 + i * 32 - 4, 568, 28, 4);
             draw_text(ctx, kMenus[g.menu_open][i], x0 + 24, y0 + 80 + i * 32,
@@ -5397,6 +5416,8 @@ void game_debug_expire_sideobj() {  // simulate the expiry despawn
     g.sideobj_kind = 0; g.sideobj_spawned = false;
     refresh_fov_and_paths();
 }
+void game_debug_add_spice(int n) { g.pl.spice += n; }        // test helper
+int game_debug_signal_guild() { return signal_guild() ? 1 : 0; }  // B7: hub tithe payment
 
 void game_debug_revelation(int* stage, int* inv_count) {
     if (stage) *stage = g.revelation_stage;
