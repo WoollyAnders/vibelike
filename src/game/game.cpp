@@ -1072,6 +1072,10 @@ struct Meta {
     // --- Landsraad / CHOAM (DME10) --- the Imperial politics layer, powered by CHOAM. House alliances
     // persist; CHOAM control is DERIVED from toppled homeworlds (conquest) + courted Houses (diplomacy).
     uint8_t house_allied = 0;        // bit per faction: courted as a CHOAM ally
+    // --- D2 crafting (DME11) --- the sietch bench spends materials to work gear. Maker Hide (from
+    // Jacurutu, above) is the Divine reagent (reroll affix values); Worm Tooth (sanctioned deep-desert
+    // finds) reforges a weapon. Both persist as counts.
+    uint8_t worm_teeth = 0;
 };
 Meta g_meta;
 
@@ -1103,6 +1107,7 @@ int guild_difficulty() {
     return d < 0 ? 0 : d > cap ? cap : d;
 }
 
+inline constexpr uint32_t kMetaVB = 0x42454D44u;  // 'DMEB' (D2 crafting: + worm_teeth)
 inline constexpr uint32_t kMetaVA = 0x41454D44u;  // 'DMEA' (Landsraad/CHOAM: + house_allied)
 inline constexpr uint32_t kMetaV9 = 0x39454D44u;  // 'DME9' (Long Ride: + maker_hides / best_ride_leg)
 inline constexpr uint32_t kMetaV8 = 0x38454D44u;  // 'DME8' (endgame: + Jihad pressure/pinnacles/shards)
@@ -1139,7 +1144,7 @@ void meta_load() {
     if (!f) return;
     uint32_t magic = 0;
     if (std::fread(&magic, 4, 1, f) == 1) {
-        if (magic == kMetaVA || magic == kMetaV9 || magic == kMetaV8 || magic == kMetaV7 || magic == kMetaV6 || magic == kMetaV5 || magic == kMetaV4) {  // native widened-Inst format
+        if (magic == kMetaVB || magic == kMetaVA || magic == kMetaV9 || magic == kMetaV8 || magic == kMetaV7 || magic == kMetaV6 || magic == kMetaV5 || magic == kMetaV4) {  // native widened-Inst format
             (void)!std::fread(&g_meta.runs, 4, 1, f);
             (void)!std::fread(&g_meta.endings_seen, 1, 1, f);
             (void)!std::fread(&g_meta.stash_count, 1, 1, f);
@@ -1151,30 +1156,33 @@ void meta_load() {
             (void)!std::fread(&g_meta.st, sizeof g_meta.st, 1, f);
             (void)!std::fread(g_meta.equip, sizeof g_meta.equip, 1, f);
             (void)!std::fread(g_meta.inv, sizeof g_meta.inv, 1, f);
-            if (magic >= kMetaV5 && magic <= kMetaVA) {  // C3: base class + ascendancy (DME4 -> 0/None)
+            if (magic >= kMetaV5 && magic <= kMetaVB) {  // C3: base class + ascendancy (DME4 -> 0/None)
                 (void)!std::fread(&g_meta.base_class, 1, 1, f);
                 (void)!std::fread(&g_meta.ascendancy, 1, 1, f);
             }
-            if (magic >= kMetaV6 && magic <= kMetaVA) {  // B6: guild tithe (DME5/DME4 leave them at 0)
+            if (magic >= kMetaV6 && magic <= kMetaVB) {  // B6: guild tithe (DME5/DME4 leave them at 0)
                 (void)!std::fread(&g_meta.guild_debt, 1, 1, f);
                 (void)!std::fread(&g_meta.guild_broken, 1, 1, f);
             }
-            if (magic >= kMetaV7 && magic <= kMetaVA) {  // Desert Trials (DME6 and earlier leave it at 0)
+            if (magic >= kMetaV7 && magic <= kMetaVB) {  // Desert Trials (DME6 and earlier leave it at 0)
                 (void)!std::fread(&g_meta.trials_done, 1, 1, f);
             }
-            if (magic >= kMetaV8 && magic <= kMetaVA) {  // endgame Jihad state (DME7 and earlier -> 0)
+            if (magic >= kMetaV8 && magic <= kMetaVB) {  // endgame Jihad state (DME7 and earlier -> 0)
                 (void)!std::fread(&g_meta.chosen_path, 1, 1, f);
                 (void)!std::fread(g_meta.jihad_pressure, sizeof g_meta.jihad_pressure, 1, f);
                 (void)!std::fread(&g_meta.pinnacle_cleared, 1, 1, f);
                 (void)!std::fread(&g_meta.golden_shards, 1, 1, f);
                 (void)!std::fread(&g_meta.capstone_done, 1, 1, f);
             }
-            if (magic >= kMetaV9 && magic <= kMetaVA) {  // The Long Ride (DME8 and earlier leave it at 0)
+            if (magic >= kMetaV9 && magic <= kMetaVB) {  // The Long Ride (DME8 and earlier leave it at 0)
                 (void)!std::fread(&g_meta.maker_hides, 1, 1, f);
                 (void)!std::fread(&g_meta.best_ride_leg, 1, 1, f);
             }
-            if (magic == kMetaVA) {  // Landsraad/CHOAM (DME9 and earlier leave it at 0)
+            if (magic >= kMetaVA && magic <= kMetaVB) {  // Landsraad/CHOAM (DME9 and earlier -> 0)
                 (void)!std::fread(&g_meta.house_allied, 1, 1, f);
+            }
+            if (magic == kMetaVB) {  // D2 crafting (DMEA and earlier leave it at 0)
+                (void)!std::fread(&g_meta.worm_teeth, 1, 1, f);
             }
         } else if (magic == kMetaV3 || magic == kMetaV2) {  // legacy 4-byte items -> convert
             (void)!std::fread(&g_meta.runs, 4, 1, f);
@@ -1206,7 +1214,7 @@ void meta_load() {
 void meta_save() {
     FILE* f = std::fopen("meta.dat", "wb");
     if (!f) return;
-    std::fwrite(&kMetaVA, 4, 1, f);
+    std::fwrite(&kMetaVB, 4, 1, f);
     std::fwrite(&g_meta.runs, 4, 1, f);
     std::fwrite(&g_meta.endings_seen, 1, 1, f);
     std::fwrite(&g_meta.stash_count, 1, 1, f);
@@ -1231,6 +1239,7 @@ void meta_save() {
     std::fwrite(&g_meta.maker_hides, 1, 1, f);      // The Long Ride (DME9)
     std::fwrite(&g_meta.best_ride_leg, 1, 1, f);
     std::fwrite(&g_meta.house_allied, 1, 1, f);     // Landsraad/CHOAM (DMEA)
+    std::fwrite(&g_meta.worm_teeth, 1, 1, f);       // D2 crafting (DMEB)
     std::fclose(f);
 }
 
@@ -1399,6 +1408,49 @@ items::Inst roll_item(int item_level, int rarity_bonus) {
     it.def = uint8_t(candidates[g.rng.loot.below(uint32_t(n))]);
     roll_affixes(it, drop_ilvl(), rarity_bonus);
     return it;
+}
+
+// ---- D2 crafting: the sietch bench spends materials to work gear -----------------------------------
+
+// The Maker Hide (Divine reagent): reroll the VALUE of every affix within its own tier, keeping the
+// affixes and their tiers. Needs at least one rolled affix. Returns false if it cannot apply.
+bool craft_divine(items::Inst& it) {
+    if (it.empty() || (it.nprefix + it.nsuffix) == 0) return false;
+    auto reroll = [&](items::RolledAffix& ra) {
+        const items::AffixFamily* fam = items::family_of(ra.kind);
+        if (!fam || ra.tier < 1 || ra.tier > items::kMaxTier) return;
+        ra.value = int16_t(g.rng.loot.range(fam->lo[ra.tier - 1], fam->hi[ra.tier - 1]));
+    };
+    for (int i = 0; i < it.nprefix; ++i) reroll(it.pre[i]);
+    for (int i = 0; i < it.nsuffix; ++i) reroll(it.suf[i]);
+    return true;
+}
+
+// The Worm Tooth (a sanctioned crysknife-craft): REFORGE a weapon — fresh rarity + affixes at its
+// item level. Weapon-only (canon: a crysknife is a dead Maker's tooth). Returns false otherwise.
+bool craft_reforge_weapon(items::Inst& it) {
+    if (it.empty() || it.d().slot != items::Slot::Weapon) return false;
+    roll_affixes(it, it.ilvl, 0);
+    return true;
+}
+
+// Bench op: spend one Maker Hide to Divine the inventory item at idx.
+bool bench_divine(int inv_idx) {
+    if (g_meta.maker_hides < 1 || inv_idx < 0 || inv_idx >= 12) return false;
+    if (!craft_divine(g.pl.inv[inv_idx])) return false;
+    --g_meta.maker_hides;
+    meta_save();
+    g.log.push("The Maker Hide is spent; the gear's virtues re-settle anew.");
+    return true;
+}
+// Bench op: spend one Worm Tooth to reforge the inventory weapon at idx.
+bool bench_reforge(int inv_idx) {
+    if (g_meta.worm_teeth < 1 || inv_idx < 0 || inv_idx >= 12) return false;
+    if (!craft_reforge_weapon(g.pl.inv[inv_idx])) return false;
+    --g_meta.worm_teeth;
+    meta_save();
+    g.log.push("You rework the blade against a Maker's tooth. It is reforged.");
+    return true;
 }
 
 // B2b: slot-locked roll for a Revelation offer.
@@ -3290,6 +3342,11 @@ void enter_zone(uint8_t id, uint64_t gen_seed, bool use_spawn, int at_x = 0, int
                 }
                 break;
             }
+        } else if (roll < 57 && drop_ilvl() >= tune::kPatrolMinDepth) {
+            // D2: a sanctioned deep-desert find — a tooth pried from a long-dead Maker's jawbone in
+            // the rock (crysknife stock). Depth-gated, so shallow/headless runs never roll it.
+            if (g_meta.worm_teeth < 255) { ++g_meta.worm_teeth; meta_save(); }
+            g.log.push("Bleached in the rock: a Maker's TOOTH, long dead. You take it for the blade-makers.");
         }
     }
 
@@ -6378,6 +6435,38 @@ int game_debug_house_stance(int f) { return house_stance(f); }   // 0 neutral, 1
 int game_debug_court_house(int f) { return court_house(f) ? 1 : 0; }
 int game_debug_collect_dividend() { return collect_dividend(); }
 int game_debug_opposing_houses() { return opposing_houses(); }
+// --- D2 crafting hooks ---
+void game_debug_give_material(int which, int n) {  // 0 = Maker Hide, 1 = Worm Tooth
+    int v = (which == 0 ? g_meta.maker_hides : g_meta.worm_teeth) + n;
+    if (v < 0) v = 0; if (v > 255) v = 255;
+    (which == 0 ? g_meta.maker_hides : g_meta.worm_teeth) = uint8_t(v);
+    meta_save();
+}
+int game_debug_material(int which) { return which == 0 ? g_meta.maker_hides : g_meta.worm_teeth; }
+void game_debug_craft_setup(int weapon) {  // put a known rare item (weapon/armor) in inv[0]
+    items::Inst it;
+    for (int i = 0; i < items::kDefCount; ++i) {
+        const bool isw = items::kDefs[i].slot == items::Slot::Weapon;
+        if (weapon ? isw : !isw) { it.def = uint8_t(i); break; }
+    }
+    it.ilvl = 10;
+    it.rarity = items::R_RARE;
+    it.nprefix = it.nsuffix = 0;
+    roll_one_side(it, 10, true, 2);
+    roll_one_side(it, 10, false, 1);
+    g.pl.inv[0] = it;
+}
+int game_debug_craft_sig(int* naffix, int* vsum, int* tsum) {  // inv[0] affix signature; returns slot
+    const items::Inst& it = g.pl.inv[0];
+    if (it.empty()) { if (naffix) *naffix = 0; if (vsum) *vsum = 0; if (tsum) *tsum = 0; return -1; }
+    int n = 0, v = 0, t = 0;
+    for (int i = 0; i < it.nprefix; ++i) { ++n; v += it.pre[i].value; t += it.pre[i].tier; }
+    for (int i = 0; i < it.nsuffix; ++i) { ++n; v += it.suf[i].value; t += it.suf[i].tier; }
+    if (naffix) *naffix = n; if (vsum) *vsum = v; if (tsum) *tsum = t;
+    return int(it.d().slot);
+}
+int game_debug_bench_divine() { return bench_divine(0) ? 1 : 0; }
+int game_debug_bench_reforge() { return bench_reforge(0) ? 1 : 0; }
 
 void game_debug_revelation(int* stage, int* inv_count) {
     if (stage) *stage = g.revelation_stage;

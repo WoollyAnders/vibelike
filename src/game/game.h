@@ -139,6 +139,12 @@ int game_debug_house_stance(int f);          // Landsraad: 0 neutral / 1 ally / 
 int game_debug_court_house(int f);           // Landsraad: court House f into your bloc (1 = done)
 int game_debug_collect_dividend();           // Landsraad: collect the CHOAM dividend (spice)
 int game_debug_opposing_houses();            // Landsraad: count of Great Powers opposing you
+void game_debug_give_material(int which, int n);  // D2: 0 = Maker Hide, 1 = Worm Tooth
+int game_debug_material(int which);          // D2: material count (0 Maker Hide / 1 Worm Tooth)
+void game_debug_craft_setup(int weapon);     // D2: put a known rare item (weapon/armor) in inv[0]
+int game_debug_craft_sig(int* naffix, int* vsum, int* tsum);  // D2: inv[0] affix sig; returns slot
+int game_debug_bench_divine();               // D2: Maker Hide -> reroll inv[0] affix values (1=done)
+int game_debug_bench_reforge();              // D2: Worm Tooth -> reforge inv[0] weapon (1=done)
 void game_debug_revelation(int* stage, int* inv_count);  // B2b: Revelation stage + inv item count
 void game_debug_revelation_pick(int idx);  // B2b: choose row idx + confirm the Revelation
 int game_debug_cur_node();  // B1.3: current graph node index

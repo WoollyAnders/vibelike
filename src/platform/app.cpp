@@ -1755,6 +1755,52 @@ int run_choamtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cm
     return pass ? 0 : 1;
 }
 
+// D2 crafting: the sietch bench spends materials to work gear. A Maker Hide (Divine) rerolls an
+// item's affix VALUES within their tiers; a Worm Tooth reforges a WEAPON (fresh affixes). Materials
+// persist in meta (DMEB). craft_setup puts a rare item in inv[0]; craft_sig reads its affix signature.
+int run_crafttest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    std::remove("meta.dat");
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(7, services);
+
+    // (A) Divine: a rare armor's values reroll while its affixes + tiers are kept; the Hide is spent
+    game_debug_craft_setup(0 /*armor*/);
+    int n0, v0, t0; game_debug_craft_sig(&n0, &v0, &t0);
+    const bool have_affixes = n0 >= 1;
+    const bool no_hide = game_debug_bench_divine() == 0;   // no material -> refused
+    game_debug_give_material(0, 1);
+    const bool divined = game_debug_bench_divine() == 1;
+    int n1, v1, t1; game_debug_craft_sig(&n1, &v1, &t1);
+    const bool preserved = n1 == n0 && t1 == t0;           // same affixes + same tiers
+    const bool rerolled = v1 != v0;                        // values changed
+    const bool hide_spent = game_debug_material(0) == 0;
+
+    // (B) Reforge: a weapon rerolls fresh; the Tooth is spent
+    game_debug_craft_setup(1 /*weapon*/);
+    const int slot = game_debug_craft_sig(nullptr, nullptr, nullptr);  // 0 == Slot::Weapon
+    const bool no_tooth = game_debug_bench_reforge() == 0;
+    game_debug_give_material(1, 1);
+    const bool reforged = game_debug_bench_reforge() == 1;
+    const bool tooth_spent = game_debug_material(1) == 0;
+
+    // (C) reforge refuses a non-weapon (armor), and does NOT consume the Tooth
+    game_debug_craft_setup(0 /*armor*/);
+    game_debug_give_material(1, 1);
+    const bool armor_no_reforge = game_debug_bench_reforge() == 0 && game_debug_material(1) == 1;
+
+    // (D) DMEB round-trip: the unspent Worm Tooth survives a meta reload
+    int mb = -1, ma = -1; game_debug_meta_reload_class(&mb, &ma);
+    const bool persisted = game_debug_material(1) == 1;
+
+    const bool pass = have_affixes && no_hide && divined && preserved && rerolled && hide_spent &&
+                      slot == 0 && no_tooth && reforged && tooth_spent && armor_no_reforge && persisted;
+    std::printf("crafttest %s (aff %d divine[no %d yes %d keep %d reroll %d spent %d] reforge[wpn %d no %d yes %d spent %d armorX %d] persist %d)\n",
+                pass ? "PASS" : "FAIL", n0, no_hide, divined, preserved, rerolled, hide_spent,
+                slot == 0, no_tooth, reforged, tooth_spent, armor_no_reforge, persisted);
+    std::remove("meta.dat");
+    return pass ? 0 : 1;
+}
+
 // A4: click-to-move pathfinds to the goal and is deterministic across runs.
 int run_clicktest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
     GameServices services{&mixer, &assets, &cmaps};
@@ -1795,7 +1841,7 @@ int main(int argc, char** argv) {
          rttest = false, stuntest = false, classtest = false, guildtest = false,
          vendortest = false, patroltest = false, cavetest = false, trialtest = false,
          endgametest = false, striketest = false, pinnacletest = false, capstonetest = false,
-         longridetest = false, choamtest = false;
+         longridetest = false, choamtest = false, crafttest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
         if (SDL_strcmp(argv[i], "--seamtest") == 0) seamtest = true;
@@ -1828,6 +1874,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--capstonetest") == 0) capstonetest = true;
         if (SDL_strcmp(argv[i], "--longridetest") == 0) longridetest = true;
         if (SDL_strcmp(argv[i], "--choamtest") == 0) choamtest = true;
+        if (SDL_strcmp(argv[i], "--crafttest") == 0) crafttest = true;
         if (SDL_strcmp(argv[i], "--animdebug") == 0) animdebug = true;
         if (SDL_strcmp(argv[i], "--rpgtest") == 0) rpgtest = true;
         if (SDL_strcmp(argv[i], "--clicktest") == 0) clicktest = true;
@@ -1878,6 +1925,7 @@ int main(int argc, char** argv) {
     if (capstonetest) return run_capstonetest(mixer, assets, cmaps);
     if (longridetest) return run_longridetest(mixer, assets, cmaps);
     if (choamtest) return run_choamtest(mixer, assets, cmaps);
+    if (crafttest) return run_crafttest(mixer, assets, cmaps);
     if (rpgtest) return run_rpgtest(mixer, assets, cmaps);
     if (reveltest) return run_reveltest(mixer, assets, cmaps);
     if (gauntlettest) return run_gauntlettest(mixer, assets, cmaps);
