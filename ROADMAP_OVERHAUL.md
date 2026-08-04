@@ -509,7 +509,12 @@ mechanic: slain enemies yield reclaimed water (scaled by the *of the Deathstill*
 `AK_WATER_FIND` + enemy size), rendered into litrejons on **extraction** (lost on death — the water
 portion of the run stake). Closes the loop combat → Deathstill → litrejons → sietch upgrades.
 
-### C6 — Ranged combat (Saboteur maula) ⬜
+### C6 — Ranged combat (Saboteur maula) ✅
+**Done:** right-click fires the maula pistol at the cursor — `fire_maula` walks a Bresenham line
+(`kMaulaRange`), a wall stops the dart, else the first hostile takes lethality-scaled damage
+(`player_attack_roll`); loud (`kMaulaNoise=22`). Melee's kill handling was extracted to a shared
+`resolve_enemy_death` so both paths resolve identically (try_move byte-identical; dettest unchanged).
+Test `maulatest`; 48/48 green. Deferred: a dart tracer (E2 art).
 Cursor-aimed maula; Bresenham line-of-fire; Lethality-scaled damage; loud.
 **Exit:** aim + fire down a corridor; a wall blocks the shot; drop a trooper at
 range.
