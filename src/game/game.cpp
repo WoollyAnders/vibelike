@@ -180,7 +180,9 @@ struct Player {
     int ability_cd = 0;    // C7: shared ability cooldown (world turns remaining)
     // C7b: the 12-slot skill bar — 2 bars (bar 1 = the Ctrl secondary) x 6 slots
     // (LMB/RMB/MMB/Q/E/R). Each holds an action id: 0 none, 1 Basic Attack, else (ability + 1).
-    uint8_t skill_bind[2][6] = {{1, 1, 0, 2, 3, 4}, {0, 0, 0, 0, 0, 0}};
+    // Default: LMB+RMB = Basic Attack; ability slots empty until a Teaching is learned + bound.
+    uint8_t skill_bind[2][6] = {{1, 1, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0}};
+    uint16_t owned_abilities = 0;  // C7c: per-ability bitmask of learned Teachings (bit `ab` set = owned)
     int flask_charges[tune::kFlaskSlots] = {tune::kFlaskMaxCharges, tune::kFlaskMaxCharges,
                                             tune::kFlaskMaxCharges};  // Life / Will / Utility belt
     int flask_quality = 0;  // D3: Distillate Microtubing raises it (0..20); scales flask effects
@@ -1132,7 +1134,8 @@ struct Meta {
     int32_t litrejons = 0;         // C5 (DMEH): tribal water banked from the Deathstill; the sietch-tree currency
     uint8_t sietch_rank[kSietchNodeCount] = {};  // C5b (DMEI): allocated ranks per sietch-tree node
     uint64_t passives = 0;                       // C4 (DMEJ): the character's allocated passive-tree nodes
-    uint8_t skill_bind[2][6] = {{1, 1, 0, 2, 3, 4}, {0, 0, 0, 0, 0, 0}};  // C7b (DMEK): the skill bar
+    uint8_t skill_bind[2][6] = {{1, 1, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0}};  // C7b (DMEK): the skill bar
+    uint16_t owned_abilities = 0;  // C7c (DMEL): learned-Teaching bitmask
     CharStats st;                  // persistent level / attributes / talents / xp
     items::Inst equip[int(items::Slot::Count)];
     items::Inst inv[tune::kInvCap];              // G (DMEE): the persisted pack pool (8x12 grid)
@@ -1198,6 +1201,7 @@ int guild_difficulty() {
     return d < 0 ? 0 : d > cap ? cap : d;
 }
 
+inline constexpr uint32_t kMetaVL = 0x4C454D44u;  // 'DMEL' (C7c: + owned_abilities, learned Teachings)
 inline constexpr uint32_t kMetaVK = 0x4B454D44u;  // 'DMEK' (C7b: + skill_bind, the 12-slot skill bar)
 inline constexpr uint32_t kMetaVJ = 0x4A454D44u;  // 'DMEJ' (C4: + passives, the passive-tree allocation mask)
 inline constexpr uint32_t kMetaVI = 0x49454D44u;  // 'DMEI' (C5b: + sietch_rank, the sietch talent tree)
@@ -1337,7 +1341,7 @@ void meta_load() {
     if (!f) return;
     uint32_t magic = 0;
     if (std::fread(&magic, 4, 1, f) == 1) {
-        if (magic >= kMetaV4 && magic <= kMetaVK && magic != kMetaV1) {  // native widened-Inst format (DME4..DMEK)
+        if (magic >= kMetaV4 && magic <= kMetaVL && magic != kMetaV1) {  // native widened-Inst format (DME4..DMEL)
             const bool cur = (magic >= kMetaVC);  // DMEC+ = new Inst layout; older = OldInst (convert)
             (void)!std::fread(&g_meta.runs, 4, 1, f);
             (void)!std::fread(&g_meta.endings_seen, 1, 1, f);
@@ -1418,6 +1422,9 @@ void meta_load() {
             if (magic >= kMetaVK) {  // C7b: the skill-bar bindings (DMEJ and earlier keep the defaults)
                 (void)!std::fread(g_meta.skill_bind, sizeof g_meta.skill_bind, 1, f);
             }
+            if (magic >= kMetaVL) {  // C7c: learned Teachings (DMEK and earlier -> 0, the starter re-grants)
+                (void)!std::fread(&g_meta.owned_abilities, 2, 1, f);
+            }
             // D3 migration: the old Maker Hide / Worm Tooth counters become currency (their new roles:
             // armour / weapon quality), banked to the crafting table. No-op on a DMEC+ file (already 0).
             if (g_meta.maker_hides > 0) { meta_grant_currency(items::CUR_ARMORQUAL, g_meta.maker_hides); g_meta.maker_hides = 0; }
@@ -1456,7 +1463,7 @@ void meta_load() {
 void meta_save() {
     FILE* f = std::fopen("meta.dat", "wb");
     if (!f) return;
-    std::fwrite(&kMetaVK, 4, 1, f);  // C7b: DMEK (+ skill_bind; earlier blobs ride along)
+    std::fwrite(&kMetaVL, 4, 1, f);  // C7c: DMEL (+ owned_abilities; earlier blobs ride along)
     std::fwrite(&g_meta.runs, 4, 1, f);
     std::fwrite(&g_meta.endings_seen, 1, 1, f);
     std::fwrite(&g_meta.stash_tabs, 1, 1, f);                       // G3: owned tab count
@@ -1490,6 +1497,7 @@ void meta_save() {
     std::fwrite(g_meta.sietch_rank, sizeof g_meta.sietch_rank, 1, f);  // C5b: sietch tree ranks (DMEI)
     std::fwrite(&g_meta.passives, 8, 1, f);                            // C4: passive-tree mask (DMEJ)
     std::fwrite(g_meta.skill_bind, sizeof g_meta.skill_bind, 1, f);    // C7b: skill bar (DMEK)
+    std::fwrite(&g_meta.owned_abilities, 2, 1, f);                     // C7c: learned Teachings (DMEL)
     std::fclose(f);
 }
 
@@ -1501,6 +1509,7 @@ void persist_character() {
     g_meta.ascendancy = uint8_t(g.pl.ascendancy);
     g_meta.passives = g.pl.passives;                // C4: the passive tree persists with the character
     std::memcpy(g_meta.skill_bind, g.pl.skill_bind, sizeof g_meta.skill_bind);  // C7b: skill bar persists
+    g_meta.owned_abilities = g.pl.owned_abilities;  // C7c: learned Teachings persist
     std::memcpy(g_meta.equip, g.pl.equip, sizeof g_meta.equip);
     std::memcpy(g_meta.inv, g.pl.inv, sizeof g_meta.inv);
     std::memcpy(g_meta.inv_cell, g.pl.inv_cell, sizeof g_meta.inv_cell);  // G: grid layout persists
@@ -2334,6 +2343,7 @@ void pickup_currency() {
     }
 }
 
+bool grant_random_teaching();  // C7c: fwd (defined with the ability block) — learn a random un-owned ability
 void maybe_drop_loot(EType t, int x, int y) {
     const Foe* f = foe_stats(t);
     if (!f) return;
@@ -2374,6 +2384,9 @@ void maybe_drop_loot(EType t, int x, int y) {
         meta_save();
         g.log.push("A vein of raw Spice Essence — the Water of Life stirs.");
     }
+    // C7c: a rare Teaching — a new active ability, learned on the spot (deep content only). Drawn last.
+    if (area_level() >= tune::kSpiceEssenceMinArea && g.rng.loot.below(tune::kTeachingDropDenom) == 0)
+        grant_random_teaching();
 }
 
 items::Inst loot_of(const Entity& e) {
@@ -3168,15 +3181,34 @@ void stun_entity(Entity& e, int turns) { if (turns > e.stun_turns) e.stun_turns 
 void stun_player(int turns) { if (turns > g.pl.ail_stun_turns) g.pl.ail_stun_turns = turns; }
 void freeze_player(int turns) { if (turns > g.pl.ail_frozen_turns) g.pl.ail_frozen_turns = turns; }
 
-// ---- C7: Will-powered prescience abilities (universal active skills) --------------------------------
-// One Will pool, one shared cooldown. Cast at a target tile; effects reuse the stun / teleport / Focus
-// systems. Deterministic + player-initiated (never auto-fired, no RNG) — off every test's det path.
-enum Ability : uint8_t { AB_NONE = 0, AB_VOICE, AB_BLINK, AB_PRESCIENCE, AB_COUNT };
+// ---- C7 / C7c: Will-powered Fremen active abilities (learned from dropped Teachings) ----------------
+// One Will pool, one shared cooldown. Cast at a target tile; player-initiated (never auto-fired). The
+// nine are distinct Fremen actives (movement / control / gadgets / buffs) — NOT prescience (the player
+// is no seer) and NOT attack variants (pierce/volley/cleave live in C7d Disciplines). All any-weapon.
+enum Ability : uint8_t {
+    AB_NONE = 0,
+    AB_SANDWALK,   // dash across open sand to the cursor (reposition)
+    AB_HOOKPULL,   // maker-hooks yank the nearest foe adjacent (gap-close)
+    AB_FEINT,      // a Fedaykin feint staggers the nearest seen foe (control)
+    AB_CHARGE,     // lob a demolition charge — an AoE blast at the cursor
+    AB_TOXIN,      // a toxin vial bursts into a lingering poison cloud (AoE DoT)
+    AB_FLARE,      // a glowglobe flare blinds the foes around you (control)
+    AB_THROW,      // hurl the crysknife — a ranged strike, any weapon
+    AB_WARCRY,     // a Fremen war-cry — Focus + a burst of free strides (buff)
+    AB_DRAUGHT,    // a deathstill draught — spend reclaimed water for Life + Will (sustain)
+    AB_COUNT
+};
 const char* ability_name(int ab) {
     switch (ab) {
-        case AB_VOICE: return "The Voice";
-        case AB_BLINK: return "Prescient Step";
-        case AB_PRESCIENCE: return "Prescient Calm";
+        case AB_SANDWALK: return "Sandwalk Dash";
+        case AB_HOOKPULL: return "Maker-Hook Pull";
+        case AB_FEINT:    return "Fedaykin Feint";
+        case AB_CHARGE:   return "Demolition Charge";
+        case AB_TOXIN:    return "Toxin Cloud";
+        case AB_FLARE:    return "Glowglobe Flare";
+        case AB_THROW:    return "Crysknife Throw";
+        case AB_WARCRY:   return "Fremen War-Cry";
+        case AB_DRAUGHT:  return "Deathstill Draught";
         default: return "-";
     }
 }
@@ -3186,9 +3218,9 @@ const char* skill_action_name(int act) {
     if (act == 1) return "Basic Attack";
     return ability_name(act - 1);
 }
-// C7b: does the character have ability `ab`? All three are owned in C7b; C7c gates this by the dropped
-// Teaching collection.
-bool ability_owned(int ab) { return ab > AB_NONE && ab < AB_COUNT; }
+// C7c: the character owns an ability once its Teaching is learned. `owned_abilities` is a per-ability
+// bitmask on the player; a fresh character starts with its class's one starter (granted in game_init).
+bool ability_owned(int ab) { return ab > AB_NONE && ab < AB_COUNT && (g.pl.owned_abilities & (1u << ab)); }
 // Cycle a skill-bar slot's binding to the next valid action: none -> Basic Attack -> each owned ability.
 void skill_cycle(int bar, int slot) {
     if (bar < 0 || bar > 1 || slot < 0 || slot > 5) return;
@@ -3210,16 +3242,54 @@ bool ability_is_hostile(EType t) {
 }
 int ability_cost(int ab) {
     switch (ab) {
-        case AB_VOICE: return tune::kWillVoice;
-        case AB_BLINK: return tune::kWillBlink;
-        case AB_PRESCIENCE: return tune::kWillPrescience;
+        case AB_SANDWALK: return tune::kWillBlink;
+        case AB_HOOKPULL: return tune::kWillBlink;
+        case AB_FEINT:    return tune::kWillVoice;
+        case AB_CHARGE:   return 16;
+        case AB_TOXIN:    return 12;
+        case AB_FLARE:    return 10;
+        case AB_THROW:    return 8;
+        case AB_WARCRY:   return tune::kWillPrescience;
+        case AB_DRAUGHT:  return 12;
         default: return 0;
     }
 }
 bool ability_ready() { return g.pl.ability_cd <= 0 && !g.pl.dead; }
 
-// the Voice: stun the nearest SEEN hostile within reach. Fails (no cast) if none is in range.
-bool do_voice() {
+// combat helpers defined later in the file — forward-declared for the ability effects.
+Entity* hostile_at(int x, int y);
+Foe boss_foe(const Entity& e);
+void resolve_enemy_death(Entity* victim, const Foe* foe);
+// apply `dmg` to a hostile, resolving its death (loot/xp/corpse) exactly like the melee/maula paths.
+void ability_hit(Entity& e, int dmg) {
+    e.hp -= int16_t(dmg);
+    if (e.hp <= 0) {
+        Foe bf{}; const Foe* f = e.type == EType::Boss ? (bf = boss_foe(e), &bf) : foe_stats(e.type);
+        resolve_enemy_death(&e, f);
+    }
+}
+int ability_power() { return 6 + player_lethality(); }  // lethality-scaled base for the offensive actives
+
+// Sandwalk Dash: a burst of desert-speed to the farthest clear tile toward the cursor.
+bool do_sandwalk(int tx, int ty) {
+    Entity& p = player_ent();
+    if (tx == p.x && ty == p.y) return false;
+    int nx = p.x, ny = p.y, lx = p.x, ly = p.y;
+    for (int s = 0; s < tune::kBlinkRange; ++s) {
+        const int cx = tx > nx ? 1 : tx < nx ? -1 : 0, cy = ty > ny ? 1 : ty < ny ? -1 : 0;
+        const int px = nx + cx, py = ny + cy;
+        if (!zone().walkable(px, py) || entity_at(px, py, g.cur_zone)) break;
+        nx = px; ny = py; lx = nx; ly = ny;
+        if (nx == tx && ny == ty) break;
+    }
+    if (lx == p.x && ly == p.y) return false;
+    p.x = int16_t(lx); p.y = int16_t(ly);
+    p.anim.facing = facing_from_tile_delta(tx - p.x, ty - p.y);
+    g.log.push("Sandwalk: you cross the sand faster than the eye follows.");
+    return true;
+}
+// Fedaykin Feint: stagger (stun) the nearest SEEN hostile. Fails (no cost) if none is in range.
+bool do_feint() {
     const Entity& p = player_ent();
     int best = -1, bestd = tune::kVoiceRange * tune::kVoiceRange + 1;
     for (int i = 1; i < kMaxEnts; ++i) {
@@ -3231,26 +3301,104 @@ bool do_voice() {
     }
     if (best < 0) return false;
     stun_entity(g.ents[best], tune::kVoiceStunTurns);
-    g.log.push("The Voice cracks the air. The foe locks rigid, its will not its own.");
+    g.log.push("A Fedaykin feint - the foe commits to a blow that never comes, and freezes.");
     return true;
 }
-
-// Prescient Step: blink toward the cursor, landing on the farthest clear tile within range.
-bool do_blink(int tx, int ty) {
+// Maker-Hook Pull: yank the nearest hostile (within reach) toward you, onto an adjacent tile.
+bool do_hookpull() {
     Entity& p = player_ent();
-    if (tx == p.x && ty == p.y) return false;
-    int nx = p.x, ny = p.y, lx = p.x, ly = p.y;
-    for (int s = 0; s < tune::kBlinkRange; ++s) {
-        const int cx = tx > nx ? 1 : tx < nx ? -1 : 0, cy = ty > ny ? 1 : ty < ny ? -1 : 0;
-        const int px = nx + cx, py = ny + cy;
-        if (!zone().walkable(px, py) || entity_at(px, py, g.cur_zone)) break;
-        nx = px; ny = py; lx = nx; ly = ny;
-        if (nx == tx && ny == ty) break;
+    int best = -1, bestd = 6 * 6 + 1;
+    for (int i = 1; i < kMaxEnts; ++i) {
+        const Entity& e = g.ents[i];
+        if (e.hp <= 0 || e.zone != g.cur_zone || !ability_is_hostile(e.type)) continue;
+        const int dx = e.x - p.x, dy = e.y - p.y, d = dx * dx + dy * dy;
+        if (d > 2 && d < bestd) { bestd = d; best = i; }  // already-adjacent foes are skipped
     }
-    if (lx == p.x && ly == p.y) return false;  // couldn't move at all
-    p.x = int16_t(lx); p.y = int16_t(ly);
-    p.anim.facing = facing_from_tile_delta(tx - p.x, ty - p.y);
-    g.log.push("Prescient step: the sand blurs and you are elsewhere.");
+    if (best < 0) return false;
+    for (int r = 1; r <= 1; ++r)  // land it on a free adjacent tile
+        for (int dy = -1; dy <= 1; ++dy)
+            for (int dx = -1; dx <= 1; ++dx) {
+                if (!dx && !dy) continue;
+                const int nx = p.x + dx, ny = p.y + dy;
+                if (zone().walkable(nx, ny) && !entity_at(nx, ny, g.cur_zone)) {
+                    g.ents[best].x = int16_t(nx); g.ents[best].y = int16_t(ny);
+                    g.log.push("Maker-hooks bite and haul the foe onto your blade.");
+                    return true;
+                }
+            }
+    return false;  // nowhere to place it
+}
+// AoE at (tx,ty): apply `fn` to every hostile within `rad`. Returns the count touched.
+template <class F>
+int ability_aoe(int tx, int ty, int rad, F fn) {
+    int n = 0;
+    for (int i = 1; i < kMaxEnts; ++i) {
+        Entity& e = g.ents[i];
+        if (e.hp <= 0 || e.zone != g.cur_zone || !ability_is_hostile(e.type)) continue;
+        const int dx = e.x - tx, dy = e.y - ty;
+        if (dx * dx + dy * dy <= rad * rad) { fn(e); ++n; }
+    }
+    return n;
+}
+// Demolition Charge: an explosive blast at the cursor.
+bool do_charge(int tx, int ty) {
+    if (tx < 0 || ty < 0) return false;
+    const int dmg = ability_power() + 6;
+    ability_aoe(tx, ty, 2, [&](Entity& e) { ability_hit(e, dmg); });
+    g.noise.add(tx, ty, 30);
+    g.impact_x = int16_t(tx); g.impact_y = int16_t(ty); g.impact_kind = 0;
+    g.log.push("The charge blows sand and bone into the wind.");
+    return true;
+}
+// Toxin Cloud: a lingering poison burst at the cursor.
+bool do_toxin(int tx, int ty) {
+    if (tx < 0 || ty < 0) return false;
+    ability_aoe(tx, ty, 2, [&](Entity& e) { poison_entity(e, 2 + player_lethality() / 8, 6); });
+    g.log.push("A vial bursts. The rot takes the air.");
+    return true;
+}
+// Glowglobe Flare: blind the hostiles around you.
+bool do_flare() {
+    const Entity& p = player_ent();
+    ability_aoe(p.x, p.y, 3, [&](Entity& e) { blind_entity(e, 4); });
+    g.log.push("The glowglobe flares white. Eyes fail all around you.");
+    return true;
+}
+// Crysknife Throw: hurl the blade in a line to the cursor; the first hostile takes a lethality-scaled hit.
+bool do_throw(int tx, int ty) {
+    const Entity& p = player_ent();
+    if (tx == p.x && ty == p.y) return false;
+    int x0 = p.x, y0 = p.y;
+    const int adx = tx > x0 ? tx - x0 : x0 - tx, ady = ty > y0 ? ty - y0 : y0 - ty;
+    const int sx = x0 < tx ? 1 : -1, sy = y0 < ty ? 1 : -1;
+    int err = adx - ady;
+    for (int step = 0; step < 8; ++step) {
+        const int e2 = 2 * err;
+        if (e2 > -ady) { err -= ady; x0 += sx; }
+        if (e2 < adx)  { err += adx; y0 += sy; }
+        if (!zone().walkable(x0, y0)) break;
+        if (Entity* e = hostile_at(x0, y0)) {
+            g.impact_x = int16_t(x0); g.impact_y = int16_t(y0); g.impact_kind = 0;
+            ability_hit(*e, ability_power() + 2);
+            g.log.push("The crysknife flies true.");
+            return true;
+        }
+    }
+    return false;  // whiffed — no cost
+}
+// Fremen War-Cry: steel yourself — a Focus surge and a burst of free strides.
+bool do_warcry() {
+    gain_shield(tune::kPrescienceShield);
+    g.pl.free_moves += 3;
+    g.log.push("You raise the Fremen cry. The tribe's fury is yours.");
+    return true;
+}
+// Deathstill Draught: a hard pull on the stillsuit's reclaim — Life and Will back at once.
+bool do_draught() {
+    if (g.pl.hp >= player_max_hp() && g.pl.will >= player_max_will()) return false;  // nothing to gain
+    gain_hp(player_max_hp() / 4);
+    gain_will(player_max_will() / 3);
+    g.log.push("You drink the stillsuit's reclaim. The water steadies you.");
     return true;
 }
 
@@ -3258,18 +3406,45 @@ bool do_blink(int tx, int ty) {
 // only if the effect lands. Returns false (no cost) otherwise.
 bool cast_ability(int ab, int tx, int ty) {
     if (!ability_ready() || ab <= AB_NONE || ab >= AB_COUNT) return false;
+    if (!ability_owned(ab)) return false;  // C7c: must have learned the Teaching
     const int cost = ability_cost(ab);
     if (g.pl.will < cost) return false;
     bool ok = false;
     switch (ab) {
-        case AB_VOICE: ok = do_voice(); break;
-        case AB_BLINK: ok = do_blink(tx, ty); break;
-        case AB_PRESCIENCE: gain_shield(tune::kPrescienceShield); ok = true; break;
+        case AB_SANDWALK: ok = do_sandwalk(tx, ty); break;
+        case AB_HOOKPULL: ok = do_hookpull(); break;
+        case AB_FEINT:    ok = do_feint(); break;
+        case AB_CHARGE:   ok = do_charge(tx, ty); break;
+        case AB_TOXIN:    ok = do_toxin(tx, ty); break;
+        case AB_FLARE:    ok = do_flare(); break;
+        case AB_THROW:    ok = do_throw(tx, ty); break;
+        case AB_WARCRY:   ok = do_warcry(); break;
+        case AB_DRAUGHT:  ok = do_draught(); break;
         default: break;
     }
     if (!ok) return false;
     g.pl.will -= cost;
     g.pl.ability_cd = tune::kAbilityCdTurns;
+    return true;
+}
+// C7c: learn a Teaching (mark the ability owned).
+void grant_ability(int ab) { if (ab > AB_NONE && ab < AB_COUNT) g.pl.owned_abilities |= uint16_t(1u << ab); }
+int class_starter_ability(int bc) {  // the one active a fresh character of each class begins with
+    switch (bc) { case 1: return AB_SANDWALK; case 2: return AB_FLARE; default: return AB_FEINT; }
+}
+void grant_class_starter() {
+    const int ab = class_starter_ability(int(g.pl.base_class));
+    grant_ability(ab);
+    if (g.pl.skill_bind[0][3] == 0) g.pl.skill_bind[0][3] = uint8_t(ab + 1);  // auto-bind to Q if free
+}
+// C7c: a dropped Teaching — learn one random ability not yet owned. Returns false if all are learned.
+bool grant_random_teaching() {
+    int pool[AB_COUNT], n = 0;
+    for (int ab = AB_NONE + 1; ab < AB_COUNT; ++ab) if (!ability_owned(ab)) pool[n++] = ab;
+    if (!n) return false;
+    const int ab = pool[g.rng.loot.below(uint32_t(n))];
+    grant_ability(ab);
+    g.log.push("A Teaching passes to you: you learn %s.", ability_name(ab));
     return true;
 }
 
@@ -5143,6 +5318,7 @@ void game_init(uint64_t seed, const GameServices& services) {
         g.pl.ascendancy = Ascendancy(g_meta.ascendancy);
         g.pl.passives = g_meta.passives;                  // C4: restore the passive tree
         std::memcpy(g.pl.skill_bind, g_meta.skill_bind, sizeof g.pl.skill_bind);  // C7b: restore the skill bar
+        g.pl.owned_abilities = g_meta.owned_abilities;  // C7c: restore learned Teachings
         std::memcpy(g.pl.equip, g_meta.equip, sizeof g.pl.equip);
         std::memcpy(g.pl.inv, g_meta.inv, sizeof g.pl.inv);
         std::memcpy(g.pl.inv_cell, g_meta.inv_cell, sizeof g.pl.inv_cell);  // G: restore the grid layout
@@ -5162,6 +5338,7 @@ void game_init(uint64_t seed, const GameServices& services) {
         if (!g.choosing) apply_base_class(g.pl, BaseClass::Knifehand);
     }
     passive_ensure_start();  // C4: the class-start anchor is always allocated (fresh + pre-DMEJ saves)
+    grant_class_starter();   // C7c: guarantee the class's starter ability (fresh + pre-DMEL saves)
     g.pl.hp = player_max_hp();
     g.pl.shield = player_max_shield();  // C2: begin a run with a full Focus shield
     g.pl.will = player_max_will();
@@ -5531,6 +5708,7 @@ bool game_update(const InputState& in) {
         if (in.was_pressed(Key::Confirm)) {
             apply_base_class(g.pl, BaseClass(g.choose_idx));
             passive_ensure_start();  // C4: anchor this class's passive-tree corner
+            grant_class_starter();   // C7c: this class's starter ability
             g.choosing = false;
             g.log.push("You are %s. The Tanzerouft waits.", kBaseClasses[g.choose_idx].name);
             flash(10, 10, 10);
@@ -6834,6 +7012,14 @@ void draw_loadout(DrawCtx& ctx) {
             draw_text(ctx, skill_action_name(act), x + 8, y + 34, uint8_t(act ? 245 : 8));
         }
     }
+    // owned Teachings you can bind (Basic Attack is always available)
+    char owned[256] = "Learned: Basic Attack";
+    for (int ab = AB_NONE + 1; ab < AB_COUNT; ++ab)
+        if (ability_owned(ab)) {
+            std::strncat(owned, ", ", sizeof owned - std::strlen(owned) - 1);
+            std::strncat(owned, ability_name(ab), sizeof owned - std::strlen(owned) - 1);
+        }
+    draw_text(ctx, owned, loadout::ox(), loadout::row_y(1) + loadout::BH + 30, 136);
 }
 // C7b: the compact HUD skill bar — the primary bar's six slots (the Ctrl secondary shows on the loadout).
 void draw_skillbar_hud(DrawCtx& ctx) {
@@ -7455,6 +7641,7 @@ void game_serialize(SaveWriter& w) {
     w.i32(g.pl.reclaimed);  // C5: the Deathstill stake (run-scoped)
     w.u64(g.pl.passives);   // C4: the passive-tree allocation mask
     w.bytes(g.pl.skill_bind, sizeof g.pl.skill_bind);  // C7b: the skill bar
+    w.u16(g.pl.owned_abilities);  // C7c: learned Teachings
     w.i32(g.pl.exposure);
     w.i32(g.pl.turn);
     w.bytes(&g.pl.st, sizeof g.pl.st);
@@ -7561,6 +7748,7 @@ bool game_deserialize(SaveReader& r) {
     pl.reclaimed = r.i32();  // C5: the Deathstill stake (run-scoped)
     pl.passives = r.u64();   // C4: the passive-tree allocation mask
     r.bytes(pl.skill_bind, sizeof pl.skill_bind);  // C7b: the skill bar
+    pl.owned_abilities = r.u16();  // C7c: learned Teachings
     pl.exposure = r.i32();
     pl.turn = r.i32();
     r.bytes(&pl.st, sizeof pl.st);
@@ -8122,6 +8310,11 @@ int game_debug_cast_ability(int ab, int tx, int ty) { return cast_ability(ab, tx
 int game_debug_will() { return g.pl.will; }
 void game_debug_set_will(int w) { g.pl.will = w; }
 int game_debug_ability_cd() { return g.pl.ability_cd; }
+// --- C7c teaching hooks ---
+void game_debug_grant_ability(int ab) { grant_ability(ab); }
+int game_debug_ability_owned(int ab) { return ability_owned(ab) ? 1 : 0; }
+int game_debug_meta_owned_abilities() { return g_meta.owned_abilities; }
+int game_debug_grant_random_teaching() { return grant_random_teaching() ? 1 : 0; }
 // --- hub-menu hooks ---
 void game_debug_open_menu(int m, int sel) { g.menu_open = m; g.menu_sel = sel; }
 int game_debug_menu_open() { return g.menu_open; }
@@ -8316,7 +8509,7 @@ void game_debug_stun_player(int ticks) { stun_player(ticks); }  // RT2: force a 
 int game_debug_player_stun_turns() { return g.pl.ail_stun_turns; }
 int game_debug_player_ready() { return player_ready() ? 1 : 0; }  // RT2: is the player able to act?
 // C3: base class / ascendancy hooks (classtest).
-void game_debug_apply_base(int bc) { apply_base_class(g.pl, BaseClass(bc)); passive_ensure_start(); }
+void game_debug_apply_base(int bc) { apply_base_class(g.pl, BaseClass(bc)); passive_ensure_start(); grant_class_starter(); }
 void game_debug_class(int* base, int* asc) {
     if (base) *base = int(g.pl.base_class);
     if (asc) *asc = int(g.pl.ascendancy);

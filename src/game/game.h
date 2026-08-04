@@ -181,10 +181,15 @@ int game_debug_quickmove(int idx);                     // G2: Ctrl-click (curren
 int game_debug_force_currency_drop();         // D3c: drop a currency at the player; returns its kind
 int game_debug_kill_drops(int n);             // D3c: n Trooper loot rolls; returns currency drops
 void game_debug_spawn_currency(int kind);     // D3d: place a currency entity on the player's tile
-int game_debug_cast_ability(int ab, int tx, int ty);  // C7: 1 Voice, 2 Blink, 3 Prescience (1=cast)
+int game_debug_cast_ability(int ab, int tx, int ty);  // C7: cast ability `ab` at (tx,ty) (1=cast)
 int game_debug_will();                       // C7: current Will
 void game_debug_set_will(int w);             // C7: set current Will (test setup)
 int game_debug_ability_cd();                 // C7: shared ability cooldown remaining (world turns)
+// --- C7c teaching hooks ---
+void game_debug_grant_ability(int ab);       // learn a Teaching (mark ability owned)
+int game_debug_ability_owned(int ab);        // 1 if the ability is owned
+int game_debug_meta_owned_abilities();       // persisted owned-ability mask (DMEL round-trip)
+int game_debug_grant_random_teaching();      // drop-path: learn a random un-owned ability (1=learned)
 void game_debug_open_menu(int m, int sel);   // hub UIs: force a menu open at a row (8-11 endgame)
 int game_debug_menu_open();                  // hub UIs: current open menu id (0 = none)
 int game_debug_use_flask(int slot);          // flasks: 0 Life / 1 Will / 2 Utility (1 = drunk)

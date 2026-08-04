@@ -2037,22 +2037,27 @@ int run_skillbartest(audio::Mixer& mixer, const Assets& assets, const Colormaps&
     GameServices services{&mixer, &assets, &cmaps};
     game_init(7070, services);
 
-    // (A) defaults: primary LMB = Basic Attack, Q/E/R = the three abilities, secondary bar empty
-    const bool defaults = game_debug_skill_bind(0, 0) == 1 && game_debug_skill_bind(0, 3) == 2 &&
-                          game_debug_skill_bind(0, 4) == 3 && game_debug_skill_bind(0, 5) == 4 &&
-                          game_debug_skill_bind(1, 0) == 0;
+    // (A) defaults: primary LMB + RMB = Basic Attack; the class starter is auto-bound to Q (slot 3);
+    // secondary bar empty. (Knifehand starter = Fedaykin Feint, action id 4.)
+    game_debug_apply_base(0);
+    const bool defaults = game_debug_skill_bind(0, 0) == 1 && game_debug_skill_bind(0, 1) == 1 &&
+                          game_debug_skill_bind(0, 3) == 4 && game_debug_skill_bind(1, 0) == 0;
 
-    // (B) the loadout cycles a slot: none -> Basic -> Voice -> Blink -> Prescience -> none
+    // (B) the loadout cycles a slot through none -> Basic Attack -> each OWNED ability -> none
+    game_debug_grant_ability(8);   // learn War-Cry (so 2+ abilities are owned to cycle through)
     game_debug_set_skill_bind(0, 2, 0);
-    const bool cycle = game_debug_skill_cycle(0, 2) == 1 && game_debug_skill_cycle(0, 2) == 2 &&
-                       game_debug_skill_cycle(0, 2) == 3 && game_debug_skill_cycle(0, 2) == 4 &&
-                       game_debug_skill_cycle(0, 2) == 0;
+    const bool cyc_basic = game_debug_skill_cycle(0, 2) == 1;         // none -> Basic Attack
+    const int a = game_debug_skill_cycle(0, 2);                       // -> an owned ability
+    const bool cyc_ability = a > 1 && game_debug_ability_owned(a - 1) == 1;
+    bool wraps = false;
+    for (int i = 0; i < 12 && !wraps; ++i) if (game_debug_skill_cycle(0, 2) == 0) wraps = true;
+    const bool cycle = cyc_basic && cyc_ability && wraps;
 
-    // (C) Ctrl picks the secondary bar. Bind Prescient Calm (a Will-spending self-buff, no to-hit RNG)
-    // to the PRIMARY RMB; leave the SECONDARY RMB empty. The Ctrl run must do nothing; the primary must
-    // spend Will. (Test the empty bar first so the ability cooldown from the real cast can't confound it.)
-    game_debug_set_skill_bind(0, 1, 4);   // primary RMB = Prescient Calm (ability id 4)
+    // (C) Ctrl picks the secondary bar. Bind War-Cry (a Will-spending self-buff, no RNG) to the PRIMARY
+    // RMB; leave the SECONDARY RMB empty. The Ctrl run must do nothing; the primary must spend Will.
+    game_debug_set_skill_bind(0, 1, 9);   // primary RMB = Fremen War-Cry (ability id 8 -> action 9)
     game_debug_set_skill_bind(1, 1, 0);   // secondary RMB = none
+    game_debug_set_will(100);
     const int will0 = game_debug_will();
     game_debug_run_skill_slot(1, 1, 0, 0);           // Ctrl -> secondary RMB = none -> no cast
     const bool secondary_empty = game_debug_will() == will0;
@@ -2069,6 +2074,37 @@ int run_skillbartest(audio::Mixer& mixer, const Assets& assets, const Colormaps&
     const bool pass = defaults && cycle && ctrl_bar && persisted;
     std::printf("skillbartest %s (defaults %d cycle %d ctrlBar %d[%d/%d] persist %d)\n",
                 pass ? "PASS" : "FAIL", defaults, cycle, ctrl_bar, primary_casts, secondary_empty, persisted);
+    std::remove("meta.dat");
+    return pass ? 0 : 1;
+}
+
+// C7c: abilities are learned from dropped Teachings, not the tree. A fresh character starts with one
+// class starter; more drop in deep content; owned abilities persist with the character (DMEL).
+int run_teachingtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    std::remove("meta.dat");
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(818, services);
+    game_debug_apply_base(0);  // Knifehand -> starter = Fedaykin Feint (id 3)
+
+    // (A) the class starter is owned; a different ability (Demolition Charge, 4) is not
+    const bool starter = game_debug_ability_owned(3) == 1;
+    const bool locked = game_debug_ability_owned(4) == 0;
+
+    // (B) a dropped Teaching learns one new (previously un-owned) ability
+    int before = 0; for (int ab = 1; ab < 10; ++ab) before += game_debug_ability_owned(ab);
+    const bool learned = game_debug_grant_random_teaching() == 1;
+    int after = 0; for (int ab = 1; ab < 10; ++ab) after += game_debug_ability_owned(ab);
+    const bool grew = after == before + 1;
+
+    // (C) learned abilities persist across a meta reload (DMEL round-trip)
+    game_debug_grant_ability(4);  // learn Demolition Charge explicitly
+    game_debug_extract();
+    int mb = -1, ma = -1; game_debug_meta_reload_class(&mb, &ma);
+    const bool persisted = (game_debug_meta_owned_abilities() & (1 << 4)) != 0;
+
+    const bool pass = starter && locked && learned && grew && persisted;
+    std::printf("teachingtest %s (starter %d locked %d learned %d grew %d[%d->%d] persist %d)\n",
+                pass ? "PASS" : "FAIL", starter, locked, learned, grew, before, after, persisted);
     std::remove("meta.dat");
     return pass ? 0 : 1;
 }
@@ -2385,51 +2421,63 @@ int run_abilitytest(audio::Mixer& mixer, const Assets& assets, const Colormaps& 
     GameServices services{&mixer, &assets, &cmaps};
     game_init(55, services);  // start in the sietch: indoor light, no wildlife/escort
 
-    // (A) the Voice stuns the nearest seen foe, spends Will, and starts the shared cooldown
-    int shp; game_debug_spawn_shield_adjacent(&shp);
+    // C7c ability ids: 1 Sandwalk, 2 Hook-Pull, 3 Fedaykin Feint, 4 Demolition Charge, ... 8 War-Cry.
+    game_debug_apply_base(0);  // Knifehand -> starter = Fedaykin Feint (id 3), auto-owned
+    int px, py; game_debug_player_pos(&px, &py);
+
+    // (A) ownership: the Knifehand owns its starter (Feint=3) but not Demolition Charge (4); an un-owned
+    // cast is refused. Then learn the rest for the mechanics tests.
+    const bool owns_starter = game_debug_ability_owned(3) == 1;
+    const bool not_owned = game_debug_ability_owned(4) == 0;
     game_debug_set_will(100);
+    const bool unowned_refused = game_debug_cast_ability(4, px, py) == 0;
+    for (int ab = 1; ab < 10; ++ab) game_debug_grant_ability(ab);
+
+    // (B) Fedaykin Feint (3) stuns the nearest seen foe, spends Will, starts the shared cooldown
+    int shp; game_debug_spawn_shield_adjacent(&shp);
+    game_debug_set_will(100); game_debug_world_tick(6);
     const int w0 = game_debug_will();
-    const bool voiced = game_debug_cast_ability(1, 0, 0) == 1;
+    const bool feinted = game_debug_cast_ability(3, 0, 0) == 1;
     const bool stunned = game_debug_enemy_stun_turns() > 0;
     const bool will_spent = game_debug_will() == w0 - 6;   // kWillVoice
     const bool on_cd = game_debug_ability_cd() > 0;
 
-    // (B) the shared cooldown blocks a second cast (no Will spent)
+    // (C) the shared cooldown blocks a second cast (no Will spent)
     const int w1 = game_debug_will();
-    const bool cd_blocks = game_debug_cast_ability(3, 0, 0) == 0 && game_debug_will() == w1;
+    const bool cd_blocks = game_debug_cast_ability(8, 0, 0) == 0 && game_debug_will() == w1;  // War-Cry
     game_debug_clear_hostiles();
     game_debug_world_tick(6);
     const bool cd_cleared = game_debug_ability_cd() == 0;
 
-    // (C) Blink moves the player (try each cardinal until one has room)
-    bool blinked = false;
+    // (D) Sandwalk Dash (1) moves the player (try each cardinal until one has room)
+    bool dashed = false;
     const int dirs[4][2] = {{1,0},{-1,0},{0,1},{0,-1}};
-    for (int d = 0; d < 4 && !blinked; ++d) {
+    for (int d = 0; d < 4 && !dashed; ++d) {
         game_debug_set_will(100);
         game_debug_world_tick(6);  // clear any cooldown from a prior attempt
         int ax, ay; game_debug_player_pos(&ax, &ay);
-        if (game_debug_cast_ability(2, ax + dirs[d][0] * 5, ay + dirs[d][1] * 5) == 1) {
+        if (game_debug_cast_ability(1, ax + dirs[d][0] * 5, ay + dirs[d][1] * 5) == 1) {
             int bx, by; game_debug_player_pos(&bx, &by);
-            blinked = (bx != ax || by != ay);
+            dashed = (bx != ax || by != ay);
         }
     }
 
-    // (D) Will gates the cast: too little Will -> refused
+    // (E) Will gates the cast: too little Will -> refused
     game_debug_world_tick(6);
     game_debug_set_will(2);
-    const bool no_will = game_debug_cast_ability(3, 0, 0) == 0;  // Prescience costs 8 > 2
+    const bool no_will = game_debug_cast_ability(8, 0, 0) == 0;  // War-Cry costs 8 > 2
 
-    // (E) Prescient Calm fires and spends its Will
+    // (F) Fremen War-Cry (8) fires and spends its Will
     game_debug_set_will(100);
     game_debug_world_tick(6);
     const int wp0 = game_debug_will();
-    const bool presc = game_debug_cast_ability(3, 0, 0) == 1 && game_debug_will() == wp0 - 8;
+    const bool warcry = game_debug_cast_ability(8, 0, 0) == 1 && game_debug_will() == wp0 - 8;
 
-    const bool pass = voiced && stunned && will_spent && on_cd && cd_blocks && cd_cleared &&
-                      blinked && no_will && presc;
-    std::printf("abilitytest %s (voice %d stun %d willspent %d cd %d cdblock %d cdclear %d blink %d nowill %d presc %d)\n",
-                pass ? "PASS" : "FAIL", voiced, stunned, will_spent, on_cd, cd_blocks, cd_cleared,
-                blinked, no_will, presc);
+    const bool pass = owns_starter && not_owned && unowned_refused && feinted && stunned && will_spent &&
+                      on_cd && cd_blocks && cd_cleared && dashed && no_will && warcry;
+    std::printf("abilitytest %s (own %d/%d refuse %d feint %d stun %d willspent %d cd %d cdblock %d cdclear %d dash %d nowill %d warcry %d)\n",
+                pass ? "PASS" : "FAIL", owns_starter, not_owned, unowned_refused, feinted, stunned,
+                will_spent, on_cd, cd_blocks, cd_cleared, dashed, no_will, warcry);
     std::remove("meta.dat");
     return pass ? 0 : 1;
 }
@@ -2604,7 +2652,7 @@ int main(int argc, char** argv) {
          vendortest = false, patroltest = false, cavetest = false, trialtest = false,
          endgametest = false, striketest = false, pinnacletest = false, capstonetest = false,
          longridetest = false, choamtest = false, currencytest = false, currencymechtest = false,
-         currencydroptest = false, currencyuitest = false, essencetest = false, gridtest = false, currencytabtest = false, vaulttest = false, guitest = false, economytest = false, sietchtreetest = false, passivetreetest = false, maulatest = false, skillbartest = false, abilitytest = false,
+         currencydroptest = false, currencyuitest = false, essencetest = false, gridtest = false, currencytabtest = false, vaulttest = false, guitest = false, economytest = false, sietchtreetest = false, passivetreetest = false, maulatest = false, skillbartest = false, teachingtest = false, abilitytest = false,
          flasktest = false, inputtest = false, menutest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
@@ -2652,6 +2700,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--passivetreetest") == 0) passivetreetest = true;
         if (SDL_strcmp(argv[i], "--maulatest") == 0) maulatest = true;
         if (SDL_strcmp(argv[i], "--skillbartest") == 0) skillbartest = true;
+        if (SDL_strcmp(argv[i], "--teachingtest") == 0) teachingtest = true;
         if (SDL_strcmp(argv[i], "--abilitytest") == 0) abilitytest = true;
         if (SDL_strcmp(argv[i], "--flasktest") == 0) flasktest = true;
         if (SDL_strcmp(argv[i], "--inputtest") == 0) inputtest = true;
@@ -2720,6 +2769,7 @@ int main(int argc, char** argv) {
     if (passivetreetest) return run_passivetreetest(mixer, assets, cmaps);
     if (maulatest) return run_maulatest(mixer, assets, cmaps);
     if (skillbartest) return run_skillbartest(mixer, assets, cmaps);
+    if (teachingtest) return run_teachingtest(mixer, assets, cmaps);
     if (abilitytest) return run_abilitytest(mixer, assets, cmaps);
     if (flasktest) return run_flasktest(mixer, assets, cmaps);
     if (inputtest) return run_inputtest(mixer, assets, cmaps);

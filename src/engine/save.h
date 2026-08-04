@@ -7,7 +7,7 @@
 #include <vector>
 
 inline constexpr uint32_t kSaveMagic = 0x54535544;  // 'DUST'
-inline constexpr uint16_t kSaveVersion = 30;  // v30: C7b skill-bar bindings (pl.skill_bind)
+inline constexpr uint16_t kSaveVersion = 31;  // v31: C7c learned-ability Teachings (pl.owned_abilities)
 
 class SaveWriter {
 public:
