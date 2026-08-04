@@ -1694,11 +1694,12 @@ int run_longridetest(audio::Mixer& mixer, const Assets& assets, const Colormaps&
     for (int i = 0; i < 200 && !bucked; ++i) if (game_debug_ride_push() == 1) bucked = true;
     const bool buck = bucked && game_debug_in_ride() == 0 && game_debug_ride_haul() == 0;
 
-    // (E) records + Jacurutu accrual, and the DME9 round-trip
+    // (E) records + Jacurutu accrual, and the meta round-trip. (D3: the Maker Hide counter is migrated
+    // to a currency stack on meta load, so we assert the persistent RECORD survives, not the counter.)
     const bool records = game_debug_best_ride_leg() > 0;
     const int hides = game_debug_maker_hides();
     int mb = -1, ma = -1; game_debug_meta_reload_class(&mb, &ma);
-    const bool persisted = game_debug_best_ride_leg() > 0 && game_debug_maker_hides() == hides;
+    const bool persisted = game_debug_best_ride_leg() > 0;
 
     const bool pass = gated && began && safe && banked && buck && records && persisted;
     std::printf("longridetest %s (gated %d began %d safe %d banked %d buck %d best %d hides %d persist %d)\n",
@@ -1757,48 +1758,72 @@ int run_choamtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cm
     return pass ? 0 : 1;
 }
 
-// D2 crafting: the sietch bench spends materials to work gear. A Maker Hide (Divine) rerolls an
-// item's affix VALUES within their tiers; a Worm Tooth reforges a WEAPON (fresh affixes). Materials
-// persist in meta (DMEB). craft_setup puts a rare item in inv[0]; craft_sig reads its affix signature.
-int run_crafttest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+// D3a: the currency framework + the "simple" PoE orbs (those that reuse the affix engine). Each orb
+// is a stacking currency the bench applies to a gear item. Currency kinds are items::CUR_* (in items.h).
+int run_currencytest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
     std::remove("meta.dat");
     GameServices services{&mixer, &assets, &cmaps};
     game_init(7, services);
+    auto grant = [&](int c) { game_debug_grant_currency(c, 5); };
+    int rar = 0, naf = 0, frac = 0;
 
-    // (A) Divine: a rare armor's values reroll while its affixes + tiers are kept; the Hide is spent
-    game_debug_craft_setup(0 /*armor*/);
-    int n0, v0, t0; game_debug_craft_sig(&n0, &v0, &t0);
-    const bool have_affixes = n0 >= 1;
-    const bool no_hide = game_debug_bench_divine() == 0;   // no material -> refused
-    game_debug_give_material(0, 1);
-    const bool divined = game_debug_bench_divine() == 1;
-    int n1, v1, t1; game_debug_craft_sig(&n1, &v1, &t1);
-    const bool preserved = n1 == n0 && t1 == t0;           // same affixes + same tiers
-    const bool rerolled = v1 != v0;                        // values changed
-    const bool hide_spent = game_debug_material(0) == 0;
+    // (A) the bench refuses an orb you don't hold
+    game_debug_setup_gear(0, 0 /*common*/, 8);
+    const bool no_cur = game_debug_bench(items::CUR_TRANSMUTE, 0) == 0;
 
-    // (B) Reforge: a weapon rerolls fresh; the Tooth is spent
-    game_debug_craft_setup(1 /*weapon*/);
-    const int slot = game_debug_craft_sig(nullptr, nullptr, nullptr);  // 0 == Slot::Weapon
-    const bool no_tooth = game_debug_bench_reforge() == 0;
-    game_debug_give_material(1, 1);
-    const bool reforged = game_debug_bench_reforge() == 1;
-    const bool tooth_spent = game_debug_material(1) == 0;
+    // (B) Transmutation: Common -> Magic (1 mod); spends one from the stack
+    grant(items::CUR_TRANSMUTE);
+    const bool transmuted = game_debug_bench(items::CUR_TRANSMUTE, 0) == 1;
+    game_debug_item_sig(0, &rar, &naf, &frac);
+    const bool is_magic = rar == 1 && naf == 1 && game_debug_currency_count(items::CUR_TRANSMUTE) == 4;
 
-    // (C) reforge refuses a non-weapon (armor), and does NOT consume the Tooth
-    game_debug_craft_setup(0 /*armor*/);
-    game_debug_give_material(1, 1);
-    const bool armor_no_reforge = game_debug_bench_reforge() == 0 && game_debug_material(1) == 1;
+    // (C) Augmentation fills the magic to 2 mods
+    grant(items::CUR_AUGMENT);
+    const bool augmented = game_debug_bench(items::CUR_AUGMENT, 0) == 1;
+    game_debug_item_sig(0, &rar, &naf, nullptr);
+    const bool aug_ok = rar == 1 && naf == 2;
 
-    // (D) DMEB round-trip: the unspent Worm Tooth survives a meta reload
-    int mb = -1, ma = -1; game_debug_meta_reload_class(&mb, &ma);
-    const bool persisted = game_debug_material(1) == 1;
+    // (D) Regal: Magic -> Rare (+1 mod)
+    grant(items::CUR_REGAL);
+    game_debug_bench(items::CUR_REGAL, 0);
+    game_debug_item_sig(0, &rar, &naf, nullptr);
+    const bool regaled = rar == 2 && naf >= 3;
 
-    const bool pass = have_affixes && no_hide && divined && preserved && rerolled && hide_spent &&
-                      slot == 0 && no_tooth && reforged && tooth_spent && armor_no_reforge && persisted;
-    std::printf("crafttest %s (aff %d divine[no %d yes %d keep %d reroll %d spent %d] reforge[wpn %d no %d yes %d spent %d armorX %d] persist %d)\n",
-                pass ? "PASS" : "FAIL", n0, no_hide, divined, preserved, rerolled, hide_spent,
-                slot == 0, no_tooth, reforged, tooth_spent, armor_no_reforge, persisted);
+    // (E) Fracture locks one mod; a Chaos reforge then PRESERVES it
+    grant(items::CUR_FRACTURE); grant(items::CUR_CHAOS);
+    game_debug_bench(items::CUR_FRACTURE, 0);
+    game_debug_item_sig(0, nullptr, nullptr, &frac);
+    const bool fractured = frac != 0;
+    game_debug_bench(items::CUR_CHAOS, 0);
+    int frac2 = 0; game_debug_item_sig(0, &rar, &naf, &frac2);
+    const bool frac_kept = frac2 != 0 && rar == 2;
+
+    // (F) Divine rerolls values but keeps the affix COUNT
+    grant(items::CUR_DIVINE);
+    int nb = 0; game_debug_item_sig(0, nullptr, &nb, nullptr);
+    game_debug_bench(items::CUR_DIVINE, 0);
+    int na = 0; game_debug_item_sig(0, nullptr, &na, nullptr);
+    const bool divined = na == nb;
+
+    // (G) Annulment removes one mod
+    grant(items::CUR_ANNUL);
+    int ab = 0; game_debug_item_sig(0, nullptr, &ab, nullptr);
+    game_debug_bench(items::CUR_ANNUL, 0);
+    int aa = 0; game_debug_item_sig(0, nullptr, &aa, nullptr);
+    const bool annulled = aa == ab - 1;
+
+    // (H) Scouring strips a fresh Rare back to Common (a fractured item would refuse — tested via frac_kept)
+    game_debug_setup_gear(1, 2 /*rare*/, 8);
+    grant(items::CUR_SCOURING);
+    const bool scoured = game_debug_bench(items::CUR_SCOURING, 1) == 1;
+    game_debug_item_sig(1, &rar, &naf, nullptr);
+    const bool to_common = rar == 0 && naf == 0;
+
+    const bool pass = no_cur && transmuted && is_magic && augmented && aug_ok && regaled &&
+                      fractured && frac_kept && divined && annulled && scoured && to_common;
+    std::printf("currencytest %s (noCur %d trans %d magic %d aug %d regal %d frac %d fracKept %d divine %d annul %d scour %d common %d)\n",
+                pass ? "PASS" : "FAIL", no_cur, transmuted, is_magic, augmented, regaled, fractured,
+                frac_kept, divined, annulled, scoured, to_common);
     std::remove("meta.dat");
     return pass ? 0 : 1;
 }
@@ -1974,16 +1999,16 @@ int run_menutest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cma
     key(Key::Confirm);
     const bool courted = game_debug_house_stance(1) == 1;  // ALLY
 
-    // (D) the crafting bench (Divine mode) spends a Maker Hide on the selected item
-    game_debug_craft_setup(0 /*armor*/);
-    game_debug_give_material(0, 1);
-    game_debug_open_menu(11, 0);
+    // (D) the crafting bench opens from the council and Back returns (full currency UI lands in D3d)
+    game_debug_open_menu(8, 2 /*Crafting Bench row*/);
     key(Key::Confirm);
-    const bool crafted = game_debug_material(0) == 0;
+    const bool to_bench = game_debug_menu_open() == 11;
+    key(Key::Confirm);  // the stub's only row is Back
+    const bool bench_back = game_debug_menu_open() == 8;
 
-    const bool pass = to_table && commissioned && courted && crafted;
-    std::printf("menutest %s (to_table %d strike %d court %d craft %d)\n",
-                pass ? "PASS" : "FAIL", to_table, commissioned, courted, crafted);
+    const bool pass = to_table && commissioned && courted && to_bench && bench_back;
+    std::printf("menutest %s (to_table %d strike %d court %d bench %d back %d)\n",
+                pass ? "PASS" : "FAIL", to_table, commissioned, courted, to_bench, bench_back);
     std::remove("meta.dat");
     return pass ? 0 : 1;
 }
@@ -2028,7 +2053,7 @@ int main(int argc, char** argv) {
          rttest = false, stuntest = false, classtest = false, guildtest = false,
          vendortest = false, patroltest = false, cavetest = false, trialtest = false,
          endgametest = false, striketest = false, pinnacletest = false, capstonetest = false,
-         longridetest = false, choamtest = false, crafttest = false, abilitytest = false,
+         longridetest = false, choamtest = false, currencytest = false, abilitytest = false,
          flasktest = false, inputtest = false, menutest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
@@ -2062,7 +2087,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--capstonetest") == 0) capstonetest = true;
         if (SDL_strcmp(argv[i], "--longridetest") == 0) longridetest = true;
         if (SDL_strcmp(argv[i], "--choamtest") == 0) choamtest = true;
-        if (SDL_strcmp(argv[i], "--crafttest") == 0) crafttest = true;
+        if (SDL_strcmp(argv[i], "--currencytest") == 0) currencytest = true;
         if (SDL_strcmp(argv[i], "--abilitytest") == 0) abilitytest = true;
         if (SDL_strcmp(argv[i], "--flasktest") == 0) flasktest = true;
         if (SDL_strcmp(argv[i], "--inputtest") == 0) inputtest = true;
@@ -2117,7 +2142,7 @@ int main(int argc, char** argv) {
     if (capstonetest) return run_capstonetest(mixer, assets, cmaps);
     if (longridetest) return run_longridetest(mixer, assets, cmaps);
     if (choamtest) return run_choamtest(mixer, assets, cmaps);
-    if (crafttest) return run_crafttest(mixer, assets, cmaps);
+    if (currencytest) return run_currencytest(mixer, assets, cmaps);
     if (abilitytest) return run_abilitytest(mixer, assets, cmaps);
     if (flasktest) return run_flasktest(mixer, assets, cmaps);
     if (inputtest) return run_inputtest(mixer, assets, cmaps);

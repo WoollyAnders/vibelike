@@ -7,7 +7,7 @@
 #include <vector>
 
 inline constexpr uint32_t kSaveMagic = 0x54535544;  // 'DUST'
-inline constexpr uint16_t kSaveVersion = 23;  // v23: flask belt charges (pl.flask_charges[3])
+inline constexpr uint16_t kSaveVersion = 24;  // v24: D3 widened Inst (currency/stack/fractured/istate)
 
 class SaveWriter {
 public:

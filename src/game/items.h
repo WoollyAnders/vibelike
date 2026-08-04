@@ -283,24 +283,91 @@ struct RolledAffix {                 // one explicit mod actually on an item
     bool empty() const { return kind == 0xFF; }
 };
 
-// D1 item instance (~34 bytes). rarity 0 common / 1 magic / 2 rare.
+// D3: PoE-style crafting currency. Each currency is a stacking inventory item (stored in Inst.currency
+// + Inst.stack) that applies one PoE orb operation at the sietch bench. `min_alvl` gates drops (PoE
+// area-level logic); `weight` sets drop rarity (higher = more common). Names are Fremen stillsuit /
+// fabrication materials (see the plan).
+enum Currency : uint8_t {
+    CUR_NONE = 0,
+    CUR_WISDOM,      // Ancient Scroll        — Scroll of Wisdom (identify)
+    CUR_TRANSMUTE,   // Melange Residue        — Transmutation
+    CUR_AUGMENT,     // Fibrous Biopolymer     — Augmentation
+    CUR_ALTERATION,  // Filterweave            — Alteration
+    CUR_FLASKQUAL,   // Distillate Microtubing — Glassblower (flask quality)
+    CUR_ALCHEMY,     // Thermal Filament       — Alchemy
+    CUR_SCOURING,    // Scouring Sand          — Scouring
+    CUR_REGAL,       // Plasteel Scrap         — Regal
+    CUR_BLESSED,     // Osmotic Membrane       — Blessed (implicit reroll)
+    CUR_ARMORQUAL,   // Maker Hide             — Armourer's Scrap (armor quality)
+    CUR_WEAPONQUAL,  // Worm Tooth             — Blacksmith's Whetstone (weapon quality)
+    CUR_CHAOS,       // Shigawire Coil         — Chaos
+    CUR_ANNUL,       // Electrolyte Solvent    — Annulment
+    CUR_EXALT,       // Precipitator Cell      — Exalted
+    CUR_FRACTURE,    // Ixian Mechanism        — Fracturing
+    CUR_VAAL,        // Unstable Catalyst      — Vaal (corrupt)
+    CUR_DIVINE,      // Refined Duraluminum    — Divine (value reroll)
+    CUR_MIRROR,      // Echo of Shai'Hulud     — Mirror (duplicate)
+    CUR_COUNT
+};
+struct CurrencyDef {
+    const char* name;
+    uint8_t min_alvl;   // minimum area level at which this currency can drop
+    uint8_t weight;     // drop weight (relative rarity; higher = more common)
+    const char* effect; // short bench-screen description
+};
+inline constexpr CurrencyDef kCurrency[CUR_COUNT] = {
+    {"", 0, 0, ""},
+    {"Ancient Scroll", 1, 100, "Identify an unidentified item"},
+    {"Melange Residue", 1, 100, "Upgrade a Normal item to Magic"},
+    {"Fibrous Biopolymer", 1, 90, "Add a mod to a Magic item"},
+    {"Filterweave", 2, 80, "Reforge a Magic item's mods"},
+    {"Distillate Microtubing", 2, 40, "Improve a flask's quality"},
+    {"Thermal Filament", 3, 55, "Upgrade a Normal item to Rare"},
+    {"Scouring Sand", 3, 45, "Strip an item back to Normal"},
+    {"Plasteel Scrap", 4, 45, "Upgrade a Magic item to Rare"},
+    {"Osmotic Membrane", 4, 35, "Reroll an item's implicit values"},
+    {"Maker Hide", 5, 40, "Improve armour quality"},
+    {"Worm Tooth", 5, 40, "Improve weapon quality"},
+    {"Shigawire Coil", 5, 30, "Reforge a Rare item's mods"},
+    {"Electrolyte Solvent", 6, 22, "Remove a random mod"},
+    {"Precipitator Cell", 7, 14, "Add a mod to a Rare item"},
+    {"Ixian Mechanism", 8, 8, "Fracture: lock one random mod"},
+    {"Unstable Catalyst", 8, 6, "Corrupt: a risky random outcome"},
+    {"Refined Duraluminum", 9, 4, "Reroll an item's mod values"},
+    {"Echo of Shai'Hulud", 12, 1, "Duplicate an item"},
+};
+inline const char* currency_name(uint8_t c) { return c > 0 && c < CUR_COUNT ? kCurrency[c].name : "?"; }
+
+// D1/D3 item instance. rarity 0 common / 1 magic / 2 rare. A currency stack sets `currency` (a
+// Currency kind) + `stack`, leaving `def` = 0xFF; gear leaves `currency` = 0.
 struct Inst {
     uint8_t def = 0xFF;
     uint8_t rarity = R_COMMON;
     uint8_t ilvl = 1;
     uint8_t nprefix = 0, nsuffix = 0;
     uint8_t rare_name = 0;           // adj | (noun<<4)
-    uint8_t quality = 0;             // D2-reserved (0..20%); no effect in D1
-    uint8_t enchant = 0;             // D2-reserved (Consecration enchant id, 0 = none); no effect in D1
+    uint8_t quality = 0;             // D3: item quality % (0..20); armour/weapon/flask quality raise it
+    uint8_t enchant = 0;             // reserved
+    uint8_t currency = 0;            // D3: 0 = gear; else a Currency kind (this slot is a currency stack)
+    uint16_t stack = 0;              // D3: currency stack count (currency slots only)
+    uint8_t fractured = 0;           // D3: per-affix lock bitmask (bits 0-2 prefix, 3-5 suffix)
+    uint8_t istate = 0;              // D3: bit0 unidentified, bit1 corrupted, bit2 mirrored
     RolledAffix pre[kMaxPrefix];
     RolledAffix suf[kMaxSuffix];
 
-    bool empty() const { return def == 0xFF; }
+    bool is_currency() const { return currency != 0; }
+    bool empty() const { return def == 0xFF && currency == 0; }
     const Def& d() const { return kDefs[def]; }
+    bool unidentified() const { return (istate & 1) != 0; }  // D3
+    bool corrupted() const { return (istate & 2) != 0; }     // D3
+    bool mirrored() const { return (istate & 4) != 0; }      // D3
+    // A fractured affix (bit set in `fractured`) is locked: reroll/strip ops must preserve it.
+    bool frac_pre(int i) const { return (fractured & (1 << i)) != 0; }
+    bool frac_suf(int i) const { return (fractured & (1 << (3 + i))) != 0; }
 
     // implicit (Def a/b for non-weapon) + every rolled affix of this kind.
     int affix_power(uint8_t kind) const {
-        if (empty()) return 0;
+        if (empty() || is_currency()) return 0;
         int p = 0;
         if (d().slot != Slot::Weapon && d().a == kind) p += d().b;  // implicit
         for (int i = 0; i < nprefix; ++i) if (pre[i].kind == kind) p += pre[i].value;
@@ -309,7 +376,13 @@ struct Inst {
     }
 
     void full_name(char* out, int n) const {
+        if (is_currency()) {  // D3: "Filterweave x24"
+            if (stack > 1) std::snprintf(out, size_t(n), "%s x%u", currency_name(currency), unsigned(stack));
+            else std::snprintf(out, size_t(n), "%s", currency_name(currency));
+            return;
+        }
         if (empty()) { std::snprintf(out, size_t(n), "-"); return; }
+        if (unidentified()) { std::snprintf(out, size_t(n), "Unidentified %s", d().name); return; }
         if (rarity == R_RARE) {
             std::snprintf(out, size_t(n), "%s %s",
                           kRareAdj[rare_name & 7], kRareNoun[(rare_name >> 4) & 7]);
@@ -324,7 +397,13 @@ struct Inst {
 
     // Multi-line detail for tooltips: "ilvl N" then one line per rolled mod. Returns line count.
     int describe(char* out, int cap) const {
+        if (is_currency()) {  // D3: currency stack — name + count + what it does
+            std::snprintf(out, size_t(cap), "%s (x%u)\n%s\n", currency_name(currency),
+                          unsigned(stack), kCurrency[currency].effect);
+            return 2;
+        }
         if (empty()) { if (cap) out[0] = 0; return 0; }
+        if (unidentified()) { std::snprintf(out, size_t(cap), "Unidentified %s\n", d().name); return 1; }
         int off = 0, lines = 0;
         auto add = [&](const char* fmt, int v, const char* nm, int t) {
             if (off >= cap) return;

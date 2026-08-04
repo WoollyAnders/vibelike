@@ -264,7 +264,6 @@ struct GameState {
                         // 8 war council / 9 jihad table / 10 landsraad / 11 crafting bench
     int menu_sel = 0;
     int jihad_tier = 1;  // transient UI: the commission tier chosen at the Jihad Table (Left/Right)
-    int bench_mode = 0;  // transient UI: 0 = Divine (Maker Hide), 1 = Reforge (Worm Tooth)
     int vault_page = 0;
     int last_decay_day = 0;
 
@@ -1117,6 +1116,7 @@ int guild_difficulty() {
     return d < 0 ? 0 : d > cap ? cap : d;
 }
 
+inline constexpr uint32_t kMetaVC = 0x43454D44u;  // 'DMEC' (D3: widened Inst — currency stacks in inv)
 inline constexpr uint32_t kMetaVB = 0x42454D44u;  // 'DMEB' (D2 crafting: + worm_teeth)
 inline constexpr uint32_t kMetaVA = 0x41454D44u;  // 'DMEA' (Landsraad/CHOAM: + house_allied)
 inline constexpr uint32_t kMetaV9 = 0x39454D44u;  // 'DME9' (Long Ride: + maker_hides / best_ride_leg)
@@ -1149,51 +1149,89 @@ items::Inst convert_legacy(const LegacyInst& L) {
     return it;
 }
 
+// D3 back-compat: DME4..DMEB stored the pre-D3 (D1-widened) Inst. Read those blobs as OldInst and
+// convert to the widened D3 Inst (currency/stack/fractured/istate default 0 = plain gear).
+struct OldInst {
+    uint8_t def, rarity, ilvl, nprefix, nsuffix, rare_name, quality, enchant;
+    items::RolledAffix pre[items::kMaxPrefix];
+    items::RolledAffix suf[items::kMaxSuffix];
+};
+items::Inst from_old_inst(const OldInst& o) {
+    items::Inst it;
+    it.def = o.def; it.rarity = o.rarity; it.ilvl = o.ilvl;
+    it.nprefix = o.nprefix; it.nsuffix = o.nsuffix; it.rare_name = o.rare_name;
+    it.quality = o.quality; it.enchant = o.enchant;
+    for (int i = 0; i < items::kMaxPrefix; ++i) it.pre[i] = o.pre[i];
+    for (int i = 0; i < items::kMaxSuffix; ++i) it.suf[i] = o.suf[i];
+    return it;
+}
+template <int N>
+void read_inst_blob(FILE* f, items::Inst (&dst)[N], bool current) {
+    if (current) { (void)!std::fread(dst, sizeof dst, 1, f); return; }
+    OldInst old[N];
+    (void)!std::fread(old, sizeof old, 1, f);
+    for (int i = 0; i < N; ++i) dst[i] = from_old_inst(old[i]);
+}
+// D3: place `amount` of currency `kind` into meta storage (merge a stack, else a free inv slot,
+// else the vault). Used to migrate the old Maker Hide / Worm Tooth counters into currency stacks.
+void meta_grant_currency(uint8_t kind, int amount) {
+    if (amount <= 0 || kind == 0) return;
+    for (items::Inst& s : g_meta.inv) if (s.currency == kind) { s.stack = uint16_t(s.stack + amount); return; }
+    for (items::Inst& s : g_meta.inv) if (s.empty()) { s.currency = kind; s.stack = uint16_t(amount); return; }
+    for (items::Inst& s : g_meta.stash) if (s.currency == kind) { s.stack = uint16_t(s.stack + amount); return; }
+    for (items::Inst& s : g_meta.stash) if (s.empty()) { s.currency = kind; s.stack = uint16_t(amount); return; }
+}
+
 void meta_load() {
     FILE* f = std::fopen("meta.dat", "rb");
     if (!f) return;
     uint32_t magic = 0;
     if (std::fread(&magic, 4, 1, f) == 1) {
-        if (magic == kMetaVB || magic == kMetaVA || magic == kMetaV9 || magic == kMetaV8 || magic == kMetaV7 || magic == kMetaV6 || magic == kMetaV5 || magic == kMetaV4) {  // native widened-Inst format
+        if (magic >= kMetaV4 && magic <= kMetaVC && magic != kMetaV1) {  // native widened-Inst format (DME4..DMEC)
+            const bool cur = (magic == kMetaVC);  // DMEC = new Inst layout; older = OldInst (convert)
             (void)!std::fread(&g_meta.runs, 4, 1, f);
             (void)!std::fread(&g_meta.endings_seen, 1, 1, f);
             (void)!std::fread(&g_meta.stash_count, 1, 1, f);
-            (void)!std::fread(g_meta.stash, sizeof g_meta.stash, 1, f);
+            read_inst_blob(f, g_meta.stash, cur);
             (void)!std::fread(&g_meta.awaken_unlocked, 1, 1, f);
             (void)!std::fread(&g_meta.awaken_cleared, 1, 1, f);
             (void)!std::fread(&g_meta.has_char, 1, 1, f);
             (void)!std::fread(&g_meta.banked_spice, 4, 1, f);
             (void)!std::fread(&g_meta.st, sizeof g_meta.st, 1, f);
-            (void)!std::fread(g_meta.equip, sizeof g_meta.equip, 1, f);
-            (void)!std::fread(g_meta.inv, sizeof g_meta.inv, 1, f);
-            if (magic >= kMetaV5 && magic <= kMetaVB) {  // C3: base class + ascendancy (DME4 -> 0/None)
+            read_inst_blob(f, g_meta.equip, cur);
+            read_inst_blob(f, g_meta.inv, cur);
+            if (magic >= kMetaV5) {  // C3: base class + ascendancy (DME4 -> 0/None)
                 (void)!std::fread(&g_meta.base_class, 1, 1, f);
                 (void)!std::fread(&g_meta.ascendancy, 1, 1, f);
             }
-            if (magic >= kMetaV6 && magic <= kMetaVB) {  // B6: guild tithe (DME5/DME4 leave them at 0)
+            if (magic >= kMetaV6) {  // B6: guild tithe (DME5/DME4 leave them at 0)
                 (void)!std::fread(&g_meta.guild_debt, 1, 1, f);
                 (void)!std::fread(&g_meta.guild_broken, 1, 1, f);
             }
-            if (magic >= kMetaV7 && magic <= kMetaVB) {  // Desert Trials (DME6 and earlier leave it at 0)
+            if (magic >= kMetaV7) {  // Desert Trials (DME6 and earlier leave it at 0)
                 (void)!std::fread(&g_meta.trials_done, 1, 1, f);
             }
-            if (magic >= kMetaV8 && magic <= kMetaVB) {  // endgame Jihad state (DME7 and earlier -> 0)
+            if (magic >= kMetaV8) {  // endgame Jihad state (DME7 and earlier -> 0)
                 (void)!std::fread(&g_meta.chosen_path, 1, 1, f);
                 (void)!std::fread(g_meta.jihad_pressure, sizeof g_meta.jihad_pressure, 1, f);
                 (void)!std::fread(&g_meta.pinnacle_cleared, 1, 1, f);
                 (void)!std::fread(&g_meta.golden_shards, 1, 1, f);
                 (void)!std::fread(&g_meta.capstone_done, 1, 1, f);
             }
-            if (magic >= kMetaV9 && magic <= kMetaVB) {  // The Long Ride (DME8 and earlier leave it at 0)
+            if (magic >= kMetaV9) {  // The Long Ride (DME8 and earlier leave it at 0)
                 (void)!std::fread(&g_meta.maker_hides, 1, 1, f);
                 (void)!std::fread(&g_meta.best_ride_leg, 1, 1, f);
             }
-            if (magic >= kMetaVA && magic <= kMetaVB) {  // Landsraad/CHOAM (DME9 and earlier -> 0)
+            if (magic >= kMetaVA) {  // Landsraad/CHOAM (DME9 and earlier -> 0)
                 (void)!std::fread(&g_meta.house_allied, 1, 1, f);
             }
-            if (magic == kMetaVB) {  // D2 crafting (DMEA and earlier leave it at 0)
+            if (magic >= kMetaVB) {  // D2 crafting (DMEA and earlier leave it at 0)
                 (void)!std::fread(&g_meta.worm_teeth, 1, 1, f);
             }
+            // D3 migration: the old Maker Hide / Worm Tooth counters become currency stacks (their
+            // new roles: armour / weapon quality). No-op on a DMEC file (counters already 0).
+            if (g_meta.maker_hides > 0) { meta_grant_currency(items::CUR_ARMORQUAL, g_meta.maker_hides); g_meta.maker_hides = 0; }
+            if (g_meta.worm_teeth > 0) { meta_grant_currency(items::CUR_WEAPONQUAL, g_meta.worm_teeth); g_meta.worm_teeth = 0; }
         } else if (magic == kMetaV3 || magic == kMetaV2) {  // legacy 4-byte items -> convert
             (void)!std::fread(&g_meta.runs, 4, 1, f);
             (void)!std::fread(&g_meta.endings_seen, 1, 1, f);
@@ -1224,7 +1262,7 @@ void meta_load() {
 void meta_save() {
     FILE* f = std::fopen("meta.dat", "wb");
     if (!f) return;
-    std::fwrite(&kMetaVB, 4, 1, f);
+    std::fwrite(&kMetaVC, 4, 1, f);  // D3: DMEC (widened Inst; currency stacks ride the inv/stash blobs)
     std::fwrite(&g_meta.runs, 4, 1, f);
     std::fwrite(&g_meta.endings_seen, 1, 1, f);
     std::fwrite(&g_meta.stash_count, 1, 1, f);
@@ -1350,6 +1388,17 @@ int drop_ilvl() {
     return a < 1 ? 1 : a > 10 ? 10 : a;
 }
 
+// D3: the unified AREA LEVEL that gates currency drops + endgame loot tiers. Campaign = the node's
+// Awaken depth (drop_ilvl); the endgame content never sets cur_node, so derive its level from the
+// active activity (strike tier / pinnacle / capstone / ride leg). Range ~1..16.
+int area_level() {
+    if (g.in_capstone) return 16;
+    if (g.in_pinnacle) return 14;
+    if (g.in_strike) return 10 + (g.strike_tier < 1 ? 1 : g.strike_tier);   // 11..15
+    if (g.in_ride) return 10 + (g.ride_leg > 6 ? 6 : g.ride_leg);           // 10..16
+    return drop_ilvl();
+}
+
 // Weighted draw on the loot stream (PoE-style spawn weights).
 int weighted_pick(const int* w, int n) {
     int total = 0;
@@ -1436,30 +1485,135 @@ bool craft_divine(items::Inst& it) {
     return true;
 }
 
-// The Worm Tooth (a sanctioned crysknife-craft): REFORGE a weapon — fresh rarity + affixes at its
-// item level. Weapon-only (canon: a crysknife is a dead Maker's tooth). Returns false otherwise.
-bool craft_reforge_weapon(items::Inst& it) {
-    if (it.empty() || it.d().slot != items::Slot::Weapon) return false;
-    roll_affixes(it, it.ilvl, 0);
+// Add one affix to `it` on a side with room (magic caps 1/1, rare caps 3/3), gated by area_level().
+// Returns false if there is no legal side/family. side: -1 = either, 0 = prefix, 1 = suffix.
+bool add_one_affix(items::Inst& it, int side) {
+    const int cap = it.rarity == items::R_RARE ? items::kMaxPrefix : 1;
+    bool canP = side != 1 && it.nprefix < cap;
+    bool canS = side != 0 && it.nsuffix < cap;
+    if (!canP && !canS) return false;
+    const bool pre = canP && (!canS || g.rng.loot.below(2) == 0);
+    const int before = pre ? it.nprefix : it.nsuffix;
+    roll_one_side(it, area_level(), pre, 1);
+    return (pre ? it.nprefix : it.nsuffix) > before;  // false if no legal family remained
+}
+
+// Reforge `it`'s affixes for its CURRENT rarity, preserving any fractured (locked) mods (Alteration /
+// Chaos). Fractured mods keep their kind+tier+value and their locked bit; the rest are re-rolled.
+void reroll_keep_rarity(items::Inst& it) {
+    items::RolledAffix kp[items::kMaxPrefix], ks[items::kMaxSuffix];
+    int np = 0, ns = 0;
+    for (int i = 0; i < it.nprefix; ++i) if (it.frac_pre(i)) kp[np++] = it.pre[i];
+    for (int i = 0; i < it.nsuffix; ++i) if (it.frac_suf(i)) ks[ns++] = it.suf[i];
+    it.nprefix = it.nsuffix = 0;
+    it.fractured = 0;
+    for (int i = 0; i < np; ++i) { it.pre[it.nprefix] = kp[i]; it.fractured |= uint8_t(1 << it.nprefix); ++it.nprefix; }
+    for (int i = 0; i < ns; ++i) { it.suf[it.nsuffix] = ks[i]; it.fractured |= uint8_t(1 << (3 + it.nsuffix)); ++it.nsuffix; }
+    const int tp = it.rarity == items::R_RARE ? 1 + int(g.rng.loot.below(items::kMaxPrefix)) : 1;
+    const int ts = it.rarity == items::R_RARE ? 1 + int(g.rng.loot.below(items::kMaxSuffix)) : 1;
+    for (int guard = 0; it.nprefix < tp && guard < 8; ++guard) { int b = it.nprefix; roll_one_side(it, area_level(), true, 1); if (it.nprefix == b) break; }
+    for (int guard = 0; it.nsuffix < ts && guard < 8; ++guard) { int b = it.nsuffix; roll_one_side(it, area_level(), false, 1); if (it.nsuffix == b) break; }
+}
+
+// Remove one random (non-fractured) affix (Annulment). Returns false if none removable.
+bool remove_random_affix(items::Inst& it) {
+    int idx[items::kMaxAffix], side[items::kMaxAffix], n = 0;
+    for (int i = 0; i < it.nprefix; ++i) if (!it.frac_pre(i)) { idx[n] = i; side[n] = 0; ++n; }
+    for (int i = 0; i < it.nsuffix; ++i) if (!it.frac_suf(i)) { idx[n] = i; side[n] = 1; ++n; }
+    if (!n) return false;
+    const int k = int(g.rng.loot.below(uint32_t(n)));
+    if (side[k] == 0) {  // shift prefixes down, shift the fractured bits with them
+        for (int i = idx[k]; i + 1 < it.nprefix; ++i) it.pre[i] = it.pre[i + 1];
+        --it.nprefix;
+        uint8_t lo = uint8_t(it.fractured & 0x07), hi = uint8_t(it.fractured & 0x38);
+        uint8_t keep = 0; for (int i = 0, o = 0; i < it.nprefix + 1; ++i) if (i != idx[k] && (lo & (1 << i))) keep |= uint8_t(1 << o++); else if (i != idx[k]) ++o;
+        it.fractured = uint8_t(hi | keep);
+    } else {
+        for (int i = idx[k]; i + 1 < it.nsuffix; ++i) it.suf[i] = it.suf[i + 1];
+        --it.nsuffix;
+        uint8_t lo = uint8_t(it.fractured & 0x07), hi = uint8_t((it.fractured >> 3) & 0x07);
+        uint8_t keep = 0; for (int i = 0, o = 0; i < it.nsuffix + 1; ++i) if (i != idx[k] && (hi & (1 << i))) keep |= uint8_t(1 << o++); else if (i != idx[k]) ++o;
+        it.fractured = uint8_t(lo | (keep << 3));
+    }
     return true;
 }
 
-// Bench op: spend one Maker Hide to Divine the inventory item at idx.
-bool bench_divine(int inv_idx) {
-    if (g_meta.maker_hides < 1 || inv_idx < 0 || inv_idx >= 12) return false;
-    if (!craft_divine(g.pl.inv[inv_idx])) return false;
-    --g_meta.maker_hides;
-    meta_save();
-    g.log.push("The Maker Hide is spent; the gear's virtues re-settle anew.");
-    return true;
+// D3: apply one currency orb to a gear item. Returns false (no consume) if it cannot apply. The
+// D3b sub-system ops (Wisdom / Blessed / quality / Vaal / Mirror) are added in D3b.
+bool apply_orb(uint8_t cur, items::Inst& it) {
+    if (it.empty() || it.is_currency() || it.corrupted() || it.mirrored()) return false;
+    if (it.unidentified() && cur != items::CUR_WISDOM) return false;  // must identify first
+    using namespace items;
+    switch (cur) {
+        case CUR_TRANSMUTE:
+            if (it.rarity != R_COMMON) return false;
+            it.rarity = R_MAGIC; it.nprefix = it.nsuffix = 0; it.fractured = 0;
+            add_one_affix(it, -1);  // 1 mod (a magic can later be Augmented to its 2nd)
+            return true;
+        case CUR_ALCHEMY:
+            if (it.rarity != R_COMMON) return false;
+            it.rarity = R_RARE; it.nprefix = it.nsuffix = 0; it.fractured = 0;
+            roll_one_side(it, area_level(), true, 1 + int(g.rng.loot.below(kMaxPrefix)));
+            roll_one_side(it, area_level(), false, 1 + int(g.rng.loot.below(kMaxSuffix)));
+            it.rare_name = uint8_t(int(g.rng.loot.below(8)) | (int(g.rng.loot.below(8)) << 4));
+            return true;
+        case CUR_AUGMENT:
+            return it.rarity == R_MAGIC && add_one_affix(it, -1);
+        case CUR_EXALT:
+            return it.rarity == R_RARE && add_one_affix(it, -1);
+        case CUR_REGAL:
+            if (it.rarity != R_MAGIC) return false;
+            it.rarity = R_RARE;
+            it.rare_name = uint8_t(int(g.rng.loot.below(8)) | (int(g.rng.loot.below(8)) << 4));
+            add_one_affix(it, -1);
+            return true;
+        case CUR_ALTERATION:
+            if (it.rarity != R_MAGIC) return false;
+            reroll_keep_rarity(it); return true;
+        case CUR_CHAOS:
+            if (it.rarity != R_RARE) return false;
+            reroll_keep_rarity(it); return true;
+        case CUR_SCOURING:
+            if (it.rarity == R_COMMON || it.fractured) return false;  // can't scour a fractured item
+            it.rarity = R_COMMON; it.nprefix = it.nsuffix = 0; it.fractured = 0; it.rare_name = 0;
+            return true;
+        case CUR_ANNUL:
+            return remove_random_affix(it);
+        case CUR_DIVINE:
+            return craft_divine(it);
+        case CUR_FRACTURE: {
+            if (it.fractured) return false;  // one fracture per item
+            const int total = it.nprefix + it.nsuffix;
+            if (!total) return false;
+            const int pick = int(g.rng.loot.below(uint32_t(total)));
+            if (pick < it.nprefix) it.fractured = uint8_t(1 << pick);
+            else it.fractured = uint8_t(1 << (3 + (pick - it.nprefix)));
+            return true;
+        }
+        default: return false;  // D3b ops handled elsewhere
+    }
 }
-// Bench op: spend one Worm Tooth to reforge the inventory weapon at idx.
-bool bench_reforge(int inv_idx) {
-    if (g_meta.worm_teeth < 1 || inv_idx < 0 || inv_idx >= 12) return false;
-    if (!craft_reforge_weapon(g.pl.inv[inv_idx])) return false;
-    --g_meta.worm_teeth;
-    meta_save();
-    g.log.push("You rework the blade against a Maker's tooth. It is reforged.");
+
+// Currency held in the active inventory (a stack per cell).
+int currency_count(uint8_t kind) {
+    int n = 0;
+    for (const items::Inst& s : g.pl.inv) if (s.currency == kind) n += s.stack;
+    return n;
+}
+bool spend_currency(uint8_t kind) {
+    for (items::Inst& s : g.pl.inv) if (s.currency == kind && s.stack > 0) {
+        if (--s.stack == 0) s = items::Inst{};
+        return true;
+    }
+    return false;
+}
+// Bench: apply currency `cur` (owned in the pack) to the gear item at inv_idx.
+bool bench_apply(int cur, int inv_idx) {
+    if (cur <= 0 || cur >= items::CUR_COUNT || inv_idx < 0 || inv_idx >= 12) return false;
+    if (currency_count(uint8_t(cur)) < 1) return false;
+    if (!apply_orb(uint8_t(cur), g.pl.inv[inv_idx])) return false;
+    spend_currency(uint8_t(cur));
+    g.log.push("Bench: applied %s.", items::currency_name(uint8_t(cur)));
     return true;
 }
 
@@ -4552,7 +4706,7 @@ bool game_update(const InputState& in) {
     if (g.menu_open) {
         // 5 = character sheet, 6 = inventory, 7 = the vault
         int counts[12] = {0, 6, 3, 5, 4, 3 + kTalentCount + 1, 13, 13,
-                          4, 5 + 1 + 1, 5 + 1 + 1, 12 + 1};  // 8 council, 9 table, 10 landsraad, 11 bench
+                          4, 5 + 1 + 1, 5 + 1 + 1, 1};  // 8 council, 9 table, 10 landsraad, 11 bench (stub)
         const int n = counts[g.menu_open];
         // A6: mouse — hovering a row selects it, left-click confirms it, right-click closes.
         const int mrow = menu_row_under_mouse(in);
@@ -4566,8 +4720,6 @@ bool game_update(const InputState& in) {
             if (g.menu_open == 9) {  // Left/Right: commission tier
                 if (in.was_pressed(Key::Left) && g.jihad_tier > 1) --g.jihad_tier;
                 if (in.was_pressed(Key::Right) && g.jihad_tier < tune::kStrikeTiers) ++g.jihad_tier;
-            } else if (g.menu_open == 11) {  // Left/Right: bench mode (Divine / Reforge)
-                if (in.was_pressed(Key::Left) || in.was_pressed(Key::Right)) g.bench_mode ^= 1;
             }
             if (in.was_pressed(Key::Confirm) || mclick) {
                 const int sel = g.menu_sel;
@@ -4588,12 +4740,8 @@ bool game_update(const InputState& in) {
                         if (!court_house(sel)) g.log.push("That House cannot be courted now.");
                     } else if (sel == FAC_COUNT) { collect_dividend(); }
                     else { g.menu_open = 8; g.menu_sel = 0; }
-                } else {  // 11: the crafting bench
-                    if (sel < 12) {
-                        const bool ok = g.bench_mode == 0 ? bench_divine(sel) : bench_reforge(sel);
-                        if (!ok) g.log.push(g.bench_mode == 0 ? "No Maker Hide, or nothing to reroll."
-                                                              : "No Worm Tooth, or that is not a weapon.");
-                    } else { g.menu_open = 8; g.menu_sel = 0; }
+                } else {  // 11: the crafting bench — full currency roster UI lands in D3d
+                    g.menu_open = 8; g.menu_sel = 0;
                 }
             }
             return true;
@@ -4632,7 +4780,9 @@ bool game_update(const InputState& in) {
             if (in.was_pressed(Key::Confirm) || mclick) {
                 if (g.menu_sel == 12) {
                     g.menu_open = 0;
-                } else if (!g.pl.inv[g.menu_sel].empty()) {
+                } else if (g.pl.inv[g.menu_sel].is_currency()) {
+                    g.log.push("Currency is spent at the crafting bench, not equipped.");  // D3 guard
+                } else if (!g.pl.inv[g.menu_sel].empty() && !g.pl.inv[g.menu_sel].unidentified()) {
                     items::Inst& it = g.pl.inv[g.menu_sel];
                     items::Inst& eq = g.pl.equip[int(it.d().slot)];
                     const items::Inst tmp = eq;
@@ -5883,19 +6033,10 @@ void pass_ui(RenderCtx& r) {
             std::snprintf(buf, sizeof buf, "Collect CHOAM dividend  (~%d sp)", choam_control());
             row(FAC_COUNT, buf, g.menu_sel == FAC_COUNT);
             row(FAC_COUNT + 1, "Back", g.menu_sel == FAC_COUNT + 1);
-        } else {  // 11: the crafting bench
+        } else {  // 11: the crafting bench — the full currency-application UI lands in D3d
             draw_text_shadow(ctx, "THE CRAFTING BENCH", x0 + 24, y0 + 16, 230, 1);
-            std::snprintf(buf, sizeof buf, "Maker Hides %d   Worm Teeth %d   mode: %s  (<-/-> change)",
-                          g_meta.maker_hides, g_meta.worm_teeth,
-                          g.bench_mode == 0 ? "DIVINE (reroll values)" : "REFORGE (weapon)");
-            draw_text(ctx, buf, x0 + 24, y0 + 46, 14);
-            for (int i = 0; i < 12; ++i) {
-                char nm[48];
-                g.pl.inv[i].full_name(nm, sizeof nm);
-                std::snprintf(buf, sizeof buf, "%d. %s", i + 1, g.pl.inv[i].empty() ? "-" : nm);
-                row(i, buf, g.menu_sel == i);
-            }
-            row(12, "Back", g.menu_sel == 12);
+            draw_text(ctx, "Currency crafting comes online here soon.", x0 + 24, y0 + 46, 14);
+            row(0, "Back", g.menu_sel == 0);
         }
     } else
     // Character sheet / inventory / vault overlays (dynamic content).
@@ -6697,38 +6838,45 @@ int game_debug_house_stance(int f) { return house_stance(f); }   // 0 neutral, 1
 int game_debug_court_house(int f) { return court_house(f) ? 1 : 0; }
 int game_debug_collect_dividend() { return collect_dividend(); }
 int game_debug_opposing_houses() { return opposing_houses(); }
-// --- D2 crafting hooks ---
-void game_debug_give_material(int which, int n) {  // 0 = Maker Hide, 1 = Worm Tooth
-    int v = (which == 0 ? g_meta.maker_hides : g_meta.worm_teeth) + n;
-    if (v < 0) v = 0; if (v > 255) v = 255;
-    (which == 0 ? g_meta.maker_hides : g_meta.worm_teeth) = uint8_t(v);
-    meta_save();
+// --- D3 currency / crafting hooks ---
+void game_debug_grant_currency(int kind, int n) {  // add n of a currency to the active pack
+    if (kind <= 0 || kind >= items::CUR_COUNT || n <= 0) return;
+    for (items::Inst& s : g.pl.inv) if (s.currency == kind) { s.stack = uint16_t(s.stack + n); return; }
+    for (items::Inst& s : g.pl.inv) if (s.empty()) { s.currency = uint8_t(kind); s.stack = uint16_t(n); return; }
 }
-int game_debug_material(int which) { return which == 0 ? g_meta.maker_hides : g_meta.worm_teeth; }
-void game_debug_craft_setup(int weapon) {  // put a known rare item (weapon/armor) in inv[0]
+int game_debug_currency_count(int kind) { return currency_count(uint8_t(kind)); }
+void game_debug_setup_gear(int idx, int rarity, int ilvl) {  // place a known ARMOUR item in inv[idx]
+    if (idx < 0 || idx >= 12) return;
     items::Inst it;
-    for (int i = 0; i < items::kDefCount; ++i) {
-        const bool isw = items::kDefs[i].slot == items::Slot::Weapon;
-        if (weapon ? isw : !isw) { it.def = uint8_t(i); break; }
-    }
-    it.ilvl = 10;
-    it.rarity = items::R_RARE;
+    for (int i = 0; i < items::kDefCount; ++i)
+        if (items::kDefs[i].slot != items::Slot::Weapon) { it.def = uint8_t(i); break; }
+    it.ilvl = uint8_t(ilvl < 1 ? 1 : ilvl > 255 ? 255 : ilvl);
+    it.rarity = uint8_t(rarity);
     it.nprefix = it.nsuffix = 0;
-    roll_one_side(it, 10, true, 2);
-    roll_one_side(it, 10, false, 1);
-    g.pl.inv[0] = it;
+    if (rarity == items::R_MAGIC) { roll_one_side(it, ilvl, true, 1); roll_one_side(it, ilvl, false, 1); }
+    else if (rarity == items::R_RARE) { roll_one_side(it, ilvl, true, 2); roll_one_side(it, ilvl, false, 1); }
+    g.pl.inv[idx] = it;
 }
-int game_debug_craft_sig(int* naffix, int* vsum, int* tsum) {  // inv[0] affix signature; returns slot
-    const items::Inst& it = g.pl.inv[0];
-    if (it.empty()) { if (naffix) *naffix = 0; if (vsum) *vsum = 0; if (tsum) *tsum = 0; return -1; }
-    int n = 0, v = 0, t = 0;
-    for (int i = 0; i < it.nprefix; ++i) { ++n; v += it.pre[i].value; t += it.pre[i].tier; }
-    for (int i = 0; i < it.nsuffix; ++i) { ++n; v += it.suf[i].value; t += it.suf[i].tier; }
-    if (naffix) *naffix = n; if (vsum) *vsum = v; if (tsum) *tsum = t;
+int game_debug_bench(int cur, int idx) { return bench_apply(cur, idx) ? 1 : 0; }
+int game_debug_item_sig(int idx, int* rarity, int* naffix, int* frac) {  // inspect inv[idx]; returns slot
+    if (idx < 0 || idx >= 12) return -3;
+    const items::Inst& it = g.pl.inv[idx];
+    if (it.is_currency()) return -2;
+    if (it.empty()) return -1;
+    if (rarity) *rarity = it.rarity;
+    if (naffix) *naffix = it.nprefix + it.nsuffix;
+    if (frac) *frac = it.fractured;
     return int(it.d().slot);
 }
-int game_debug_bench_divine() { return bench_divine(0) ? 1 : 0; }
-int game_debug_bench_reforge() { return bench_reforge(0) ? 1 : 0; }
+int game_debug_item_valuesum(int idx) {  // sum of affix values (detects a Divine reroll)
+    if (idx < 0 || idx >= 12) return 0;
+    const items::Inst& it = g.pl.inv[idx];
+    if (it.empty() || it.is_currency()) return 0;
+    int v = 0;
+    for (int i = 0; i < it.nprefix; ++i) v += it.pre[i].value;
+    for (int i = 0; i < it.nsuffix; ++i) v += it.suf[i].value;
+    return v;
+}
 // --- C7 ability hooks ---
 int game_debug_cast_ability(int ab, int tx, int ty) { return cast_ability(ab, tx, ty) ? 1 : 0; }
 int game_debug_will() { return g.pl.will; }

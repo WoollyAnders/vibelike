@@ -139,12 +139,12 @@ int game_debug_house_stance(int f);          // Landsraad: 0 neutral / 1 ally / 
 int game_debug_court_house(int f);           // Landsraad: court House f into your bloc (1 = done)
 int game_debug_collect_dividend();           // Landsraad: collect the CHOAM dividend (spice)
 int game_debug_opposing_houses();            // Landsraad: count of Great Powers opposing you
-void game_debug_give_material(int which, int n);  // D2: 0 = Maker Hide, 1 = Worm Tooth
-int game_debug_material(int which);          // D2: material count (0 Maker Hide / 1 Worm Tooth)
-void game_debug_craft_setup(int weapon);     // D2: put a known rare item (weapon/armor) in inv[0]
-int game_debug_craft_sig(int* naffix, int* vsum, int* tsum);  // D2: inv[0] affix sig; returns slot
-int game_debug_bench_divine();               // D2: Maker Hide -> reroll inv[0] affix values (1=done)
-int game_debug_bench_reforge();              // D2: Worm Tooth -> reforge inv[0] weapon (1=done)
+void game_debug_grant_currency(int kind, int n);  // D3: add n of currency `kind` to the pack
+int game_debug_currency_count(int kind);      // D3: how many of a currency the pack holds
+void game_debug_setup_gear(int idx, int rarity, int ilvl);  // D3: place a known armour item in inv[idx]
+int game_debug_bench(int cur, int idx);       // D3: apply currency `cur` to inv[idx] (1 = applied)
+int game_debug_item_sig(int idx, int* rarity, int* naffix, int* frac);  // D3: inspect inv[idx]; returns slot
+int game_debug_item_valuesum(int idx);        // D3: sum of inv[idx] affix values
 int game_debug_cast_ability(int ab, int tx, int ty);  // C7: 1 Voice, 2 Blink, 3 Prescience (1=cast)
 int game_debug_will();                       // C7: current Will
 void game_debug_set_will(int w);             // C7: set current Will (test setup)
