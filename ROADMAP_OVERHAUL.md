@@ -482,7 +482,12 @@ ascend each, `meta.dat` round-trip) + the full suite/determinism baseline.
 **Exit:** each base starts distinct; ascension at the sietch rite grants an ascendancy that persists
 across a death.
 
-### C4 — Passive skill tree (PoE-style) ⬜
+### C4 — Passive skill tree (PoE-style) ✅
+**Done:** one shared 18-node graph (`kPassiveNodes`/`kPassiveEdges`) — a class anchor per corner
+(value-0, auto-allocated), three arms meeting at a central hub (hybrids by pathing), adjacency-gated
+allocation, 1 point/level. Node bonuses fold into `affix_total` (persist with the character). Screen at
+menu 13 (press C from the character sheet): a clickable node-graph render. Save v29 + meta DMEJ. Test
+`passivetreetest`; 47/47 green; dettest `b03ef8d5a9e44bc2` (anchors are value-0, so a fresh char is unperturbed).
 One shared node graph, class start per corner, adjacency-gated allocation, passive
 points per level.
 **Exit:** allocate an adjacent node → the derived stat moves; hybrids by pathing;
