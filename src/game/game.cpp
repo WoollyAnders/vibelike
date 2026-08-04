@@ -162,6 +162,7 @@ struct Player {
     CharStats st;
     items::Inst inv[tune::kInvCap];               // G: the pack pool (8x12 grid). inv_cell[i] = item i's top-left
     uint8_t inv_cell[tune::kInvCap] = {};         // grid cell of pool entry i (meaningful only when !inv[i].empty())
+    uint16_t cur_tab[items::CUR_COUNT] = {};      // G2: the crafting table's dedicated currency slots (per-type)
     items::Inst equip[int(items::Slot::Count)];  // by items::Slot (B2a: 10-slot Fremen paperdoll)
     int hp = tune::kPlayerHpMax;
     int water = tune::kStartWater;
@@ -1063,6 +1064,7 @@ struct Meta {
     items::Inst equip[int(items::Slot::Count)];
     items::Inst inv[tune::kInvCap];              // G (DMEE): the persisted pack pool (8x12 grid)
     uint8_t inv_cell[tune::kInvCap] = {};        // grid cell of pool entry i
+    uint16_t cur_tab[items::CUR_COUNT] = {};     // G2 (DMEF): persisted crafting-table currency slots
     // --- C3 (DME5) --- base class + ascendancy persist across death (character identity)
     uint8_t base_class = 0;        // BaseClass
     uint8_t ascendancy = 0;        // Ascendancy (0 = None until the rite)
@@ -1123,6 +1125,7 @@ int guild_difficulty() {
     return d < 0 ? 0 : d > cap ? cap : d;
 }
 
+inline constexpr uint32_t kMetaVF = 0x46454D44u;  // 'DMEF' (G2: + cur_tab, the crafting-table currency slots)
 inline constexpr uint32_t kMetaVE = 0x45454D44u;  // 'DMEE' (G: pack grid 12->96 + inv_cell)
 inline constexpr uint32_t kMetaVD = 0x44454D44u;  // 'DMED' (D3e: + spice_essence, the Awakening resource)
 inline constexpr uint32_t kMetaVC = 0x43454D44u;  // 'DMEC' (D3: widened Inst — currency stacks in inv)
@@ -1182,14 +1185,11 @@ void read_inst_blob(FILE* f, items::Inst (&dst)[N], bool current) {
     for (int i = 0; i < N; ++i) dst[i] = from_old_inst(old[i]);
 }
 void regrid_pool(items::Inst* pool, uint8_t* cell, int cap, int W, int H);  // G: fwd (defined below)
-// D3: place `amount` of currency `kind` into meta storage (merge a stack, else a free inv slot,
-// else the vault). Used to migrate the old Maker Hide / Worm Tooth counters into currency stacks.
+// D3/G2: add `amount` of currency `kind` to the persisted crafting-table slots. Used to migrate the old
+// Maker Hide / Worm Tooth counters into currency (their new roles are armour / weapon quality).
 void meta_grant_currency(uint8_t kind, int amount) {
-    if (amount <= 0 || kind == 0) return;
-    for (items::Inst& s : g_meta.inv) if (s.currency == kind) { s.stack = uint16_t(s.stack + amount); return; }
-    for (items::Inst& s : g_meta.inv) if (s.empty()) { s.currency = kind; s.stack = uint16_t(amount); return; }
-    for (items::Inst& s : g_meta.stash) if (s.currency == kind) { s.stack = uint16_t(s.stack + amount); return; }
-    for (items::Inst& s : g_meta.stash) if (s.empty()) { s.currency = kind; s.stack = uint16_t(amount); return; }
+    if (amount <= 0 || kind == 0 || kind >= items::CUR_COUNT) return;
+    g_meta.cur_tab[kind] = uint16_t(g_meta.cur_tab[kind] + amount);
 }
 
 void meta_load() {
@@ -1197,7 +1197,7 @@ void meta_load() {
     if (!f) return;
     uint32_t magic = 0;
     if (std::fread(&magic, 4, 1, f) == 1) {
-        if (magic >= kMetaV4 && magic <= kMetaVE && magic != kMetaV1) {  // native widened-Inst format (DME4..DMEE)
+        if (magic >= kMetaV4 && magic <= kMetaVF && magic != kMetaV1) {  // native widened-Inst format (DME4..DMEF)
             const bool cur = (magic >= kMetaVC);  // DMEC+ = new Inst layout; older = OldInst (convert)
             (void)!std::fread(&g_meta.runs, 4, 1, f);
             (void)!std::fread(&g_meta.endings_seen, 1, 1, f);
@@ -1250,8 +1250,11 @@ void meta_load() {
             if (magic >= kMetaVD) {  // D3e: the Awakening resource (DMEC and earlier -> 0)
                 (void)!std::fread(&g_meta.spice_essence, 1, 1, f);
             }
-            // D3 migration: the old Maker Hide / Worm Tooth counters become currency stacks (their
-            // new roles: armour / weapon quality). No-op on a DMEC file (counters already 0).
+            if (magic >= kMetaVF) {  // G2: the crafting-table currency slots (DMEE and earlier -> 0)
+                (void)!std::fread(g_meta.cur_tab, sizeof g_meta.cur_tab, 1, f);
+            }
+            // D3 migration: the old Maker Hide / Worm Tooth counters become currency (their new roles:
+            // armour / weapon quality), banked to the crafting table. No-op on a DMEC+ file (already 0).
             if (g_meta.maker_hides > 0) { meta_grant_currency(items::CUR_ARMORQUAL, g_meta.maker_hides); g_meta.maker_hides = 0; }
             if (g_meta.worm_teeth > 0) { meta_grant_currency(items::CUR_WEAPONQUAL, g_meta.worm_teeth); g_meta.worm_teeth = 0; }
         } else if (magic == kMetaV3 || magic == kMetaV2) {  // legacy 4-byte items -> convert
@@ -1285,7 +1288,7 @@ void meta_load() {
 void meta_save() {
     FILE* f = std::fopen("meta.dat", "wb");
     if (!f) return;
-    std::fwrite(&kMetaVE, 4, 1, f);  // G: DMEE (pack grid 96 + inv_cell; earlier fields unchanged)
+    std::fwrite(&kMetaVF, 4, 1, f);  // G2: DMEF (+ cur_tab; DMEE pack grid + inv_cell ride the blobs)
     std::fwrite(&g_meta.runs, 4, 1, f);
     std::fwrite(&g_meta.endings_seen, 1, 1, f);
     std::fwrite(&g_meta.stash_count, 1, 1, f);
@@ -1313,6 +1316,7 @@ void meta_save() {
     std::fwrite(&g_meta.house_allied, 1, 1, f);     // Landsraad/CHOAM (DMEA)
     std::fwrite(&g_meta.worm_teeth, 1, 1, f);       // D2 crafting (DMEB)
     std::fwrite(&g_meta.spice_essence, 1, 1, f);    // D3e: the Awakening resource (DMED)
+    std::fwrite(g_meta.cur_tab, sizeof g_meta.cur_tab, 1, f);  // G2: crafting-table currency (DMEF)
     std::fclose(f);
 }
 
@@ -1325,6 +1329,7 @@ void persist_character() {
     std::memcpy(g_meta.equip, g.pl.equip, sizeof g_meta.equip);
     std::memcpy(g_meta.inv, g.pl.inv, sizeof g_meta.inv);
     std::memcpy(g_meta.inv_cell, g.pl.inv_cell, sizeof g_meta.inv_cell);  // G: grid layout persists
+    std::memcpy(g_meta.cur_tab, g.pl.cur_tab, sizeof g_meta.cur_tab);     // G2: crafting-table currency persists
     meta_save();
 }
 
@@ -1776,24 +1781,46 @@ bool apply_orb(uint8_t cur, items::Inst& it) {
     }
 }
 
-// Currency held in the active inventory (a stack per cell).
+// G2: the crafting table is the currency store. currency_count / spend_currency / the bench read the
+// TABLE'S dedicated slots (g.pl.cur_tab); grid stacks are carried currency, moved in/out via
+// tab_deposit / tab_withdraw (the drag / Ctrl-click gestures the mouse UI drives in G4).
 int currency_count(uint8_t kind) {
+    return (kind == 0 || kind >= items::CUR_COUNT) ? 0 : g.pl.cur_tab[kind];
+}
+bool spend_currency(uint8_t kind) {
+    if (kind == 0 || kind >= items::CUR_COUNT || g.pl.cur_tab[kind] == 0) return false;
+    --g.pl.cur_tab[kind];
+    return true;
+}
+// Carried currency of `kind` sitting in the pack grid (the ground-pickup store, distinct from the table).
+int currency_count_grid(uint8_t kind) {
     int n = 0;
     for (const items::Inst& s : g.pl.inv) if (s.currency == kind) n += s.stack;
     return n;
 }
-bool spend_currency(uint8_t kind) {
-    for (items::Inst& s : g.pl.inv) if (s.currency == kind && s.stack > 0) {
-        if (--s.stack == 0) s = items::Inst{};
-        return true;
-    }
-    return false;
+// Move a whole grid currency stack (pool entry idx) into the table's slots, freeing its cell. -> ok?
+bool tab_deposit(int idx) {
+    if (idx < 0 || idx >= tune::kInvCap || !g.pl.inv[idx].is_currency()) return false;
+    const uint8_t k = g.pl.inv[idx].currency;
+    g.pl.cur_tab[k] = uint16_t(g.pl.cur_tab[k] + g.pl.inv[idx].stack);
+    g.pl.inv[idx] = items::Inst{};
+    return true;
 }
-// D3d bench UI: distinct currency kinds the pack holds (>0), and the pack indices holding craftable
+// Pull `amount` of currency `kind` from the table back into a grid cell (merges a same-type stack). -> ok?
+bool tab_withdraw(uint8_t kind, int amount) {
+    if (kind == 0 || kind >= items::CUR_COUNT || amount <= 0 || g.pl.cur_tab[kind] < amount) return false;
+    for (items::Inst& s : g.pl.inv)  // merge into an existing carried stack if we have one
+        if (s.currency == kind) { s.stack = uint16_t(s.stack + amount); g.pl.cur_tab[kind] -= uint16_t(amount); return true; }
+    items::Inst c; c.currency = kind; c.stack = uint16_t(amount);
+    if (pack_add(c) < 0) return false;  // no grid room
+    g.pl.cur_tab[kind] -= uint16_t(amount);
+    return true;
+}
+// D3d bench UI: distinct currency kinds the TABLE holds (>0), and the pack indices holding craftable
 // gear. Shared by the bench menu's dispatch + render so their row->item mapping agrees.
 int list_owned_currency(uint8_t* out) {
     int n = 0;
-    for (int c = 1; c < items::CUR_COUNT; ++c) if (currency_count(uint8_t(c)) > 0) out[n++] = uint8_t(c);
+    for (int c = 1; c < items::CUR_COUNT; ++c) if (g.pl.cur_tab[c] > 0) out[n++] = uint8_t(c);
     return n;
 }
 int list_gear(int* out) {
@@ -1801,6 +1828,19 @@ int list_gear(int* out) {
     for (int i = 0; i < tune::kInvCap; ++i)
         if (!g.pl.inv[i].empty() && !g.pl.inv[i].is_currency()) out[n++] = i;
     return n;
+}
+// Ctrl-click quick-move from the pack (G4 drives this): currency -> the table's slots; gear -> equip,
+// swapping any current occupant back into the grid. Returns true if something moved.
+bool quickmove(int idx) {
+    if (idx < 0 || idx >= tune::kInvCap || g.pl.inv[idx].empty()) return false;
+    if (g.pl.inv[idx].is_currency()) return tab_deposit(idx);
+    if (g.pl.inv[idx].unidentified()) return false;  // an unID item can't be equipped
+    const items::Inst prev = g.pl.equip[int(g.pl.inv[idx].d().slot)];
+    g.pl.equip[int(g.pl.inv[idx].d().slot)] = g.pl.inv[idx];
+    pack_place_at(idx, prev);  // the displaced item (may be empty) drops back into the grid, re-fitted
+    if (g.pl.hp > player_max_hp()) g.pl.hp = player_max_hp();
+    if (g.pl.water > player_max_water()) g.pl.water = player_max_water();
+    return true;
 }
 // Bench: apply currency `cur` (owned in the pack) to the gear item at inv_idx.
 bool bench_apply(int cur, int inv_idx) {
@@ -4560,6 +4600,7 @@ void game_init(uint64_t seed, const GameServices& services) {
         std::memcpy(g.pl.equip, g_meta.equip, sizeof g.pl.equip);
         std::memcpy(g.pl.inv, g_meta.inv, sizeof g.pl.inv);
         std::memcpy(g.pl.inv_cell, g_meta.inv_cell, sizeof g.pl.inv_cell);  // G: restore the grid layout
+        std::memcpy(g.pl.cur_tab, g_meta.cur_tab, sizeof g.pl.cur_tab);     // G2: restore the currency table
         g.pl.spice = g_meta.banked_spice;   // spendable wallet = the safe banked amount
         g.choosing = false;
     } else {
@@ -6629,6 +6670,7 @@ void game_serialize(SaveWriter& w) {
     w.bytes(&g.pl.st, sizeof g.pl.st);
     w.bytes(g.pl.inv, sizeof g.pl.inv);
     w.bytes(g.pl.inv_cell, sizeof g.pl.inv_cell);  // G: pack grid layout
+    w.bytes(g.pl.cur_tab, sizeof g.pl.cur_tab);    // G2: crafting-table currency slots
     w.bytes(g.pl.equip, sizeof g.pl.equip);
     w.i32(g.pl.thumpers);
     w.i32(g.pl.charges);
@@ -6731,6 +6773,7 @@ bool game_deserialize(SaveReader& r) {
     r.bytes(&pl.st, sizeof pl.st);
     r.bytes(pl.inv, sizeof pl.inv);
     r.bytes(pl.inv_cell, sizeof pl.inv_cell);  // G: pack grid layout
+    r.bytes(pl.cur_tab, sizeof pl.cur_tab);    // G2: crafting-table currency slots
     r.bytes(pl.equip, sizeof pl.equip);
     pl.thumpers = r.i32();
     pl.charges = r.i32();
@@ -7143,11 +7186,19 @@ int game_debug_court_house(int f) { return court_house(f) ? 1 : 0; }
 int game_debug_collect_dividend() { return collect_dividend(); }
 int game_debug_opposing_houses() { return opposing_houses(); }
 // --- D3 currency / crafting hooks ---
-void game_debug_grant_currency(int kind, int n) {  // add n of a currency to the active pack
+void game_debug_grant_currency(int kind, int n) {  // add n to the crafting-table slots (the bench store)
     if (kind <= 0 || kind >= items::CUR_COUNT || n <= 0) return;
-    grant_currency_to_pack(uint8_t(kind), n);  // G: merges same-type, else a first-fit 1x1 grid cell
+    g.pl.cur_tab[kind] = uint16_t(g.pl.cur_tab[kind] + n);
 }
-int game_debug_currency_count(int kind) { return currency_count(uint8_t(kind)); }
+void game_debug_grant_currency_grid(int kind, int n) {  // G2: add carried currency into the pack grid
+    if (kind <= 0 || kind >= items::CUR_COUNT || n <= 0) return;
+    grant_currency_to_pack(uint8_t(kind), n);
+}
+int game_debug_currency_count(int kind) { return currency_count(uint8_t(kind)); }          // table slots
+int game_debug_currency_count_grid(int kind) { return currency_count_grid(uint8_t(kind)); }  // carried
+int game_debug_tab_deposit(int idx) { return tab_deposit(idx) ? 1 : 0; }                   // grid stack -> table
+int game_debug_tab_withdraw(int kind, int amount) { return tab_withdraw(uint8_t(kind), amount) ? 1 : 0; }
+int game_debug_quickmove(int idx) { return quickmove(idx) ? 1 : 0; }  // Ctrl-click: currency->table, gear->equip
 void game_debug_setup_gear(int idx, int rarity, int ilvl) {  // place a known ARMOUR item in inv[idx]
     if (idx < 0 || idx >= tune::kInvCap) return;
     items::Inst it;

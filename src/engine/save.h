@@ -7,7 +7,7 @@
 #include <vector>
 
 inline constexpr uint32_t kSaveMagic = 0x54535544;  // 'DUST'
-inline constexpr uint16_t kSaveVersion = 26;  // v26: G grid inventory (pl.inv 96 + pl.inv_cell)
+inline constexpr uint16_t kSaveVersion = 27;  // v27: G2 crafting-table currency slots (pl.cur_tab)
 
 class SaveWriter {
 public:

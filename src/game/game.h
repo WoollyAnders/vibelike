@@ -162,6 +162,12 @@ int game_debug_grid_size_of(int idx, int* w, int* h);  // G: footprint of pool e
 int game_debug_grid_item_at(int cell);        // G: pool index whose footprint covers grid cell (-1)
 int game_debug_pack_add_slot(int slot);       // G: first-fit an item of slot `slot`; returns its cell (-1)
 int game_debug_grid_move(int idx, int cell);  // G: collision-checked move of entry idx to top-left cell
+// --- G2 currency-table hooks ---
+void game_debug_grant_currency_grid(int kind, int n);  // G2: carried currency into the pack grid
+int game_debug_currency_count_grid(int kind);          // G2: carried (grid) count of a currency
+int game_debug_tab_deposit(int idx);                   // G2: move a grid currency stack -> the table
+int game_debug_tab_withdraw(int kind, int amount);     // G2: pull currency from the table -> the grid
+int game_debug_quickmove(int idx);                     // G2: Ctrl-click (currency->table, gear->equip)
 int game_debug_force_currency_drop();         // D3c: drop a currency at the player; returns its kind
 int game_debug_kill_drops(int n);             // D3c: n Trooper loot rolls; returns currency drops
 void game_debug_spawn_currency(int kind);     // D3d: place a currency entity on the player's tile

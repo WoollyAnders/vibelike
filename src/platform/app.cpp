@@ -1975,9 +1975,9 @@ int run_gridtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cma
     const bool block  = game_debug_grid_move(1, 0) == 0;
     const bool freeok = game_debug_grid_move(1, 4) == 1;
 
-    // (D) currency is 1x1
+    // (D) carried currency is 1x1 in the grid
     game_debug_clear_pack();
-    game_debug_grant_currency(items::CUR_TRANSMUTE, 5);
+    game_debug_grant_currency_grid(items::CUR_TRANSMUTE, 5);
     int cw = 0, ch = 0; game_debug_grid_size_of(0, &cw, &ch);
     const bool cur1x1 = cw == 1 && ch == 1 && game_debug_inv_used() == 1;
 
@@ -2003,13 +2003,13 @@ int run_currencyuitest(audio::Mixer& mixer, const Assets& assets, const Colormap
     InputState in;
     auto key = [&](Key k) { in.pressed[int(k)] = true; game_update(in); in.end_tick(); };
 
-    // (A) walk-over pickup: a currency dropped on the player's tile is collected by a world tick
+    // (A) walk-over pickup: a currency dropped on the player's tile lands in the pack GRID (carried)
     game_debug_spawn_currency(items::CUR_TRANSMUTE);
-    const int c0 = game_debug_currency_count(items::CUR_TRANSMUTE);
+    const int c0 = game_debug_currency_count_grid(items::CUR_TRANSMUTE);
     game_debug_world_tick(1);
-    const bool picked = game_debug_currency_count(items::CUR_TRANSMUTE) == c0 + 1;
+    const bool picked = game_debug_currency_count_grid(items::CUR_TRANSMUTE) == c0 + 1;
 
-    // (B) the bench applies a picked currency to a gear item via the two-step menu
+    // (B) the bench applies currency from the crafting TABLE (its dedicated slots) to a gear item
     game_debug_grant_currency(items::CUR_TRANSMUTE, 3);
     game_debug_setup_gear(5, 0 /*common*/, 8);
     int rar = -1; game_debug_item_sig(5, &rar, nullptr, nullptr);
@@ -2025,6 +2025,57 @@ int run_currencyuitest(audio::Mixer& mixer, const Assets& assets, const Colormap
     const bool pass = picked && starts_common && crafted && spent;
     std::printf("currencyuitest %s (pickup %d common %d craft %d spent %d)\n",
                 pass ? "PASS" : "FAIL", picked, starts_common, crafted, spent);
+    std::remove("meta.dat");
+    return pass ? 0 : 1;
+}
+
+// G2: the crafting table is the currency store. Carried currency sits in the pack grid (1 cell each);
+// depositing moves a stack into the table's dedicated slots (freeing the cell); the bench applies from
+// the table; Ctrl-click quick-moves (currency -> table, gear -> equip). No deposit menus.
+int run_currencytabtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    std::remove("meta.dat");
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(909, services);
+    game_debug_clear_pack();
+
+    // (A) deposit: a carried grid stack moves into the table's slots and frees its cell
+    game_debug_grant_currency_grid(items::CUR_TRANSMUTE, 7);
+    const int used0 = game_debug_inv_used();                          // 1 occupied cell (the stack)
+    const bool dep = game_debug_tab_deposit(0) == 1;
+    const bool deposited = dep && game_debug_currency_count(items::CUR_TRANSMUTE) == 7 &&
+                           game_debug_currency_count_grid(items::CUR_TRANSMUTE) == 0 &&
+                           game_debug_inv_used() == used0 - 1;
+
+    // (B) withdraw: pull 3 back into a grid cell
+    const bool wd = game_debug_tab_withdraw(items::CUR_TRANSMUTE, 3) == 1;
+    const bool withdrawn = wd && game_debug_currency_count(items::CUR_TRANSMUTE) == 4 &&
+                           game_debug_currency_count_grid(items::CUR_TRANSMUTE) == 3 &&
+                           game_debug_inv_used() == 1;
+
+    // (C) the bench applies from the TABLE (Common -> Magic) and spends a table stack
+    game_debug_setup_gear(5, 0 /*common*/, 8);
+    int rar = -1; game_debug_item_sig(5, &rar, nullptr, nullptr);
+    const bool common0 = rar == 0;
+    const int tab0 = game_debug_currency_count(items::CUR_TRANSMUTE);  // 4
+    const bool benched = game_debug_bench(items::CUR_TRANSMUTE, 5) == 1;
+    game_debug_item_sig(5, &rar, nullptr, nullptr);
+    const bool applied = rar == 1 && game_debug_currency_count(items::CUR_TRANSMUTE) == tab0 - 1;
+
+    // (D) Ctrl-click quick-move: a carried currency stack deposits to the table; gear equips (empty
+    // Cloak slot -> the pack cell frees)
+    game_debug_clear_pack();
+    game_debug_grant_currency_grid(items::CUR_ALCHEMY, 2);
+    const bool qm_cur = game_debug_quickmove(0) == 1 &&
+                        game_debug_currency_count_grid(items::CUR_ALCHEMY) == 0 &&
+                        game_debug_currency_count(items::CUR_ALCHEMY) == 2;
+    const int ccell = game_debug_pack_add_slot(int(items::Slot::Cloak));
+    const int gidx = game_debug_grid_item_at(ccell);
+    const int usedb = game_debug_inv_used();
+    const bool qm_gear = game_debug_quickmove(gidx) == 1 && game_debug_inv_used() == usedb - 1;
+
+    const bool pass = deposited && withdrawn && common0 && benched && applied && qm_cur && qm_gear;
+    std::printf("currencytabtest %s (deposit %d withdraw %d common %d bench %d applied %d qmCur %d qmGear %d)\n",
+                pass ? "PASS" : "FAIL", deposited, withdrawn, common0, benched, applied, qm_cur, qm_gear);
     std::remove("meta.dat");
     return pass ? 0 : 1;
 }
@@ -2255,7 +2306,7 @@ int main(int argc, char** argv) {
          vendortest = false, patroltest = false, cavetest = false, trialtest = false,
          endgametest = false, striketest = false, pinnacletest = false, capstonetest = false,
          longridetest = false, choamtest = false, currencytest = false, currencymechtest = false,
-         currencydroptest = false, currencyuitest = false, essencetest = false, gridtest = false, abilitytest = false,
+         currencydroptest = false, currencyuitest = false, essencetest = false, gridtest = false, currencytabtest = false, abilitytest = false,
          flasktest = false, inputtest = false, menutest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
@@ -2295,6 +2346,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--currencyuitest") == 0) currencyuitest = true;
         if (SDL_strcmp(argv[i], "--essencetest") == 0) essencetest = true;
         if (SDL_strcmp(argv[i], "--gridtest") == 0) gridtest = true;
+        if (SDL_strcmp(argv[i], "--currencytabtest") == 0) currencytabtest = true;
         if (SDL_strcmp(argv[i], "--abilitytest") == 0) abilitytest = true;
         if (SDL_strcmp(argv[i], "--flasktest") == 0) flasktest = true;
         if (SDL_strcmp(argv[i], "--inputtest") == 0) inputtest = true;
@@ -2355,6 +2407,7 @@ int main(int argc, char** argv) {
     if (currencyuitest) return run_currencyuitest(mixer, assets, cmaps);
     if (essencetest) return run_essencetest(mixer, assets, cmaps);
     if (gridtest) return run_gridtest(mixer, assets, cmaps);
+    if (currencytabtest) return run_currencytabtest(mixer, assets, cmaps);
     if (abilitytest) return run_abilitytest(mixer, assets, cmaps);
     if (flasktest) return run_flasktest(mixer, assets, cmaps);
     if (inputtest) return run_inputtest(mixer, assets, cmaps);
