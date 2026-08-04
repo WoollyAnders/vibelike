@@ -29,6 +29,8 @@ struct InputState {
     int mouse_x = -1, mouse_y = -1;  // framebuffer coords; -1 when outside
     bool mouse_down[3] = {};
     bool mouse_pressed[3] = {};
+    bool mouse_released[3] = {};      // G4: went up this tick (drag-drop drop edge)
+    bool ctrl = false;                // G4: a Ctrl key is held (PoE quick-move modifier)
 
     bool is_down(Key k) const { return down[int(k)]; }
     bool was_pressed(Key k) const { return pressed[int(k)]; }
@@ -49,5 +51,6 @@ struct InputState {
             released[i] = false;
         }
         for (bool& b : mouse_pressed) b = false;
+        for (bool& b : mouse_released) b = false;
     }
 };

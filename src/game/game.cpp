@@ -270,6 +270,9 @@ struct GameState {
     int bench_cur = 0;   // transient UI: the currency picked at the bench (0 = choosing a currency)
     int vault_page = 0;
     int stash_tab = 0;   // G3: the stash tab the Vault screen is viewing (0..stash_tabs-1)
+    int drag_kind = 0;   // G4 drag source: 0 none, 1 pack, 2 equip, 3 stash, 4 currency-tab
+    int drag_idx = -1;   // pool index / equip slot / stash pool index / currency kind of the dragged item
+    int ui_mx = -1, ui_my = -1;  // G4: last menu mouse position (for grid hover + the dragged item)
     int last_decay_day = 0;
 
     // Naib task: 0 none, 1 kill hounds, 2 gather spice, 3 quiet denial
@@ -1677,6 +1680,165 @@ bool stash_withdraw(int t, int sidx) {
     g_meta.stash[t][sidx] = items::Inst{};
     meta_save();
     return true;
+}
+
+// ---- G4: the PoE mouse UI — geometry + hit-testing (the render draws at these same coordinates) ----
+namespace gridui {
+inline constexpr int CELL = 42;                   // px per grid cell
+inline constexpr int EQ_W = 300, EQ_H = 40;       // an equip-slot row box
+// Inventory screen (menu 6): equip paperdoll (left column) + the 8x12 pack grid (right).
+inline int inv_pack_x() { return fb::W / 2 + 40; }
+inline int inv_pack_y() { return 250; }
+inline int inv_eq_x()   { return fb::W / 2 - 360; }
+inline int inv_eq_y()   { return 250; }
+// Vault screen (menu 7): the 12x12 stash tab (left) + the pack grid (right); tab strip + Buy above.
+inline int vault_stash_x() { return fb::W / 2 - 560; }
+inline int vault_stash_y() { return 320; }
+inline int vault_pack_x()  { return fb::W / 2 + 160; }
+inline int vault_pack_y()  { return 320; }
+inline int vault_tab_y()   { return vault_stash_y() - 54; }
+// Bench screen (menu 11): the pack grid (left) + the currency-tab slots (right).
+inline int bench_pack_x()  { return fb::W / 2 - 520; }
+inline int bench_pack_y()  { return 260; }
+inline int bench_tab_x()   { return fb::W / 2 + 40; }
+inline int bench_tab_y()   { return 260; }
+inline constexpr int TAB_COLS = 6;                 // currency-tab slot grid columns
+
+// Which grid cell (mx,my) lands in for a W x H grid at (ox,oy), or -1.
+inline int cell_at(int mx, int my, int ox, int oy, int W, int H) {
+    const int cx = (mx - ox) / CELL, cy = (my - oy) / CELL;
+    if (mx < ox || my < oy || cx < 0 || cy < 0 || cx >= W || cy >= H) return -1;
+    return cy * W + cx;
+}
+}  // namespace gridui
+
+// A hit on some interactive region of a grid screen.
+enum class UIHit { None, PackCell, EquipSlot, StashCell, TabButton, BuyTab, CurTabSlot };
+struct UIHitResult { UIHit what = UIHit::None; int idx = -1; };
+
+// Classify the mouse position on whichever grid screen (menu 6/7/11) is open.
+UIHitResult ui_hit_test(int mx, int my) {
+    using namespace gridui;
+    UIHitResult h;
+    if (mx < 0) return h;
+    if (g.menu_open == 6) {  // inventory: pack grid + equip rows
+        const int c = cell_at(mx, my, inv_pack_x(), inv_pack_y(), tune::kPackW, tune::kPackH);
+        if (c >= 0) { h.what = UIHit::PackCell; h.idx = c; return h; }
+        for (int i = 0; i < int(items::Slot::Count); ++i) {
+            const int y = inv_eq_y() + i * (EQ_H + 4);
+            if (mx >= inv_eq_x() && mx < inv_eq_x() + EQ_W && my >= y && my < y + EQ_H) {
+                h.what = UIHit::EquipSlot; h.idx = i; return h;
+            }
+        }
+    } else if (g.menu_open == 7) {  // vault: stash tab grid + pack grid + tab strip + Buy
+        int c = cell_at(mx, my, vault_stash_x(), vault_stash_y(), tune::kStashW, tune::kStashH);
+        if (c >= 0) { h.what = UIHit::StashCell; h.idx = c; return h; }
+        c = cell_at(mx, my, vault_pack_x(), vault_pack_y(), tune::kPackW, tune::kPackH);
+        if (c >= 0) { h.what = UIHit::PackCell; h.idx = c; return h; }
+        for (int t = 0; t < g_meta.stash_tabs; ++t) {
+            const int x = vault_stash_x() + t * 44;
+            if (mx >= x && mx < x + 40 && my >= vault_tab_y() && my < vault_tab_y() + 40) {
+                h.what = UIHit::TabButton; h.idx = t; return h;
+            }
+        }
+        const int bx = vault_stash_x() + tune::kMaxStashTabs * 44 + 20;
+        if (mx >= bx && mx < bx + 220 && my >= vault_tab_y() && my < vault_tab_y() + 40) {
+            h.what = UIHit::BuyTab; return h;
+        }
+    } else if (g.menu_open == 11) {  // bench: pack grid + currency-tab slots
+        int c = cell_at(mx, my, bench_pack_x(), bench_pack_y(), tune::kPackW, tune::kPackH);
+        if (c >= 0) { h.what = UIHit::PackCell; h.idx = c; return h; }
+        c = cell_at(mx, my, bench_tab_x(), bench_tab_y(), TAB_COLS, (items::CUR_COUNT + TAB_COLS - 1) / TAB_COLS);
+        if (c >= 0 && c + 1 < items::CUR_COUNT) { h.what = UIHit::CurTabSlot; h.idx = c + 1; return h; }
+    }
+    return h;
+}
+
+// The pool index of the item under a PackCell / StashCell hit (or -1 if the cell is empty).
+int ui_item_under(const UIHitResult& h) {
+    if (h.what == UIHit::PackCell)
+        return grid_item_at(g.pl.inv, g.pl.inv_cell, tune::kInvCap, tune::kPackW, h.idx);
+    if (h.what == UIHit::StashCell)
+        return grid_item_at(g_meta.stash[g.stash_tab], g_meta.stash_cell[g.stash_tab], tune::kStashCap,
+                            tune::kStashW, h.idx);
+    return -1;
+}
+
+// Currency-table / equip ops (defined below, after apply_orb) — forward-declared for ui_grid_input.
+bool quickmove(int idx);
+bool tab_deposit(int idx);
+bool tab_withdraw(uint8_t kind, int amount);
+bool bench_apply(int cur, int inv_idx);
+
+// G4: mouse drag-drop + Ctrl-click on the grid screens (menu 6/7/11). Returns true if it consumed the
+// click. All moves route through the tested model ops (quickmove / grid_can_place / tab_* / stash_*).
+bool ui_grid_input(const InputState& in) {
+    if (g.menu_open != 6 && g.menu_open != 7 && g.menu_open != 11) return false;
+    const UIHitResult h = ui_hit_test(in.mouse_x, in.mouse_y);
+
+    // Ctrl+left-click: instant quick-move (no drag).
+    if (in.ctrl && in.mouse_pressed[0]) {
+        g.drag_kind = 0; g.drag_idx = -1;
+        if (g.menu_open == 6) {
+            if (h.what == UIHit::PackCell) { int i = ui_item_under(h); if (i >= 0) quickmove(i); }
+            else if (h.what == UIHit::EquipSlot && !g.pl.equip[h.idx].empty()) {
+                if (pack_add(g.pl.equip[h.idx]) >= 0) g.pl.equip[h.idx] = items::Inst{};  // unequip
+            }
+        } else if (g.menu_open == 7) {
+            if (h.what == UIHit::PackCell) { int i = ui_item_under(h); if (i >= 0) stash_deposit(i, g.stash_tab); }
+            else if (h.what == UIHit::StashCell) { int i = ui_item_under(h); if (i >= 0) stash_withdraw(g.stash_tab, i); }
+        } else {  // menu 11 bench
+            if (h.what == UIHit::PackCell) { int i = ui_item_under(h); if (i >= 0 && g.pl.inv[i].is_currency()) tab_deposit(i); }
+            else if (h.what == UIHit::CurTabSlot && g.pl.cur_tab[h.idx] > 0) tab_withdraw(uint8_t(h.idx), 1);
+        }
+        return true;
+    }
+
+    // Tab strip + Buy (menu 7): a plain left-press switches tab / buys.
+    if (in.mouse_pressed[0] && g.menu_open == 7) {
+        if (h.what == UIHit::TabButton) { g.stash_tab = h.idx; return true; }
+        if (h.what == UIHit::BuyTab) { buy_stash_tab(); return true; }
+    }
+
+    // Begin a drag: press on an item.
+    if (in.mouse_pressed[0] && g.drag_kind == 0) {
+        if (h.what == UIHit::PackCell) { int i = ui_item_under(h); if (i >= 0) { g.drag_kind = 1; g.drag_idx = i; } }
+        else if (h.what == UIHit::EquipSlot && !g.pl.equip[h.idx].empty()) { g.drag_kind = 2; g.drag_idx = h.idx; }
+        else if (h.what == UIHit::StashCell) { int i = ui_item_under(h); if (i >= 0) { g.drag_kind = 3; g.drag_idx = i; } }
+        else if (h.what == UIHit::CurTabSlot && g.pl.cur_tab[h.idx] > 0) { g.drag_kind = 4; g.drag_idx = h.idx; }
+        if (g.drag_kind) return true;
+    }
+
+    // Resolve a drop on release.
+    if (in.mouse_released[0] && g.drag_kind) {
+        const int k = g.drag_kind, s = g.drag_idx;
+        g.drag_kind = 0; g.drag_idx = -1;
+        if (k == 1) {  // dragging a pack item
+            if (h.what == UIHit::PackCell) {  // move within the pack grid to the hovered top-left
+                if (grid_can_place(g.pl.inv, g.pl.inv_cell, tune::kInvCap, tune::kPackW, tune::kPackH,
+                                   s, h.idx, g.pl.inv[s].size())) g.pl.inv_cell[s] = uint8_t(h.idx);
+            } else if (h.what == UIHit::EquipSlot) {          // equip if the slot matches
+                if (!g.pl.inv[s].is_currency() && !g.pl.inv[s].unidentified() &&
+                    int(g.pl.inv[s].d().slot) == h.idx) quickmove(s);
+            } else if (h.what == UIHit::StashCell) {          // deposit into the open tab (menu 7)
+                stash_deposit(s, g.stash_tab);
+            } else if (h.what == UIHit::CurTabSlot || (g.menu_open == 11 && g.pl.inv[s].is_currency())) {
+                if (g.pl.inv[s].is_currency()) tab_deposit(s);  // deposit currency into the table (menu 11)
+            }
+        } else if (k == 2) {  // dragging an equipped item -> drop into the pack unequips
+            if (h.what == UIHit::PackCell && pack_add(g.pl.equip[s]) >= 0) g.pl.equip[s] = items::Inst{};
+        } else if (k == 3) {  // dragging a stash item -> the pack withdraws it (menu 7)
+            if (h.what == UIHit::PackCell) stash_withdraw(g.stash_tab, s);
+        } else if (k == 4) {  // dragging a currency orb from the table (menu 11)
+            if (h.what == UIHit::PackCell) {
+                const int over = ui_item_under(h);
+                if (over >= 0 && !g.pl.inv[over].is_currency()) bench_apply(s, over);  // drop on gear = apply
+                else tab_withdraw(uint8_t(s), g.pl.cur_tab[s]);                          // drop on empty = withdraw
+            }
+        }
+        return true;
+    }
+    return false;
 }
 
 // ---- D2 crafting: the sietch bench spends materials to work gear -----------------------------------
@@ -4989,13 +5151,7 @@ int menu_row_under_mouse(const InputState& in) {
         for (int i = 0; i < 3; ++i) if (band(y0 + 88 + i * 24)) return i;
         for (int i = 0; i < kTalentCount; ++i) if (band(y0 + 176 + i * 24)) return 3 + i;
         if (band(y0 + 460)) return 12;
-    } else if (g.menu_open == 6) {
-        for (int i = 0; i < 12; ++i) if (band(y0 + 140 + i * 24)) return i;
-        if (band(y0 + 460)) return 12;
-    } else if (g.menu_open == 7) {
-        for (int i = 0; i < 12; ++i) if (band(y0 + 88 + i * 24)) return i;
-        if (band(y0 + 420)) return 12;
-    }
+    }  // menu 6/7 (pack/vault) are grid screens now — driven by ui_grid_input, not row-hover.
     return -1;
 }
 
@@ -5073,11 +5229,18 @@ bool game_update(const InputState& in) {
             uint8_t cb[items::CUR_COUNT]; int gi[12];
             n = 1 + (g.bench_cur == 0 ? list_owned_currency(cb) : list_gear(gi));  // + a Back row
         }
+        g.ui_mx = in.mouse_x; g.ui_my = in.mouse_y;  // G4: remember the mouse for the grid render
         // A6: mouse — hovering a row selects it, left-click confirms it, right-click closes.
         const int mrow = menu_row_under_mouse(in);
         if (mrow >= 0) g.menu_sel = mrow;
         const bool mclick = mrow >= 0 && in.mouse_pressed[0];
-        if (in.mouse_pressed[2] || in.mouse_pressed[1]) { g.menu_open = 0; return true; }
+        if (!in.mouse_down[0] && g.drag_kind && !in.mouse_released[0]) { g.drag_kind = 0; g.drag_idx = -1; }  // G4: heal a stale drag
+        if (in.mouse_pressed[2] || in.mouse_pressed[1]) {
+            if (g.drag_kind) { g.drag_kind = 0; g.drag_idx = -1; return true; }  // right-click cancels a drag
+            g.menu_open = 0; return true;
+        }
+        // G4: on the grid screens (pack/vault/bench), mouse drag-drop + Ctrl-click drive item movement.
+        if (ui_grid_input(in)) return true;
         if (g.menu_open >= 8 && g.menu_open <= 11) {  // endgame hub menus (keyboard-driven)
             if (in.was_pressed(Key::Up)) g.menu_sel = (g.menu_sel + n - 1) % n;
             if (in.was_pressed(Key::Down)) g.menu_sel = (g.menu_sel + 1) % n;
@@ -6182,6 +6345,72 @@ void update_manual(const InputState& in) {
         if (g.manual_page > 0) --g.manual_page;
 }
 
+// G4: draw a W x H item grid (empty-cell lattice + variable-size item rects) at (ox,oy). `hover` is
+// the grid cell under the mouse (-1 = none); `drag_pool` is the pool index being dragged (hidden here,
+// drawn at the cursor instead). Items get a rarity/currency tint, a short label, and stack counts.
+void draw_item_grid(DrawCtx& ctx, int ox, int oy, const items::Inst* pool, const uint8_t* cellarr,
+                    int cap, int W, int H, int hover, int drag_pool) {
+    const int C = gridui::CELL;
+    for (int y = 0; y < H; ++y)
+        for (int x = 0; x < W; ++x) {
+            const int px = ox + x * C, py = oy + y * C;
+            fill_rect(ctx, px, py, C - 1, C - 1, 2);
+            fill_rect(ctx, px, py, C - 1, 1, 3);
+        }
+    if (hover >= 0 && hover < W * H)
+        fill_rect(ctx, ox + (hover % W) * C, oy + (hover / W) * C, C - 1, C - 1, 4);
+    for (int i = 0; i < cap; ++i) {
+        if (pool[i].empty() || i == drag_pool) continue;
+        const items::GridSize s = pool[i].size();
+        const int px = ox + (cellarr[i] % W) * C, py = oy + (cellarr[i] / W) * C;
+        const int w = s.w * C - 2, hgt = s.h * C - 2;
+        const uint8_t col = pool[i].is_currency() ? 137
+                            : pool[i].unidentified() ? 8
+                            : pool[i].rarity == 2 ? 245 : pool[i].rarity == 1 ? 230 : 20;
+        fill_rect(ctx, px + 1, py + 1, w, hgt, uint8_t(pool[i].corrupted() ? 176 : 5));
+        fill_rect(ctx, px + 1, py + 1, w, 2, col);
+        fill_rect(ctx, px + 1, py + 1, 2, hgt, col);
+        char nm[48]; pool[i].full_name(nm, sizeof nm);
+        char lbl[8]; std::snprintf(lbl, sizeof lbl, "%.6s", nm);
+        draw_text(ctx, lbl, px + 4, py + 4, col);
+        if (pool[i].is_currency()) {
+            char cnt[8]; std::snprintf(cnt, sizeof cnt, "%d", int(pool[i].stack));
+            draw_text(ctx, cnt, px + 4, py + hgt - 12, 231);
+        }
+        if (pool[i].mirrored()) draw_text(ctx, "M", px + w - 12, py + 4, 245);
+        else if (pool[i].unidentified()) draw_text(ctx, "?", px + w - 12, py + 4, 231);
+    }
+}
+// G4: the gear paperdoll — one clickable row box per equip slot (name + equipped item).
+void draw_paperdoll(DrawCtx& ctx, int ox, int oy, int hover_slot) {
+    static const char* slots[int(items::Slot::Count)] =
+        {"Weapon", "Hood", "Mask", "Plugs", "Tube", "Body", "Belt", "Boots", "Cloak", "Token"};
+    for (int i = 0; i < int(items::Slot::Count); ++i) {
+        const int y = oy + i * (gridui::EQ_H + 4);
+        fill_rect(ctx, ox, y, gridui::EQ_W, gridui::EQ_H, uint8_t(hover_slot == i ? 4 : 2));
+        fill_rect(ctx, ox, y, gridui::EQ_W, 1, 3);
+        char nm[48]; g.pl.equip[i].full_name(nm, sizeof nm);
+        char buf[80]; std::snprintf(buf, sizeof buf, "%-6s %s", slots[i], nm);
+        draw_text(ctx, buf, ox + 8, y + 13, uint8_t(g.pl.equip[i].empty() ? 8 : 136));
+    }
+}
+// G4: draw the item currently being dragged, floating at the cursor.
+void draw_drag_ghost(DrawCtx& ctx) {
+    if (!g.drag_kind || g.ui_mx < 0) return;
+    const items::Inst* it = nullptr;
+    if (g.drag_kind == 1 && g.drag_idx >= 0) it = &g.pl.inv[g.drag_idx];
+    else if (g.drag_kind == 2 && g.drag_idx >= 0) it = &g.pl.equip[g.drag_idx];
+    else if (g.drag_kind == 3 && g.drag_idx >= 0) it = &g_meta.stash[g.stash_tab][g.drag_idx];
+    char nm[48];
+    if (it && !it->empty()) it->full_name(nm, sizeof nm);
+    else if (g.drag_kind == 4) std::snprintf(nm, sizeof nm, "%s", items::currency_name(uint8_t(g.drag_idx)));
+    else return;
+    const int w = 140, h = 20;
+    fill_rect(ctx, g.ui_mx + 6, g.ui_my + 6, w, h, 5);
+    fill_rect(ctx, g.ui_mx + 6, g.ui_my + 6, w, 2, 245);
+    draw_text(ctx, nm, g.ui_mx + 12, g.ui_my + 12, 231);
+}
+
 // UI: HUD panel, banners, death screen.
 void pass_ui(RenderCtx& r) {
     DrawCtx& ctx = r.ctx;
@@ -6369,9 +6598,11 @@ void pass_ui(RenderCtx& r) {
     // Endgame hub menus (War Council / Jihad Table / Landsraad / Bench) — dynamic, keyboard-driven.
     if (g.menu_open >= 8 && g.menu_open <= 11) {
         const int x0 = fb::W / 2 - 340, y0 = 200;
+        if (g.menu_open <= 10) {  // 8-10 are keyboard lists in a small panel; 11 is a grid screen (G4)
         fill_rect(ctx, x0, y0, 680, 460, 2);
         fill_rect(ctx, x0, y0, 680, 2, 228);
         fill_rect(ctx, x0, y0 + 458, 680, 2, 228);
+        }
         static const char* kFac[] = {"Bene Gesserit (Wallach IX)", "Tleilaxu (Bandalong)",
                                      "Ixians (Ix)", "House Corrino (Kaitain)", "Spacing Guild (Junction)"};
         char buf[96];
@@ -6415,42 +6646,56 @@ void pass_ui(RenderCtx& r) {
             std::snprintf(buf, sizeof buf, "Collect CHOAM dividend  (~%d sp)", choam_control());
             row(FAC_COUNT, buf, g.menu_sel == FAC_COUNT);
             row(FAC_COUNT + 1, "Back", g.menu_sel == FAC_COUNT + 1);
-        } else {  // 11: the crafting bench — pick a currency, then a target gear item
-            draw_text_shadow(ctx, "THE CRAFTING BENCH", x0 + 24, y0 + 16, 230, 1);
-            if (g.bench_cur == 0) {  // list the currencies you hold
-                draw_text(ctx, "Choose a currency to apply:", x0 + 24, y0 + 46, 14);
-                uint8_t cb[items::CUR_COUNT];
-                const int nc = list_owned_currency(cb);
-                for (int i = 0; i < nc; ++i) {
-                    std::snprintf(buf, sizeof buf, "%s x%d  -  %s", items::currency_name(cb[i]),
-                                  currency_count(cb[i]), items::kCurrency[cb[i]].effect);
-                    row(i, buf, g.menu_sel == i);
+        } else {  // G4: the crafting bench — the pack grid (left) + the currency-tab slots (right)
+            const int bx = fb::W / 2 - 620, by = 190;
+            fill_rect(ctx, bx, by, 1240, 620, 2);
+            fill_rect(ctx, bx, by, 1240, 2, 228);
+            fill_rect(ctx, bx, by + 618, 1240, 2, 228);
+            const UIHitResult bh = ui_hit_test(g.ui_mx, g.ui_my);
+            draw_text_shadow(ctx, "THE CRAFTING BENCH   Ctrl+click currency to bank it - drag an orb onto gear to apply - ESC to the council",
+                             bx + 24, by + 16, 230, 1);
+            draw_text(ctx, "PACK", gridui::bench_pack_x(), gridui::bench_pack_y() - 20, 14);
+            draw_text(ctx, "CURRENCY TABLE", gridui::bench_tab_x(), gridui::bench_tab_y() - 20, 14);
+            draw_item_grid(ctx, gridui::bench_pack_x(), gridui::bench_pack_y(), g.pl.inv, g.pl.inv_cell,
+                           tune::kInvCap, tune::kPackW, tune::kPackH,
+                           bh.what == UIHit::PackCell ? bh.idx : -1, g.drag_kind == 1 ? g.drag_idx : -1);
+            // currency-tab slots: one cell per currency kind, showing its count + name
+            const int C = gridui::CELL, cols = gridui::TAB_COLS;
+            for (int c = 1; c < items::CUR_COUNT; ++c) {
+                const int slot = c - 1, px = gridui::bench_tab_x() + (slot % cols) * C;
+                const int py = gridui::bench_tab_y() + (slot / cols) * C;
+                const bool hov = bh.what == UIHit::CurTabSlot && bh.idx == c;
+                fill_rect(ctx, px, py, C - 1, C - 1, uint8_t(hov ? 4 : 2));
+                fill_rect(ctx, px, py, C - 1, 1, 3);
+                if (g.pl.cur_tab[c] > 0) {
+                    fill_rect(ctx, px + 1, py + 1, C - 3, C - 3, 5);
+                    char nm[16]; std::snprintf(nm, sizeof nm, "%.5s", items::currency_name(uint8_t(c)));
+                    draw_text(ctx, nm, px + 3, py + 4, 137);
+                    char cnt[8]; std::snprintf(cnt, sizeof cnt, "%d", int(g.pl.cur_tab[c]));
+                    draw_text(ctx, cnt, px + 3, py + C - 14, 231);
                 }
-                if (!nc) draw_text(ctx, "(no currency held)", x0 + 28, y0 + 82, 14);
-                row(nc, "Back", g.menu_sel == nc);
-            } else {  // list the gear to apply the chosen currency to
-                std::snprintf(buf, sizeof buf, "Apply %s to which item?", items::currency_name(uint8_t(g.bench_cur)));
-                draw_text(ctx, buf, x0 + 24, y0 + 46, 14);
-                int gi[12];
-                const int ng = list_gear(gi);
-                for (int i = 0; i < ng; ++i) {
-                    char nm[48];
-                    g.pl.inv[gi[i]].full_name(nm, sizeof nm);
-                    row(i, nm, g.menu_sel == i);
+            }
+            const int over = ui_item_under(bh);  // tooltip on the pack item under the cursor
+            if (over >= 0) {
+                char det[256]; g.pl.inv[over].describe(det, sizeof det);
+                int dy = gridui::bench_pack_y() + tune::kPackH * C + 14;
+                for (char* line = det; *line;) {
+                    char* nl = std::strchr(line, '\n'); if (nl) *nl = 0;
+                    draw_text(ctx, line, gridui::bench_pack_x(), dy, 200);
+                    dy += 16; if (!nl) break; line = nl + 1;
                 }
-                if (!ng) draw_text(ctx, "(no gear in pack)", x0 + 28, y0 + 82, 14);
-                row(ng, "Back", g.menu_sel == ng);
             }
         }
     } else
     // Character sheet / inventory / vault overlays (dynamic content).
     if (g.menu_open >= 5 && g.menu_open <= 7) {
-        const int x0 = fb::W / 2 - 380, y0 = 140;
-        fill_rect(ctx, x0, y0, 760, 640, 2);
-        fill_rect(ctx, x0, y0, 760, 2, 228);
-        fill_rect(ctx, x0, y0 + 638, 760, 2, 228);
         char buf[80];
+        const UIHitResult gh = ui_hit_test(g.ui_mx, g.ui_my);
         if (g.menu_open == 5) {
+            const int x0 = fb::W / 2 - 380, y0 = 140;
+            fill_rect(ctx, x0, y0, 760, 640, 2);
+            fill_rect(ctx, x0, y0, 760, 2, 228);
+            fill_rect(ctx, x0, y0 + 638, 760, 2, 228);
             draw_text_shadow(ctx, "CHARACTER", x0 + 24, y0 + 16, 230, 1);
             std::snprintf(buf, sizeof buf, "level %d   xp %d/%d   stat pts %d   talent pts %d",
                           int(g.pl.st.level), int(g.pl.st.xp), xp_to_level(g.pl.st.level),
@@ -6484,63 +6729,57 @@ void pass_ui(RenderCtx& r) {
             draw_text(ctx, buf, x0 + 24, y0 + 440, 136);
             draw_text(ctx, g.menu_sel == 12 ? "> Close" : "  Close", x0 + 32, y0 + 460,
                       uint8_t(g.menu_sel == 12 ? 245 : 20));
-        } else if (g.menu_open == 6) {
-            draw_text_shadow(ctx, "PACK  (ENTER equips)", x0 + 24, y0 + 16, 230, 1);
-            static const char* slots[int(items::Slot::Count)] =
-                {"wpn", "hood", "mask", "plug", "tube", "body", "pkts", "pump", "clok", "tokn"};
-            for (int i = 0; i < int(items::Slot::Count); ++i) {
-                char nm[64];
-                g.pl.equip[i].full_name(nm, sizeof nm);
-                std::snprintf(buf, sizeof buf, "[%s] %s", slots[i], nm);
-                draw_text(ctx, buf, x0 + 24, y0 + 40 + i * 16, 136);
-            }
-            for (int i = 0; i < 12; ++i) {
-                const bool sel = g.menu_sel == i;
-                const int y = y0 + 212 + i * 20;
-                if (sel) fill_rect(ctx, x0 + 16, y - 2, 728, 22, 4);
-                char nm[64];
-                g.pl.inv[i].full_name(nm, sizeof nm);
-                const uint8_t col = g.pl.inv[i].empty() ? 8
-                                    : g.pl.inv[i].rarity == 2 ? 245
-                                    : g.pl.inv[i].rarity == 1 ? 230 : 20;
-                draw_text(ctx, nm, x0 + 32, y, uint8_t(sel ? 245 : col));
-            }
-            // D1: affix detail (item level + tiered mods) for the highlighted pack item.
-            if (g.menu_sel >= 0 && g.menu_sel < 12 && !g.pl.inv[g.menu_sel].empty()) {
-                char det[256];
-                g.pl.inv[g.menu_sel].describe(det, sizeof det);
-                int dy = y0 + 212;
+        } else if (g.menu_open == 6) {  // G4: gear paperdoll (left) + the 8x12 pack grid (right)
+            const int bx = fb::W / 2 - 480, by = 170;
+            fill_rect(ctx, bx, by, 980, 660, 2);
+            fill_rect(ctx, bx, by, 980, 2, 228);
+            fill_rect(ctx, bx, by + 658, 980, 2, 228);
+            draw_text_shadow(ctx, "PACK   drag to move / equip - Ctrl+click to equip - right-click closes",
+                             bx + 24, by + 16, 230, 1);
+            draw_paperdoll(ctx, gridui::inv_eq_x(), gridui::inv_eq_y(),
+                           gh.what == UIHit::EquipSlot ? gh.idx : -1);
+            draw_item_grid(ctx, gridui::inv_pack_x(), gridui::inv_pack_y(), g.pl.inv, g.pl.inv_cell,
+                           tune::kInvCap, tune::kPackW, tune::kPackH,
+                           gh.what == UIHit::PackCell ? gh.idx : -1, g.drag_kind == 1 ? g.drag_idx : -1);
+            const int over = ui_item_under(gh);
+            if (over >= 0) {  // tooltip: the item under the cursor
+                char det[256]; g.pl.inv[over].describe(det, sizeof det);
+                int dy = gridui::inv_pack_y() + tune::kPackH * gridui::CELL + 14;
                 for (char* line = det; *line;) {
-                    char* nl = std::strchr(line, '\n');
-                    if (nl) *nl = 0;
-                    draw_text(ctx, line, x0 + 400, dy, 200);
-                    dy += 16;
-                    if (!nl) break;
-                    line = nl + 1;
+                    char* nl = std::strchr(line, '\n'); if (nl) *nl = 0;
+                    draw_text(ctx, line, gridui::inv_pack_x(), dy, 200);
+                    dy += 16; if (!nl) break; line = nl + 1;
                 }
             }
-            draw_text(ctx, g.menu_sel == 12 ? "> Close" : "  Close", x0 + 32, y0 + 460,
-                      uint8_t(g.menu_sel == 12 ? 245 : 20));
-        } else {
-            std::snprintf(buf, sizeof buf, "THE SIETCH VAULT - tab %d/%d - %s (left/right)",
-                          g.stash_tab + 1, int(g_meta.stash_tabs), g.vault_page == 0 ? "DEPOSIT" : "WITHDRAW");
-            draw_text_shadow(ctx, buf, x0 + 24, y0 + 16, 230, 1);
-            const int cost = stash_tab_cost();
-            std::snprintf(buf, sizeof buf, "tab holds %d - the vault survives your death", stash_used(g.stash_tab));
-            draw_text(ctx, buf, x0 + 24, y0 + 44, 14);
-            for (int i = 0; i < 12; ++i) {
-                const bool sel = g.menu_sel == i;
-                const int y = y0 + 88 + i * 24;
-                if (sel) fill_rect(ctx, x0 + 16, y - 2, 728, 22, 4);
-                char nm[64] = "-";
-                if (g.vault_page == 0) g.pl.inv[i].full_name(nm, sizeof nm);
-                else g_meta.stash[g.stash_tab][i].full_name(nm, sizeof nm);
-                draw_text(ctx, nm, x0 + 32, y, uint8_t(sel ? 245 : 20));
+        } else {  // G4: the Vault — a stash tab (12x12) + the pack grid + a tab strip + Buy
+            const int bx = fb::W / 2 - 640, by = 170;
+            fill_rect(ctx, bx, by, 1280, 680, 2);
+            fill_rect(ctx, bx, by, 1280, 2, 228);
+            fill_rect(ctx, bx, by + 678, 1280, 2, 228);
+            draw_text_shadow(ctx, "THE SIETCH VAULT   drag between stash and pack - Ctrl+click moves - right-click closes",
+                             bx + 24, by + 16, 230, 1);
+            for (int t = 0; t < g_meta.stash_tabs; ++t) {  // tab strip
+                const int tx = gridui::vault_stash_x() + t * 44, ty = gridui::vault_tab_y();
+                fill_rect(ctx, tx, ty, 40, 40, uint8_t(t == g.stash_tab ? 245 : 2));
+                fill_rect(ctx, tx, ty, 40, 2, 228);
+                char tb[4]; std::snprintf(tb, sizeof tb, "%d", t + 1);
+                draw_text(ctx, tb, tx + 14, ty + 14, uint8_t(t == g.stash_tab ? 5 : 231));
             }
-            if (cost > 0) std::snprintf(buf, sizeof buf, "%s Buy a new tab  (%d spice)",
-                                        g.menu_sel == 12 ? ">" : " ", cost);
-            else std::snprintf(buf, sizeof buf, "%s Close  (vault at full span)", g.menu_sel == 12 ? ">" : " ");
-            draw_text(ctx, buf, x0 + 32, y0 + 420, uint8_t(g.menu_sel == 12 ? 245 : 20));
+            const int cost = stash_tab_cost(), buyx = gridui::vault_stash_x() + tune::kMaxStashTabs * 44 + 20;
+            if (cost > 0) {
+                fill_rect(ctx, buyx, gridui::vault_tab_y(), 220, 40, uint8_t(gh.what == UIHit::BuyTab ? 4 : 2));
+                fill_rect(ctx, buyx, gridui::vault_tab_y(), 220, 2, 228);
+                std::snprintf(buf, sizeof buf, "+ Buy tab (%d spice)", cost);
+                draw_text(ctx, buf, buyx + 12, gridui::vault_tab_y() + 14, 231);
+            }
+            draw_text(ctx, "STASH", gridui::vault_stash_x(), gridui::vault_stash_y() - 20, 14);
+            draw_text(ctx, "PACK", gridui::vault_pack_x(), gridui::vault_pack_y() - 20, 14);
+            draw_item_grid(ctx, gridui::vault_stash_x(), gridui::vault_stash_y(), g_meta.stash[g.stash_tab],
+                           g_meta.stash_cell[g.stash_tab], tune::kStashCap, tune::kStashW, tune::kStashH,
+                           gh.what == UIHit::StashCell ? gh.idx : -1, g.drag_kind == 3 ? g.drag_idx : -1);
+            draw_item_grid(ctx, gridui::vault_pack_x(), gridui::vault_pack_y(), g.pl.inv, g.pl.inv_cell,
+                           tune::kInvCap, tune::kPackW, tune::kPackH,
+                           gh.what == UIHit::PackCell ? gh.idx : -1, g.drag_kind == 1 ? g.drag_idx : -1);
         }
     } else
     // Vendor menu overlay.
@@ -6572,6 +6811,7 @@ void pass_ui(RenderCtx& r) {
                       uint8_t(sel ? 245 : 20));
         }
     }
+    draw_drag_ghost(ctx);  // G4: a dragged item floats at the cursor on the grid screens (no-op otherwise)
 
     // B2b: the Revelation overlay — Paul's prescient gear suggestion (pick a slot, then 1 of 3).
     if (g.revelation_stage) {
@@ -7648,6 +7888,14 @@ int game_debug_vault_present() {  // count of EType::Vault interactables in the 
     int n = 0;
     for (const Entity& e : g.ents) if (e.type == EType::Vault && e.zone == g.cur_zone) ++n;
     return n;
+}
+// G4: framebuffer center of pack grid cell `cell` on the open grid screen (for the mouse-UI test).
+void game_debug_pack_cell_center(int cell, int* sx, int* sy) {
+    int ox = gridui::inv_pack_x(), oy = gridui::inv_pack_y();
+    if (g.menu_open == 7) { ox = gridui::vault_pack_x(); oy = gridui::vault_pack_y(); }
+    else if (g.menu_open == 11) { ox = gridui::bench_pack_x(); oy = gridui::bench_pack_y(); }
+    if (sx) *sx = ox + (cell % tune::kPackW) * gridui::CELL + gridui::CELL / 2;
+    if (sy) *sy = oy + (cell / tune::kPackW) * gridui::CELL + gridui::CELL / 2;
 }
 
 void game_debug_clear_hostiles() {

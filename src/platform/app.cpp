@@ -2029,6 +2029,48 @@ int run_currencyuitest(audio::Mixer& mixer, const Assets& assets, const Colormap
     return pass ? 0 : 1;
 }
 
+// G4: the PoE mouse UI — the pack is a spatial grid you drag items around and Ctrl+click to equip. This
+// drives the real input path (ctrl flag + mouse press/hold/release) through ui_grid_input at menu 6.
+int run_guitest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    std::remove("meta.dat");
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(717, services);
+    game_debug_open_menu(6, 0);       // the inventory grid screen
+    game_debug_clear_pack();
+
+    // (A) Ctrl+left-click a pack item equips it (into an empty slot -> the pack cell frees)
+    const int cloak = int(items::Slot::Cloak);   // the Cloak slot starts empty
+    const int ccell = game_debug_pack_add_slot(cloak);
+    const int cidx = game_debug_grid_item_at(ccell);
+    char nm[64];
+    const bool slot_empty0 = game_debug_item_name(1, cloak, nm, sizeof nm) == 0;
+    int sx = 0, sy = 0; game_debug_pack_cell_center(ccell, &sx, &sy);
+    { InputState in; in.mouse_x = sx; in.mouse_y = sy; in.ctrl = true;
+      in.mouse_pressed[0] = true; in.mouse_down[0] = true; game_update(in); in.end_tick(); }
+    const bool equipped = game_debug_item_name(1, cloak, nm, sizeof nm) == 1 &&
+                          game_debug_grid_item_at(ccell) == -1;
+
+    // (B) drag a 1x1 item from one cell to an empty one (press -> hold-move -> release)
+    game_debug_clear_pack();
+    game_debug_pack_add_slot(int(items::Slot::Token));  // a 1x1 token at pool 0, cell 0
+    int ax = 0, ay = 0, bx = 0, by = 0;
+    game_debug_pack_cell_center(0, &ax, &ay);
+    game_debug_pack_cell_center(20, &bx, &by);
+    { InputState in; in.mouse_x = ax; in.mouse_y = ay; in.mouse_pressed[0] = true; in.mouse_down[0] = true;
+      game_update(in); in.end_tick(); }                                   // press: begin drag
+    { InputState in; in.mouse_x = bx; in.mouse_y = by; in.mouse_down[0] = true;
+      game_update(in); in.end_tick(); }                                   // hold-move to the target
+    { InputState in; in.mouse_x = bx; in.mouse_y = by; in.mouse_released[0] = true;
+      game_update(in); in.end_tick(); }                                   // release: drop
+    const bool moved = game_debug_grid_cell_of(0) == 20;
+
+    const bool pass = slot_empty0 && equipped && moved;
+    std::printf("guitest %s (slotEmpty %d equipped %d moved %d)\n",
+                pass ? "PASS" : "FAIL", slot_empty0, equipped, moved);
+    std::remove("meta.dat");
+    return pass ? 0 : 1;
+}
+
 // G3: the Vault is its own sietch feature — a multi-tab grid stash (each tab bigger than the pack),
 // bought with spice at an escalating cost. It is no longer opened through the Naib.
 int run_vaulttest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
@@ -2350,7 +2392,7 @@ int main(int argc, char** argv) {
          vendortest = false, patroltest = false, cavetest = false, trialtest = false,
          endgametest = false, striketest = false, pinnacletest = false, capstonetest = false,
          longridetest = false, choamtest = false, currencytest = false, currencymechtest = false,
-         currencydroptest = false, currencyuitest = false, essencetest = false, gridtest = false, currencytabtest = false, vaulttest = false, abilitytest = false,
+         currencydroptest = false, currencyuitest = false, essencetest = false, gridtest = false, currencytabtest = false, vaulttest = false, guitest = false, abilitytest = false,
          flasktest = false, inputtest = false, menutest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
@@ -2392,6 +2434,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--gridtest") == 0) gridtest = true;
         if (SDL_strcmp(argv[i], "--currencytabtest") == 0) currencytabtest = true;
         if (SDL_strcmp(argv[i], "--vaulttest") == 0) vaulttest = true;
+        if (SDL_strcmp(argv[i], "--guitest") == 0) guitest = true;
         if (SDL_strcmp(argv[i], "--abilitytest") == 0) abilitytest = true;
         if (SDL_strcmp(argv[i], "--flasktest") == 0) flasktest = true;
         if (SDL_strcmp(argv[i], "--inputtest") == 0) inputtest = true;
@@ -2454,6 +2497,7 @@ int main(int argc, char** argv) {
     if (gridtest) return run_gridtest(mixer, assets, cmaps);
     if (currencytabtest) return run_currencytabtest(mixer, assets, cmaps);
     if (vaulttest) return run_vaulttest(mixer, assets, cmaps);
+    if (guitest) return run_guitest(mixer, assets, cmaps);
     if (abilitytest) return run_abilitytest(mixer, assets, cmaps);
     if (flasktest) return run_flasktest(mixer, assets, cmaps);
     if (inputtest) return run_inputtest(mixer, assets, cmaps);
@@ -2552,6 +2596,7 @@ int main(int argc, char** argv) {
                     if (b >= 0) {
                         const bool down = ev.type == SDL_MOUSEBUTTONDOWN;
                         if (down && !input.mouse_down[b]) input.mouse_pressed[b] = true;
+                        if (!down && input.mouse_down[b]) input.mouse_released[b] = true;  // G4: drop edge
                         input.mouse_down[b] = down;
                         update_mouse(platform, input, ev.button.x, ev.button.y);
                     }
@@ -2574,6 +2619,7 @@ int main(int argc, char** argv) {
                         demo_left = demo_script[demo_step].count;
                 }
             }
+            input.ctrl = (SDL_GetModState() & KMOD_CTRL) != 0;  // G4: PoE quick-move modifier
             if (!game_update(input)) running = false;
             input.end_tick();
             accum -= tick_period;

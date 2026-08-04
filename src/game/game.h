@@ -70,6 +70,7 @@ int game_debug_stash_deposit(int pidx, int t);   // pack pool entry pidx -> tab 
 int game_debug_stash_withdraw(int t, int sidx);  // tab t pool entry sidx -> pack
 int game_debug_stash_item_at(int t, int gc);     // tab-t pool index covering stash cell gc (-1)
 int game_debug_vault_present();                  // count of Vault interactables in the current zone
+void game_debug_pack_cell_center(int cell, int* sx, int* sy);  // G4: framebuffer center of a pack cell
 void game_debug_warp_to_boss(int* atk_dx, int* atk_dy);
 bool game_debug_boss_alive();
 bool game_debug_boss_is_baron();
