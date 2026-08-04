@@ -2029,6 +2029,47 @@ int run_currencyuitest(audio::Mixer& mixer, const Assets& assets, const Colormap
     return pass ? 0 : 1;
 }
 
+// C5b: the Sietch talent tree. Litrejons buy ranks of AffixKind bonuses that fold into every derived
+// stat (via affix_total) and persist across death. Node 4 = Tribe's Vigor (+6% Life / rank).
+int run_sietchtreetest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    std::remove("meta.dat");
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(5150, services);
+
+    // (E) broke: with no litrejons banked, a purchase refuses and nothing is spent
+    const bool broke = game_debug_buy_sietch_node(4) == 0 && game_debug_sietch_rank(4) == 0;
+    game_debug_grant_litrejons(200);
+
+    // (A) fresh: node 4 unranked, next rank costs the base (20)
+    const bool fresh = game_debug_sietch_rank(4) == 0 && game_debug_sietch_cost(4) == 20;
+
+    // (B) buying Tribe's Vigor grants +6% Life and moves player_max_hp
+    const int hp0 = game_debug_max_hp();
+    const bool buy1 = game_debug_buy_sietch_node(4) == 1 && game_debug_sietch_rank(4) == 1 &&
+                      game_debug_sietch_bonus(items::AK_INC_LIFE) == 6;
+    const bool hp_up = game_debug_max_hp() > hp0;
+
+    // (C) cost escalates (base * (rank+1)); ranks stack
+    const bool esc = game_debug_sietch_cost(4) == 40;
+    game_debug_buy_sietch_node(4);
+    const bool stacked = game_debug_sietch_rank(4) == 2 && game_debug_sietch_bonus(items::AK_INC_LIFE) == 12;
+
+    // (D) a node caps at max_rank; then further buys refuse
+    game_debug_buy_sietch_node(4);
+    const bool maxed = game_debug_sietch_rank(4) == 3 && game_debug_sietch_cost(4) == 0 &&
+                       game_debug_buy_sietch_node(4) == 0;
+
+    // (F) ranks persist across a meta reload
+    int mb = -1, ma = -1; game_debug_meta_reload_class(&mb, &ma);
+    const bool persisted = game_debug_sietch_rank(4) == 3 && game_debug_sietch_bonus(items::AK_INC_LIFE) == 18;
+
+    const bool pass = fresh && buy1 && hp_up && esc && stacked && maxed && broke && persisted;
+    std::printf("sietchtreetest %s (fresh %d buy %d hpUp %d esc %d stack %d max %d broke %d persist %d)\n",
+                pass ? "PASS" : "FAIL", fresh, buy1, hp_up, esc, stacked, maxed, broke, persisted);
+    std::remove("meta.dat");
+    return pass ? 0 : 1;
+}
+
 // C5a: the Deathstill economy. Harvesting a corpse reclaims water (the tribe's stake); on extraction it
 // renders into banked Litrejons (the sietch-tree currency); death loses the un-banked stake.
 int run_economytest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
@@ -2425,7 +2466,7 @@ int main(int argc, char** argv) {
          vendortest = false, patroltest = false, cavetest = false, trialtest = false,
          endgametest = false, striketest = false, pinnacletest = false, capstonetest = false,
          longridetest = false, choamtest = false, currencytest = false, currencymechtest = false,
-         currencydroptest = false, currencyuitest = false, essencetest = false, gridtest = false, currencytabtest = false, vaulttest = false, guitest = false, economytest = false, abilitytest = false,
+         currencydroptest = false, currencyuitest = false, essencetest = false, gridtest = false, currencytabtest = false, vaulttest = false, guitest = false, economytest = false, sietchtreetest = false, abilitytest = false,
          flasktest = false, inputtest = false, menutest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
@@ -2469,6 +2510,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--vaulttest") == 0) vaulttest = true;
         if (SDL_strcmp(argv[i], "--guitest") == 0) guitest = true;
         if (SDL_strcmp(argv[i], "--economytest") == 0) economytest = true;
+        if (SDL_strcmp(argv[i], "--sietchtreetest") == 0) sietchtreetest = true;
         if (SDL_strcmp(argv[i], "--abilitytest") == 0) abilitytest = true;
         if (SDL_strcmp(argv[i], "--flasktest") == 0) flasktest = true;
         if (SDL_strcmp(argv[i], "--inputtest") == 0) inputtest = true;
@@ -2533,6 +2575,7 @@ int main(int argc, char** argv) {
     if (vaulttest) return run_vaulttest(mixer, assets, cmaps);
     if (guitest) return run_guitest(mixer, assets, cmaps);
     if (economytest) return run_economytest(mixer, assets, cmaps);
+    if (sietchtreetest) return run_sietchtreetest(mixer, assets, cmaps);
     if (abilitytest) return run_abilitytest(mixer, assets, cmaps);
     if (flasktest) return run_flasktest(mixer, assets, cmaps);
     if (inputtest) return run_inputtest(mixer, assets, cmaps);

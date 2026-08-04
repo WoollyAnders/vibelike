@@ -472,8 +472,9 @@ int foe_hp(EType t) {
 
 Entity& player_ent() { return g.ents[0]; }
 
+int sietch_affix_bonus(uint8_t kind);  // C5b: fwd — the sietch tree contributes to every derived stat
 int affix_total(uint8_t kind) {
-    int p = 0;
+    int p = sietch_affix_bonus(kind);  // C5b: allocated sietch-tree ranks, on top of equipped gear
     for (const items::Inst& it : g.pl.equip) p += it.affix_power(kind);
     return p;
 }
@@ -1054,6 +1055,25 @@ void refresh_fov_and_paths() {
     recompute_light();
 }
 
+// C5b: the Sietch talent tree. A meta tree bought with Litrejons (the tribe's water), in two tracks —
+// SANDCRAFT (the warrior's edge) and TRIBE'S BLESSING (the tribe's sustain). Each node grants ranks of
+// an AffixKind bonus folded into affix_total(), so every derived stat picks it up; ranks persist across
+// death (meta). Cost per rank = cost_base * (rank+1) Litrejons.
+struct SietchNode { const char* name; uint8_t kind; int per_rank; uint8_t track; uint8_t max_rank; int cost_base; };
+inline constexpr SietchNode kSietchNodes[] = {
+    // --- track 0: SANDCRAFT ---
+    {"Blade Discipline", items::AK_INC_DMG,   5, 0, 3, 20},  // +5% Lethality / rank
+    {"Killer's Eye",     items::AK_CRIT,      3, 0, 3, 20},  // +3% Vital Strike chance / rank
+    {"Spice Sense",      items::AK_SPICE_FIND, 12, 0, 3, 15}, // +12% Spice Find / rank
+    {"Sure Strike",      items::AK_INC_TOHIT, 6, 0, 3, 15},  // +6% Precision / rank
+    // --- track 1: TRIBE'S BLESSING ---
+    {"Tribe's Vigor",    items::AK_INC_LIFE,  6, 1, 3, 20},  // +6% Life / rank
+    {"Stillsuit Weave",  items::AK_ARMOR,     4, 1, 3, 20},  // +4 armor / rank
+    {"Cistern Share",    items::AK_WATER,    40, 1, 3, 15},  // +40 max Water / rank
+    {"Prescient Calm",   items::AK_SHIELD,   15, 1, 3, 20},  // +15 Focus / rank
+};
+inline constexpr int kSietchNodeCount = int(sizeof kSietchNodes / sizeof *kSietchNodes);
+
 // meta.dat: cross-run memory. B5 grows it to hold the Awaken ladder, a banked spice wallet,
 // and the PERSISTENT character (level/attributes/gear survive death — the ARPG spine).
 struct Meta {
@@ -1070,6 +1090,7 @@ struct Meta {
     uint8_t has_char = 0;          // 1 once a persistent character exists
     int32_t banked_spice = 0;      // safe wallet; run spice banks here on extraction
     int32_t litrejons = 0;         // C5 (DMEH): tribal water banked from the Deathstill; the sietch-tree currency
+    uint8_t sietch_rank[kSietchNodeCount] = {};  // C5b (DMEI): allocated ranks per sietch-tree node
     CharStats st;                  // persistent level / attributes / talents / xp
     items::Inst equip[int(items::Slot::Count)];
     items::Inst inv[tune::kInvCap];              // G (DMEE): the persisted pack pool (8x12 grid)
@@ -1135,6 +1156,7 @@ int guild_difficulty() {
     return d < 0 ? 0 : d > cap ? cap : d;
 }
 
+inline constexpr uint32_t kMetaVI = 0x49454D44u;  // 'DMEI' (C5b: + sietch_rank, the sietch talent tree)
 inline constexpr uint32_t kMetaVH = 0x48454D44u;  // 'DMEH' (C5: + litrejons, the sietch-tree currency)
 inline constexpr uint32_t kMetaVG = 0x47454D44u;  // 'DMEG' (G3: multi-tab grid stash + stash_tabs)
 inline constexpr uint32_t kMetaVF = 0x46454D44u;  // 'DMEF' (G2: + cur_tab, the crafting-table currency slots)
@@ -1204,12 +1226,33 @@ void meta_grant_currency(uint8_t kind, int amount) {
     g_meta.cur_tab[kind] = uint16_t(g_meta.cur_tab[kind] + amount);
 }
 
+void meta_save();  // fwd (defined below) — buy_sietch_node banks the purchase immediately
+// C5b: the sietch tree's total contribution of AffixKind `kind` (summed over allocated node ranks).
+int sietch_affix_bonus(uint8_t kind) {
+    int p = 0;
+    for (int i = 0; i < kSietchNodeCount; ++i)
+        if (kSietchNodes[i].kind == kind) p += g_meta.sietch_rank[i] * kSietchNodes[i].per_rank;
+    return p;
+}
+int sietch_node_cost(int idx) {  // Litrejons for the NEXT rank of node idx (0 if maxed / invalid)
+    if (idx < 0 || idx >= kSietchNodeCount || g_meta.sietch_rank[idx] >= kSietchNodes[idx].max_rank) return 0;
+    return kSietchNodes[idx].cost_base * (g_meta.sietch_rank[idx] + 1);
+}
+bool buy_sietch_node(int idx) {  // spend Litrejons to rank up a node; persists
+    const int cost = sietch_node_cost(idx);
+    if (cost <= 0 || g_meta.litrejons < cost) return false;
+    g_meta.litrejons -= cost;
+    ++g_meta.sietch_rank[idx];
+    meta_save();
+    return true;
+}
+
 void meta_load() {
     FILE* f = std::fopen("meta.dat", "rb");
     if (!f) return;
     uint32_t magic = 0;
     if (std::fread(&magic, 4, 1, f) == 1) {
-        if (magic >= kMetaV4 && magic <= kMetaVH && magic != kMetaV1) {  // native widened-Inst format (DME4..DMEH)
+        if (magic >= kMetaV4 && magic <= kMetaVI && magic != kMetaV1) {  // native widened-Inst format (DME4..DMEI)
             const bool cur = (magic >= kMetaVC);  // DMEC+ = new Inst layout; older = OldInst (convert)
             (void)!std::fread(&g_meta.runs, 4, 1, f);
             (void)!std::fread(&g_meta.endings_seen, 1, 1, f);
@@ -1281,6 +1324,9 @@ void meta_load() {
             if (magic >= kMetaVH) {  // C5: banked Litrejons (DMEG and earlier -> 0)
                 (void)!std::fread(&g_meta.litrejons, 4, 1, f);
             }
+            if (magic >= kMetaVI) {  // C5b: the sietch talent tree ranks (DMEH and earlier -> 0)
+                (void)!std::fread(g_meta.sietch_rank, sizeof g_meta.sietch_rank, 1, f);
+            }
             // D3 migration: the old Maker Hide / Worm Tooth counters become currency (their new roles:
             // armour / weapon quality), banked to the crafting table. No-op on a DMEC+ file (already 0).
             if (g_meta.maker_hides > 0) { meta_grant_currency(items::CUR_ARMORQUAL, g_meta.maker_hides); g_meta.maker_hides = 0; }
@@ -1319,7 +1365,7 @@ void meta_load() {
 void meta_save() {
     FILE* f = std::fopen("meta.dat", "wb");
     if (!f) return;
-    std::fwrite(&kMetaVH, 4, 1, f);  // C5: DMEH (+ litrejons; earlier blobs ride along)
+    std::fwrite(&kMetaVI, 4, 1, f);  // C5b: DMEI (+ sietch_rank; earlier blobs ride along)
     std::fwrite(&g_meta.runs, 4, 1, f);
     std::fwrite(&g_meta.endings_seen, 1, 1, f);
     std::fwrite(&g_meta.stash_tabs, 1, 1, f);                       // G3: owned tab count
@@ -1350,6 +1396,7 @@ void meta_save() {
     std::fwrite(&g_meta.spice_essence, 1, 1, f);    // D3e: the Awakening resource (DMED)
     std::fwrite(g_meta.cur_tab, sizeof g_meta.cur_tab, 1, f);  // G2: crafting-table currency (DMEF)
     std::fwrite(&g_meta.litrejons, 4, 1, f);                   // C5: banked Litrejons (DMEH)
+    std::fwrite(g_meta.sietch_rank, sizeof g_meta.sietch_rank, 1, f);  // C5b: sietch tree ranks (DMEI)
     std::fclose(f);
 }
 
@@ -5154,7 +5201,7 @@ int menu_row_under_mouse(const InputState& in) {
     if (g.menu_open >= 1 && g.menu_open <= 4) {           // vendor lists (R2: 2x)
         const int x0 = fb::W / 2 - 300, y0 = 280;
         if (mx < x0 + 16 || mx > x0 + 16 + 568) return -1;
-        const int counts[5] = {0, 5, 3, 5, 4};  // G3: Naib lost the vault row (moved to its own prop)
+        const int counts[5] = {0, 6, 3, 5, 4};  // C5b: Naib gained the Sietch-tree row
         for (int i = 0; i < counts[g.menu_open]; ++i) {
             const int ry = y0 + 80 + i * 32 - 4;
             if (my >= ry && my < ry + 32) return i;
@@ -5239,8 +5286,8 @@ bool game_update(const InputState& in) {
     // vendor menus pause the world (browsing is free)
     if (g.menu_open) {
         // 5 = character sheet, 6 = inventory, 7 = the vault
-        int counts[12] = {0, 5, 3, 5, 4, 3 + kTalentCount + 1, 13, 13,
-                          4, 5 + 1 + 1, 5 + 1 + 1, 1};  // G3: Naib 6->5 (vault moved out)
+        int counts[13] = {0, 6, 3, 5, 4, 3 + kTalentCount + 1, 13, 13,
+                          4, 5 + 1 + 1, 5 + 1 + 1, 1, kSietchNodeCount + 1};  // C5b: Naib 5->6, +menu 12 tree
         int n = counts[g.menu_open];
         if (g.menu_open == 11) {  // D3d bench: rows are owned currencies, or gear once a currency is picked
             uint8_t cb[items::CUR_COUNT]; int gi[12];
@@ -5258,7 +5305,7 @@ bool game_update(const InputState& in) {
         }
         // G4: on the grid screens (pack/vault/bench), mouse drag-drop + Ctrl-click drive item movement.
         if (ui_grid_input(in)) return true;
-        if (g.menu_open >= 8 && g.menu_open <= 11) {  // endgame hub menus (keyboard-driven)
+        if (g.menu_open >= 8 && g.menu_open <= 12) {  // endgame hub menus + the sietch tree (keyboard)
             if (in.was_pressed(Key::Up)) g.menu_sel = (g.menu_sel + n - 1) % n;
             if (in.was_pressed(Key::Down)) g.menu_sel = (g.menu_sel + 1) % n;
             if (in.was_pressed(Key::Cancel)) { g.menu_open = 0; g.bench_cur = 0; return true; }
@@ -5285,7 +5332,7 @@ bool game_update(const InputState& in) {
                         if (!court_house(sel)) g.log.push("That House cannot be courted now.");
                     } else if (sel == FAC_COUNT) { collect_dividend(); }
                     else { g.menu_open = 8; g.menu_sel = 0; }
-                } else {  // 11: the crafting bench — pick a currency, then a target gear item
+                } else if (g.menu_open == 11) {  // the crafting bench — pick a currency, then target gear
                     if (g.bench_cur == 0) {  // choosing a currency
                         uint8_t cb[items::CUR_COUNT];
                         const int nc = list_owned_currency(cb);
@@ -5304,6 +5351,15 @@ bool game_update(const InputState& in) {
                             g.bench_cur = 0; g.menu_sel = 0;
                         } else { g.bench_cur = 0; g.menu_sel = 0; }  // Back to the currency list
                     }
+                } else {  // 12: the Sietch talent tree — spend Litrejons to rank up a node
+                    if (sel < kSietchNodeCount) {
+                        const int cost = sietch_node_cost(sel);
+                        if (cost <= 0) g.log.push("'%s is at its peak.'", kSietchNodes[sel].name);
+                        else if (buy_sietch_node(sel))
+                            g.log.push("The tribe drinks your water. %s deepens. -%d litrejons.",
+                                       kSietchNodes[sel].name, cost);
+                        else g.log.push("Not enough litrejons (%d needed). Reclaim more water in the field.", cost);
+                    } else { g.menu_open = 1; g.menu_sel = 0; }  // Back to the Naib
                 }
             }
             return true;
@@ -5437,10 +5493,11 @@ bool game_update(const InputState& in) {
                     }
                     break;
                 case 13:  // Naib: ride out to the Ninth Rock to meet the Guild (B7 rendezvous)
-                    g.menu_open = 0;  // G3: the vault moved to its own sietch prop; this row shifted up
+                    g.menu_open = 0;
                     enter_rendezvous();
                     break;
-                case 14: g.menu_open = 0; break;  // leave
+                case 14: g.menu_open = 12; g.menu_sel = 0; break;  // C5b: the Sietch talent tree
+                case 15: g.menu_open = 0; break;  // leave
                 case 20:  // Sayyadina: spice tribute
                     if (g.pl.spice >= 5) {
                         g.pl.spice -= 5;
@@ -6613,9 +6670,9 @@ void pass_ui(RenderCtx& r) {
     }
 
     // Endgame hub menus (War Council / Jihad Table / Landsraad / Bench) — dynamic, keyboard-driven.
-    if (g.menu_open >= 8 && g.menu_open <= 11) {
+    if (g.menu_open >= 8 && g.menu_open <= 12) {
         const int x0 = fb::W / 2 - 340, y0 = 200;
-        if (g.menu_open <= 10) {  // 8-10 are keyboard lists in a small panel; 11 is a grid screen (G4)
+        if (g.menu_open <= 10 || g.menu_open == 12) {  // 8-10 + 12 keyboard lists; 11 is a grid screen (G4)
         fill_rect(ctx, x0, y0, 680, 460, 2);
         fill_rect(ctx, x0, y0, 680, 2, 228);
         fill_rect(ctx, x0, y0 + 458, 680, 2, 228);
@@ -6663,6 +6720,24 @@ void pass_ui(RenderCtx& r) {
             std::snprintf(buf, sizeof buf, "Collect CHOAM dividend  (~%d sp)", choam_control());
             row(FAC_COUNT, buf, g.menu_sel == FAC_COUNT);
             row(FAC_COUNT + 1, "Back", g.menu_sel == FAC_COUNT + 1);
+        } else if (g.menu_open == 12) {  // C5b: the Sietch talent tree (spend Litrejons)
+            draw_text_shadow(ctx, "THE SIETCH TREE", x0 + 24, y0 + 16, 230, 1);
+            std::snprintf(buf, sizeof buf, "litrejons %d   (tribal water reclaimed by the Deathstill)",
+                          int(g_meta.litrejons));
+            draw_text(ctx, buf, x0 + 24, y0 + 46, 14);
+            for (int i = 0; i < kSietchNodeCount; ++i) {
+                const int rank = g_meta.sietch_rank[i], cost = sietch_node_cost(i);
+                const char* trk = kSietchNodes[i].track == 0 ? "Sandcraft" : "Blessing";
+                if (cost > 0)
+                    std::snprintf(buf, sizeof buf, "[%-9s] %-16s %d/%d  (+%d)  -  %d litrejons", trk,
+                                  kSietchNodes[i].name, rank, kSietchNodes[i].max_rank,
+                                  kSietchNodes[i].per_rank, cost);
+                else
+                    std::snprintf(buf, sizeof buf, "[%-9s] %-16s %d/%d  (+%d)  -  MAX", trk,
+                                  kSietchNodes[i].name, rank, kSietchNodes[i].max_rank, kSietchNodes[i].per_rank);
+                row(i, buf, g.menu_sel == i);
+            }
+            row(kSietchNodeCount, "Back to the Naib", g.menu_sel == kSietchNodeCount);
         } else {  // G4: the crafting bench — the pack grid (left) + the currency-tab slots (right)
             const int bx = fb::W / 2 - 620, by = 190;
             fill_rect(ctx, bx, by, 1240, 620, 2);
@@ -6804,7 +6879,8 @@ void pass_ui(RenderCtx& r) {
         static const char* kMenus[5][6] = {
             {},
             {"Tribute 200 water  (+10 standing)", "Ask about the season",
-             "A task for the tribe", "Ride out to the Ninth Rock (Guild tithe)", "Leave", nullptr},
+             "A task for the tribe", "Ride out to the Ninth Rock (Guild tithe)",
+             "Contribute to the tribe  (the Sietch tree)", "Leave"},
             {"Offer 5 spice  (+12 standing)", "Healing trance  (6 spice)", "Leave", nullptr},
             {"Demolition charge  (5 spice)", "Two thumpers  (3 spice)",
              "Toxin vial  (2 spice)", "Glowglobe  (3 spice)", "Leave"},
@@ -7671,6 +7747,13 @@ void game_debug_flask_gain(int n) { flask_gain(n); }
 int game_debug_litrejons() { return g_meta.litrejons; }        // banked tribal water (the sietch currency)
 int game_debug_reclaimed() { return g.pl.reclaimed; }          // this run's un-banked Deathstill stake
 void game_debug_grant_litrejons(int n) { g_meta.litrejons += n; meta_save(); }
+// --- C5b sietch-tree hooks ---
+int game_debug_sietch_node_count() { return kSietchNodeCount; }
+int game_debug_sietch_rank(int idx) { return (idx >= 0 && idx < kSietchNodeCount) ? g_meta.sietch_rank[idx] : -1; }
+int game_debug_sietch_cost(int idx) { return sietch_node_cost(idx); }
+int game_debug_buy_sietch_node(int idx) { return buy_sietch_node(idx) ? 1 : 0; }
+int game_debug_sietch_bonus(int kind) { return sietch_affix_bonus(uint8_t(kind)); }
+int game_debug_max_hp() { return player_max_hp(); }   // for verifying a tree node moves a derived stat
 int game_debug_deathstill(int water) {  // place a corpse worth `water` on the player + harvest it
     const Entity& p = player_ent();
     for (int i = 1; i < kMaxEnts; ++i)

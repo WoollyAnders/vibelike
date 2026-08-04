@@ -196,6 +196,13 @@ int game_debug_litrejons();                  // banked Litrejons (the sietch-tre
 int game_debug_reclaimed();                  // this run's un-banked Deathstill reclaimed water
 void game_debug_grant_litrejons(int n);      // add n banked Litrejons (persists)
 int game_debug_deathstill(int water);        // place a corpse worth `water` + harvest it; returns reclaimed delta
+// --- C5b sietch-tree hooks ---
+int game_debug_sietch_node_count();          // number of sietch-tree nodes
+int game_debug_sietch_rank(int idx);         // allocated rank of node idx (-1 invalid)
+int game_debug_sietch_cost(int idx);         // Litrejons for the next rank of node idx (0 if maxed)
+int game_debug_buy_sietch_node(int idx);     // rank up node idx; 1 on success
+int game_debug_sietch_bonus(int kind);       // the tree's AffixKind contribution
+int game_debug_max_hp();                     // player_max_hp() (to verify a node moves a derived stat)
 void game_debug_revelation(int* stage, int* inv_count);  // B2b: Revelation stage + inv item count
 void game_debug_revelation_pick(int idx);  // B2b: choose row idx + confirm the Revelation
 int game_debug_cur_node();  // B1.3: current graph node index
