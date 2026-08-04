@@ -136,6 +136,10 @@ inline constexpr int kInvCap  = kPackW * kPackH;  // pool size (worst case: an a
 // --- C4: the passive skill tree ---
 inline constexpr int kPassivePerLevel = 1;    // passive points earned per character level
 
+// --- C6: the maula pistol (cursor-aimed ranged attack) ---
+inline constexpr int kMaulaNoise = 22;        // the maula CRACKS — much louder than a blade (12)
+inline constexpr int kMaulaRange = 12;        // max tiles the dart travels
+
 // --- C5: the Deathstill economy — reclaimed water banks to Litrejons (the sietch-tree currency) ---
 inline constexpr int kLitrejonPerWater = 2;   // reclaimed water per 1 Litrejon banked on extraction
 

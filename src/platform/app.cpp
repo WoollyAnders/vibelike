@@ -2029,6 +2029,44 @@ int run_currencyuitest(audio::Mixer& mixer, const Assets& assets, const Colormap
     return pass ? 0 : 1;
 }
 
+// C6: the maula pistol — a cursor-aimed ranged shot. Bresenham line-of-fire: it drops a foe at range,
+// a wall between blocks the dart, and every shot is loud.
+int run_maulatest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    std::remove("meta.dat");
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(6060, services);
+    game_debug_clear_hostiles();
+
+    // (A) fire down a clear line -> the trooper at range takes damage (dropped or bloodied)
+    const int t1 = game_debug_spawn_hostile(5, 0);   // 5 tiles east, line cleared
+    const int hp0 = game_debug_entity_hp(t1);
+    game_debug_fire_maula(5, 0);
+    const int hp1 = game_debug_entity_hp(t1);        // -1 if the shot killed it
+    const bool hit = t1 >= 0 && hp0 > 0 && (hp1 < 0 || hp1 < hp0);
+
+    // (B) a wall between the shooter and the target blocks the dart (the trooper is untouched)
+    game_debug_clear_hostiles();
+    const int t2 = game_debug_spawn_hostile(5, 0);
+    game_debug_block_tile(2, 0);                     // raise a wall two tiles east
+    const int hp2a = game_debug_entity_hp(t2);
+    game_debug_fire_maula(5, 0);
+    const int hp2b = game_debug_entity_hp(t2);
+    const bool blocked = t2 >= 0 && hp2b == hp2a;    // unchanged: the wall ate the dart
+
+    // (C) enough shots drop the trooper outright (a kill at range clears the hostile). Re-aim at its
+    // live tile since the loud report sends it hunting.
+    game_debug_clear_hostiles();
+    const int t3 = game_debug_spawn_hostile(4, 0);
+    for (int i = 0; i < 40 && game_debug_hostile_count() > 0; ++i) game_debug_fire_maula_at(t3);
+    const bool dropped = game_debug_hostile_count() == 0;
+
+    const bool pass = hit && blocked && dropped;
+    std::printf("maulatest %s (hit %d [%d->%d] blocked %d [%d->%d] dropped %d)\n",
+                pass ? "PASS" : "FAIL", hit, hp0, hp1, blocked, hp2a, hp2b, dropped);
+    std::remove("meta.dat");
+    return pass ? 0 : 1;
+}
+
 // C4: the passive skill tree. A shared node graph, a class anchor per corner, adjacency-gated
 // allocation, one point per level; node bonuses fold into every derived stat and persist with the
 // character. (Nodes: 0/1/2 anchors; 4 Killer's Edge +6% Lethality adjacent to the Knifehand anchor.)
@@ -2511,7 +2549,7 @@ int main(int argc, char** argv) {
          vendortest = false, patroltest = false, cavetest = false, trialtest = false,
          endgametest = false, striketest = false, pinnacletest = false, capstonetest = false,
          longridetest = false, choamtest = false, currencytest = false, currencymechtest = false,
-         currencydroptest = false, currencyuitest = false, essencetest = false, gridtest = false, currencytabtest = false, vaulttest = false, guitest = false, economytest = false, sietchtreetest = false, passivetreetest = false, abilitytest = false,
+         currencydroptest = false, currencyuitest = false, essencetest = false, gridtest = false, currencytabtest = false, vaulttest = false, guitest = false, economytest = false, sietchtreetest = false, passivetreetest = false, maulatest = false, abilitytest = false,
          flasktest = false, inputtest = false, menutest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
@@ -2557,6 +2595,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--economytest") == 0) economytest = true;
         if (SDL_strcmp(argv[i], "--sietchtreetest") == 0) sietchtreetest = true;
         if (SDL_strcmp(argv[i], "--passivetreetest") == 0) passivetreetest = true;
+        if (SDL_strcmp(argv[i], "--maulatest") == 0) maulatest = true;
         if (SDL_strcmp(argv[i], "--abilitytest") == 0) abilitytest = true;
         if (SDL_strcmp(argv[i], "--flasktest") == 0) flasktest = true;
         if (SDL_strcmp(argv[i], "--inputtest") == 0) inputtest = true;
@@ -2623,6 +2662,7 @@ int main(int argc, char** argv) {
     if (economytest) return run_economytest(mixer, assets, cmaps);
     if (sietchtreetest) return run_sietchtreetest(mixer, assets, cmaps);
     if (passivetreetest) return run_passivetreetest(mixer, assets, cmaps);
+    if (maulatest) return run_maulatest(mixer, assets, cmaps);
     if (abilitytest) return run_abilitytest(mixer, assets, cmaps);
     if (flasktest) return run_flasktest(mixer, assets, cmaps);
     if (inputtest) return run_inputtest(mixer, assets, cmaps);

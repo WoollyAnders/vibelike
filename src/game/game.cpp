@@ -4534,6 +4534,170 @@ void revelation_confirm() {
     }
 }
 
+// C6: shared enemy-death resolution (boss/strike/pinnacle/capstone/loot/xp/corpse/quest) —
+// used by both the melee bump (try_move) and the maula shot. The caller consume_action()s after.
+void resolve_enemy_death(Entity* victim, const Foe* foe) {
+            g.hitstop = 3;  // the world holds its breath
+            // D1 on-kill: Life on Kill + Focus on Kill.
+            gain_hp(affix_total(items::AK_LIFE_ON_KILL));
+            gain_shield(affix_total(items::AK_FOCUS_ON_KILL));
+            flask_gain(tune::kFlaskChargePerKill);  // flasks charge from the kill
+            if (foe) {
+                int xp = foe->xp;
+                if (g.pl.st.level > foe->level + 2) xp /= 2;
+                grant_xp(xp);
+            }
+            // B3: a named pinnacle clears its node; the Awaken-10 Baron ends the vision (victory).
+            const bool pinnacle = victim->type == EType::Boss && boss_is_pinnacle(victim->data2);
+            const bool was_baron = victim->type == EType::Boss &&
+                                   (victim->data2 == -1 ||
+                                    (pinnacle && boss_pinnacle_idx(victim->data2) == 9));
+            if (pinnacle) {
+                award_pinnacle_clear(g.cur_node);
+                raise_standing(8);
+            }
+            maybe_drop_loot(victim->type, victim->x, victim->y);
+            if (was_baron) {
+                *victim = Entity{EType::Corpse, Ai::Idle, uint8_t(g.cur_zone),
+                                 victim->x, victim->y, 0, 0, 400};
+                end_season(campaign::kVictory);
+                return;
+            }
+            if (g.in_strike && victim->type == EType::Boss) {  // B10.2: the strike objective falls
+                *victim = Entity{EType::Corpse, Ai::Idle, uint8_t(g.cur_zone),
+                                 victim->x, victim->y, 0, 0, 200};
+                resolve_strike();  // press the target + melt home (wipes this zone)
+                return;
+            }
+            if (g.in_pinnacle && victim->type == EType::Boss) {  // B10.3: the homeworld boss falls
+                *victim = Entity{EType::Corpse, Ai::Idle, uint8_t(g.cur_zone),
+                                 victim->x, victim->y, 0, 0, 300};
+                resolve_pinnacle();  // take the Golden Path shard + return home
+                return;
+            }
+            if (g.in_capstone && victim->type == EType::Boss) {  // B10.4: the alternate Paul falls
+                *victim = Entity{EType::Corpse, Ai::Idle, uint8_t(g.cur_zone),
+                                 victim->x, victim->y, 0, 0, 400};
+                resolve_capstone();  // refuse the Golden Path (apex trophy) + return home
+                return;
+            }
+            switch (victim->type) {
+                case EType::Hound:
+                    g.log.push("The dust hound collapses. Its water is yours.");
+                    if (g.quest_kind == 1 && ++g.quest_progress >= g.quest_need) {
+                        g.quest_kind = 0;
+                        raise_standing(12);
+                        g.log.push("The catch-basins are safe. The Naib hears. +12 standing.");
+                    }
+                    break;
+                case EType::Trooper:
+                    g.log.push("The trooper falls. His water belongs to the tribe now.");
+                    break;
+                case EType::ShieldTrooper:
+                    g.log.push("The bulwark's guard breaks at last. He falls.");
+                    break;
+                case EType::Spotter:
+                    g.log.push("The spotter crumples. No eyes on the sand now.");
+                    break;
+                case EType::PanAdder:
+                    g.log.push("You pin the adder behind the head. Still.");
+                    break;
+                case EType::Hermit:
+                    g.log.push("The hermit falls, laughing. His rags spill SPICE.");
+                    break;
+                case EType::HunterSeeker:
+                    g.log.push("You swat the sliver from the air. Fine work.");
+                    raise_standing(2);
+                    break;
+                case EType::Boss:
+                    if (victim->data2 == -1) {
+                        g.log.push("The Baron falls, disbelieving, into the sand.");
+                        g.log.push("His water belongs to the tribe. ALL of it.");
+                    } else if (boss_is_pinnacle(victim->data2)) {
+                        g.log.push("%s dies. Muad'Dib's sight was true.",
+                                   kPinnacles[boss_pinnacle_idx(victim->data2)].name);
+                    } else {
+                        g.log.push("The champion dies hard. His gear is yours.");
+                        raise_standing(5);
+                    }
+                    break;
+                default: break;
+            }
+            if (g.season.crysknife_granted &&
+                (victim->type == EType::Trooper || victim->type == EType::ShieldTrooper))
+                raise_standing(1);  // the crysknife drinks; the tribe sees
+            const bool was_spotter = victim->type == EType::Spotter;
+            if (victim->type == EType::HunterSeeker) {
+                victim->type = EType::None;  // machines leave no water
+            } else if (victim->type == EType::Hermit) {
+                *victim = Entity{EType::SpiceCache, Ai::Idle, uint8_t(g.cur_zone),
+                                 victim->x, victim->y, 1, 0,
+                                 int16_t(victim->data > 0 ? victim->data : 6)};
+            } else {
+                const int16_t yield_ =
+                    victim->type == EType::Hound ? int16_t(tune::kCorpseWaterHound)
+                    : victim->type == EType::PanAdder ? int16_t(20) : int16_t(140);
+                *victim = Entity{EType::Corpse, Ai::Idle, uint8_t(g.cur_zone),
+                                 victim->x, victim->y, 0, 0, yield_};
+            }
+            if (was_spotter && !spotters_alive() && g.op.live())
+                g.op.spotters_knifed = true;  // the quiet route
+}
+
+// C6: the first hostile entity on a tile (the maula's line-of-fire target set).
+Entity* hostile_at(int x, int y) {
+    static const EType kHostiles[] = {EType::Hound, EType::Trooper, EType::Spotter, EType::ShieldTrooper,
+                                      EType::PanAdder, EType::Hermit, EType::HunterSeeker, EType::Boss};
+    for (EType t : kHostiles) if (Entity* e = entity_at(x, y, g.cur_zone, t)) return e;
+    return nullptr;
+}
+// C6: fire the maula pistol toward (tx,ty) — a Bresenham line from the player; a wall stops the dart,
+// else it strikes the FIRST hostile on the line for lethality-scaled damage. LOUD (the report carries).
+void fire_maula(int tx, int ty) {
+    if (g.pl.dead || g.pl.riding) return;
+    Entity& p = player_ent();
+    if (tx < 0 || ty < 0 || (tx == p.x && ty == p.y)) return;  // no valid aim
+    int x0 = p.x, y0 = p.y;
+    const int dx = (tx > x0 ? tx - x0 : x0 - tx), dy = -(ty > y0 ? ty - y0 : y0 - ty);
+    const int sx = x0 < tx ? 1 : -1, sy = y0 < ty ? 1 : -1;
+    int err = dx + dy;
+    Entity* victim = nullptr; int hx = x0, hy = y0;
+    for (int step = 0; step < tune::kMaulaRange; ++step) {
+        const int e2 = 2 * err;
+        if (e2 >= dy) { err += dy; x0 += sx; }
+        if (e2 <= dx) { err += dx; y0 += sy; }
+        hx = x0; hy = y0;
+        if (!zone().walkable(x0, y0)) break;         // a wall (or the edge) stops the dart
+        if ((victim = hostile_at(x0, y0)) != nullptr) break;  // first hostile on the line
+        if (x0 == tx && y0 == ty) break;             // reached the aimed tile, nothing hit
+    }
+    p.anim.facing = facing_from_tile_delta(tx - p.x, ty - p.y);
+    p.anim.set(anim::State::Attack);
+    g.noise.add(p.x, p.y, tune::kMaulaNoise);   // the crack draws every ear on the sand
+    g.impact_x = int16_t(hx); g.impact_y = int16_t(hy);
+    g.services.mixer->push({audio::Cmd::PlaySfx, 1, 180, 120});
+    if (!victim) {
+        g.log.push("The maula cracks. The dart spends itself on stone.");
+        consume_action();
+        return;
+    }
+    g.impact_kind = victim->type == EType::ShieldTrooper ? 1 : 0;
+    Foe boss_f{};
+    if (victim->type == EType::Boss) boss_f = boss_foe(*victim);
+    const Foe* foe = victim->type == EType::Boss ? &boss_f : foe_stats(victim->type);
+    bool crit = false;
+    const int dealt = foe ? player_attack_roll(*foe, &crit) : g.pl.atk;  // lethality-scaled
+    if (dealt == 0) { g.log.push("The dart glances off. A miss."); consume_action(); return; }
+    victim->hp -= int16_t(dealt);
+    if (int lch = affix_total(items::AK_LEECH); lch > 0) gain_hp(dealt * lch / 100);
+    if (int loh = affix_total(items::AK_LIFE_ON_HIT); loh > 0) gain_hp(loh);
+    if (int ws = affix_total(items::AK_WILL_SIPHON); ws > 0) gain_will(ws);
+    if (crit) g.log.push("CRIT - %d! The dart takes him clean.", dealt);
+    else g.log.push("The maula hits for %d.", dealt);
+    if (victim->hp <= 0) resolve_enemy_death(victim, foe);
+    consume_action();
+}
+
 void try_move(int dx, int dy) {
     Entity& p = player_ent();
     const int nx = p.x + dx, ny = p.y + dy;
@@ -4659,117 +4823,7 @@ void try_move(int dx, int dy) {
         apply_ascendancy_on_hit(*victim, dealt, foe);  // C3: the ascendancy's signature ailment
         if (crit) g.log.push("CRIT - %d! The blade finds the seam.", dealt);
         else g.log.push("You hit for %d.", dealt);
-        if (victim->hp <= 0) {
-            g.hitstop = 3;  // the world holds its breath
-            // D1 on-kill: Life on Kill + Focus on Kill.
-            gain_hp(affix_total(items::AK_LIFE_ON_KILL));
-            gain_shield(affix_total(items::AK_FOCUS_ON_KILL));
-            flask_gain(tune::kFlaskChargePerKill);  // flasks charge from the kill
-            if (foe) {
-                int xp = foe->xp;
-                if (g.pl.st.level > foe->level + 2) xp /= 2;
-                grant_xp(xp);
-            }
-            // B3: a named pinnacle clears its node; the Awaken-10 Baron ends the vision (victory).
-            const bool pinnacle = victim->type == EType::Boss && boss_is_pinnacle(victim->data2);
-            const bool was_baron = victim->type == EType::Boss &&
-                                   (victim->data2 == -1 ||
-                                    (pinnacle && boss_pinnacle_idx(victim->data2) == 9));
-            if (pinnacle) {
-                award_pinnacle_clear(g.cur_node);
-                raise_standing(8);
-            }
-            maybe_drop_loot(victim->type, victim->x, victim->y);
-            if (was_baron) {
-                *victim = Entity{EType::Corpse, Ai::Idle, uint8_t(g.cur_zone),
-                                 victim->x, victim->y, 0, 0, 400};
-                end_season(campaign::kVictory);
-                consume_action();
-                return;
-            }
-            if (g.in_strike && victim->type == EType::Boss) {  // B10.2: the strike objective falls
-                *victim = Entity{EType::Corpse, Ai::Idle, uint8_t(g.cur_zone),
-                                 victim->x, victim->y, 0, 0, 200};
-                resolve_strike();  // press the target + melt home (wipes this zone)
-                consume_action();
-                return;
-            }
-            if (g.in_pinnacle && victim->type == EType::Boss) {  // B10.3: the homeworld boss falls
-                *victim = Entity{EType::Corpse, Ai::Idle, uint8_t(g.cur_zone),
-                                 victim->x, victim->y, 0, 0, 300};
-                resolve_pinnacle();  // take the Golden Path shard + return home
-                consume_action();
-                return;
-            }
-            if (g.in_capstone && victim->type == EType::Boss) {  // B10.4: the alternate Paul falls
-                *victim = Entity{EType::Corpse, Ai::Idle, uint8_t(g.cur_zone),
-                                 victim->x, victim->y, 0, 0, 400};
-                resolve_capstone();  // refuse the Golden Path (apex trophy) + return home
-                consume_action();
-                return;
-            }
-            switch (victim->type) {
-                case EType::Hound:
-                    g.log.push("The dust hound collapses. Its water is yours.");
-                    if (g.quest_kind == 1 && ++g.quest_progress >= g.quest_need) {
-                        g.quest_kind = 0;
-                        raise_standing(12);
-                        g.log.push("The catch-basins are safe. The Naib hears. +12 standing.");
-                    }
-                    break;
-                case EType::Trooper:
-                    g.log.push("The trooper falls. His water belongs to the tribe now.");
-                    break;
-                case EType::ShieldTrooper:
-                    g.log.push("The bulwark's guard breaks at last. He falls.");
-                    break;
-                case EType::Spotter:
-                    g.log.push("The spotter crumples. No eyes on the sand now.");
-                    break;
-                case EType::PanAdder:
-                    g.log.push("You pin the adder behind the head. Still.");
-                    break;
-                case EType::Hermit:
-                    g.log.push("The hermit falls, laughing. His rags spill SPICE.");
-                    break;
-                case EType::HunterSeeker:
-                    g.log.push("You swat the sliver from the air. Fine work.");
-                    raise_standing(2);
-                    break;
-                case EType::Boss:
-                    if (victim->data2 == -1) {
-                        g.log.push("The Baron falls, disbelieving, into the sand.");
-                        g.log.push("His water belongs to the tribe. ALL of it.");
-                    } else if (boss_is_pinnacle(victim->data2)) {
-                        g.log.push("%s dies. Muad'Dib's sight was true.",
-                                   kPinnacles[boss_pinnacle_idx(victim->data2)].name);
-                    } else {
-                        g.log.push("The champion dies hard. His gear is yours.");
-                        raise_standing(5);
-                    }
-                    break;
-                default: break;
-            }
-            if (g.season.crysknife_granted &&
-                (victim->type == EType::Trooper || victim->type == EType::ShieldTrooper))
-                raise_standing(1);  // the crysknife drinks; the tribe sees
-            const bool was_spotter = victim->type == EType::Spotter;
-            if (victim->type == EType::HunterSeeker) {
-                victim->type = EType::None;  // machines leave no water
-            } else if (victim->type == EType::Hermit) {
-                *victim = Entity{EType::SpiceCache, Ai::Idle, uint8_t(g.cur_zone),
-                                 victim->x, victim->y, 1, 0,
-                                 int16_t(victim->data > 0 ? victim->data : 6)};
-            } else {
-                const int16_t yield_ =
-                    victim->type == EType::Hound ? int16_t(tune::kCorpseWaterHound)
-                    : victim->type == EType::PanAdder ? int16_t(20) : int16_t(140);
-                *victim = Entity{EType::Corpse, Ai::Idle, uint8_t(g.cur_zone),
-                                 victim->x, victim->y, 0, 0, yield_};
-            }
-            if (was_spotter && !spotters_alive() && g.op.live())
-                g.op.spotters_knifed = true;  // the quiet route
-        } else {
+        if (victim->hp <= 0) { resolve_enemy_death(victim, foe); } else {
             g.log.push("You strike %s.",
                        victim->type == EType::Hound ? "the dust hound" :
                        victim->type == EType::Trooper ? "the trooper" : "the spotter");
@@ -5851,6 +5905,8 @@ bool game_update(const InputState& in) {
     else if (ready && in.was_pressed(Key::Ability3)) {
         if (cast_ability(AB_PRESCIENCE, g.hover_tx, g.hover_ty)) consume_action();
     }
+    // C6: right-click fires the maula pistol at the cursor tile (a loud, lethality-scaled ranged shot).
+    else if (ready && cursor_in_world && in.mouse_pressed[1]) fire_maula(g.hover_tx, g.hover_ty);
 
     // Flasks quaff instantly (not gated by the action cooldown) — independent of the move/act chain.
     if (in.was_pressed(Key::Flask1)) use_flask(0);
@@ -7946,6 +8002,45 @@ int game_debug_deathstill(int water) {  // place a corpse worth `water` on the p
     const int before = g.pl.reclaimed;
     try_harvest();
     return g.pl.reclaimed - before;
+}
+// --- C6 maula hooks ---
+int game_debug_spawn_hostile(int dx, int dy) {  // Trooper at player+(dx,dy); clears the line; returns ents idx
+    const Entity p = g.ents[0];
+    const int tx = p.x + dx, ty = p.y + dy;
+    if (tx < 0 || tx >= map::W || ty < 0 || ty >= map::H) return -1;
+    int x0 = p.x, y0 = p.y;  // clear TF_BLOCK along the line so the shot has a clean path in tests
+    const int adx = dx < 0 ? -dx : dx, ady = dy < 0 ? -dy : dy, sx = dx < 0 ? -1 : 1, sy = dy < 0 ? -1 : 1;
+    int err = adx - ady;
+    for (int guard = 0; guard < 128; ++guard) {
+        g.zone_.flags[y0 * map::W + x0] &= uint8_t(~map::TF_BLOCK);
+        if (x0 == tx && y0 == ty) break;
+        const int e2 = 2 * err;
+        if (e2 > -ady) { err -= ady; x0 += sx; }
+        if (e2 < adx)  { err += adx; y0 += sy; }
+    }
+    for (int i = 1; i < kMaxEnts; ++i)
+        if (g.ents[i].type == EType::None) {
+            g.ents[i] = Entity{EType::Trooper, Ai::Idle, g.cur_zone, int16_t(tx), int16_t(ty),
+                               int16_t(foe_hp(EType::Trooper)), 0, 0};
+            return i;
+        }
+    return -1;
+}
+int game_debug_entity_hp(int idx) {
+    return (idx >= 0 && idx < kMaxEnts && g.ents[idx].type != EType::None) ? g.ents[idx].hp : -1;
+}
+void game_debug_block_tile(int dx, int dy) {  // raise a wall at player+(dx,dy) (blocks the maula line)
+    const Entity p = g.ents[0];
+    const int tx = p.x + dx, ty = p.y + dy;
+    if (tx >= 0 && tx < map::W && ty >= 0 && ty < map::H) g.zone_.flags[ty * map::W + tx] |= map::TF_BLOCK;
+}
+void game_debug_fire_maula(int dx, int dy) {  // fire the maula toward player+(dx,dy)
+    const Entity& p = player_ent();
+    fire_maula(p.x + dx, p.y + dy);
+}
+void game_debug_fire_maula_at(int idx) {  // fire at entity idx's live tile (re-aims as it moves)
+    if (idx > 0 && idx < kMaxEnts && g.ents[idx].type != EType::None)
+        fire_maula(g.ents[idx].x, g.ents[idx].y);
 }
 
 void game_debug_revelation(int* stage, int* inv_count) {

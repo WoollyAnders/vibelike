@@ -196,6 +196,12 @@ int game_debug_litrejons();                  // banked Litrejons (the sietch-tre
 int game_debug_reclaimed();                  // this run's un-banked Deathstill reclaimed water
 void game_debug_grant_litrejons(int n);      // add n banked Litrejons (persists)
 int game_debug_deathstill(int water);        // place a corpse worth `water` + harvest it; returns reclaimed delta
+// --- C6 maula hooks ---
+int game_debug_spawn_hostile(int dx, int dy); // Trooper at player+(dx,dy), line cleared; returns ents idx
+int game_debug_entity_hp(int idx);           // hp of entity idx (-1 if none)
+void game_debug_block_tile(int dx, int dy);  // raise a wall at player+(dx,dy)
+void game_debug_fire_maula(int dx, int dy);  // fire the maula toward player+(dx,dy)
+void game_debug_fire_maula_at(int idx);      // fire at entity idx's live tile
 // --- C4 passive-tree hooks ---
 int game_debug_passive_node_count();         // number of passive-tree nodes
 int game_debug_passive_has(int n);           // is node n allocated (live character)
