@@ -145,6 +145,13 @@ void game_debug_setup_gear(int idx, int rarity, int ilvl);  // D3: place a known
 int game_debug_bench(int cur, int idx);       // D3: apply currency `cur` to inv[idx] (1 = applied)
 int game_debug_item_sig(int idx, int* rarity, int* naffix, int* frac);  // D3: inspect inv[idx]; returns slot
 int game_debug_item_valuesum(int idx);        // D3: sum of inv[idx] affix values
+void game_debug_set_unidentified(int idx, int on);  // D3b: set/clear the unID bit on inv[idx]
+int game_debug_item_state(int idx);           // D3b: istate bits (1 unID / 2 corrupt / 4 mirror)
+int game_debug_item_quality(int idx);         // D3b: item quality %
+int game_debug_item_implicit(int idx);        // D3b: implicit % (0 = default)
+void game_debug_setup_weapon(int idx, int ilvl);    // D3b: place a common weapon in inv[idx]
+int game_debug_flask_quality();               // D3b: current flask quality
+int game_debug_inv_used();                    // D3b: non-empty pack cells (for the Mirror copy)
 int game_debug_cast_ability(int ab, int tx, int ty);  // C7: 1 Voice, 2 Blink, 3 Prescience (1=cast)
 int game_debug_will();                       // C7: current Will
 void game_debug_set_will(int w);             // C7: set current Will (test setup)

@@ -1828,6 +1828,60 @@ int run_currencytest(audio::Mixer& mixer, const Assets& assets, const Colormaps&
     return pass ? 0 : 1;
 }
 
+// D3b: the new-mechanic orbs — identify (unID), Blessed (implicit reroll), quality (armour/weapon/
+// flask), Vaal (corrupt + lock), Mirror (duplicate). Currency kinds are items::CUR_* (items.h).
+int run_currencymechtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    std::remove("meta.dat");
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(11, services);
+    auto grant = [&](int c) { game_debug_grant_currency(c, 5); };
+
+    // (A) Ancient Scroll identifies; while unID, other orbs refuse
+    game_debug_setup_gear(0, 2 /*rare*/, 8);
+    game_debug_set_unidentified(0, 1);
+    grant(items::CUR_CHAOS); grant(items::CUR_WISDOM);
+    const bool unid_locks = game_debug_bench(items::CUR_CHAOS, 0) == 0;      // can't craft an unID item
+    const bool identified = game_debug_bench(items::CUR_WISDOM, 0) == 1 && (game_debug_item_state(0) & 1) == 0;
+
+    // (B) Osmotic Membrane rerolls the implicit % (0 default -> a rolled value)
+    grant(items::CUR_BLESSED);
+    const bool imp0 = game_debug_item_implicit(0) == 0;
+    const bool blessed = game_debug_bench(items::CUR_BLESSED, 0) == 1 && game_debug_item_implicit(0) != 0;
+
+    // (C) Maker Hide raises ARMOUR quality; Worm Tooth refuses on armour; Worm Tooth raises WEAPON quality
+    grant(items::CUR_ARMORQUAL); grant(items::CUR_WEAPONQUAL);
+    const bool armor_q = game_debug_bench(items::CUR_ARMORQUAL, 0) == 1 && game_debug_item_quality(0) == 5;
+    const bool weap_on_armor = game_debug_bench(items::CUR_WEAPONQUAL, 0) == 0;  // wrong slot
+    game_debug_setup_weapon(1, 8);
+    const bool weap_q = game_debug_bench(items::CUR_WEAPONQUAL, 1) == 1 && game_debug_item_quality(1) == 5;
+
+    // (D) Distillate Microtubing raises flask quality (targets the belt, not a gear item)
+    grant(items::CUR_FLASKQUAL);
+    const int fq0 = game_debug_flask_quality();
+    const bool flaskq = game_debug_bench(items::CUR_FLASKQUAL, 0) == 1 && game_debug_flask_quality() == fq0 + 5;
+
+    // (E) Unstable Catalyst corrupts + LOCKS the item (further orbs refuse)
+    game_debug_setup_gear(2, 2 /*rare*/, 8);
+    grant(items::CUR_VAAL); grant(items::CUR_DIVINE);
+    const bool vaaled = game_debug_bench(items::CUR_VAAL, 2) == 1 && (game_debug_item_state(2) & 2) != 0;
+    const bool locked = game_debug_bench(items::CUR_DIVINE, 2) == 0;  // corrupted -> no more crafting
+
+    // (F) Echo of Shai'Hulud duplicates into a free cell; both copies are mirrored (unmodifiable)
+    game_debug_setup_gear(3, 2 /*rare*/, 8);
+    grant(items::CUR_MIRROR);
+    const int used0 = game_debug_inv_used();
+    const bool mirrored = game_debug_bench(items::CUR_MIRROR, 3) == 1;
+    const bool copy_made = game_debug_inv_used() == used0 + 1 && (game_debug_item_state(3) & 4) != 0;
+
+    const bool pass = unid_locks && identified && imp0 && blessed && armor_q && weap_on_armor &&
+                      weap_q && flaskq && vaaled && locked && mirrored && copy_made;
+    std::printf("currencymechtest %s (unidLock %d id %d bless %d armorQ %d weapX %d weapQ %d flaskQ %d vaal %d lock %d mirror %d copy %d)\n",
+                pass ? "PASS" : "FAIL", unid_locks, identified, blessed, armor_q, weap_on_armor,
+                weap_q, flaskq, vaaled, locked, mirrored, copy_made);
+    std::remove("meta.dat");
+    return pass ? 0 : 1;
+}
+
 // C7: Will-powered prescience abilities. One shared Will pool + cooldown. 1 Voice (stun nearest seen
 // foe), 2 Blink (step toward a tile), 3 Prescient Calm (Focus-shield burst). Input/targeting/FX defer.
 int run_abilitytest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
@@ -2053,7 +2107,7 @@ int main(int argc, char** argv) {
          rttest = false, stuntest = false, classtest = false, guildtest = false,
          vendortest = false, patroltest = false, cavetest = false, trialtest = false,
          endgametest = false, striketest = false, pinnacletest = false, capstonetest = false,
-         longridetest = false, choamtest = false, currencytest = false, abilitytest = false,
+         longridetest = false, choamtest = false, currencytest = false, currencymechtest = false, abilitytest = false,
          flasktest = false, inputtest = false, menutest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
@@ -2088,6 +2142,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--longridetest") == 0) longridetest = true;
         if (SDL_strcmp(argv[i], "--choamtest") == 0) choamtest = true;
         if (SDL_strcmp(argv[i], "--currencytest") == 0) currencytest = true;
+        if (SDL_strcmp(argv[i], "--currencymechtest") == 0) currencymechtest = true;
         if (SDL_strcmp(argv[i], "--abilitytest") == 0) abilitytest = true;
         if (SDL_strcmp(argv[i], "--flasktest") == 0) flasktest = true;
         if (SDL_strcmp(argv[i], "--inputtest") == 0) inputtest = true;
@@ -2143,6 +2198,7 @@ int main(int argc, char** argv) {
     if (longridetest) return run_longridetest(mixer, assets, cmaps);
     if (choamtest) return run_choamtest(mixer, assets, cmaps);
     if (currencytest) return run_currencytest(mixer, assets, cmaps);
+    if (currencymechtest) return run_currencymechtest(mixer, assets, cmaps);
     if (abilitytest) return run_abilitytest(mixer, assets, cmaps);
     if (flasktest) return run_flasktest(mixer, assets, cmaps);
     if (inputtest) return run_inputtest(mixer, assets, cmaps);

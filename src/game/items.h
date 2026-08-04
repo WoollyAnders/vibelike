@@ -346,8 +346,8 @@ struct Inst {
     uint8_t ilvl = 1;
     uint8_t nprefix = 0, nsuffix = 0;
     uint8_t rare_name = 0;           // adj | (noun<<4)
-    uint8_t quality = 0;             // D3: item quality % (0..20); armour/weapon/flask quality raise it
-    uint8_t enchant = 0;             // reserved
+    uint8_t quality = 0;             // D3: item quality % (0..20); armour/weapon quality raise it
+    uint8_t enchant = 0;             // D3: implicit value as % of the def default (0 = default 100%); Blessed rerolls it
     uint8_t currency = 0;            // D3: 0 = gear; else a Currency kind (this slot is a currency stack)
     uint16_t stack = 0;              // D3: currency stack count (currency slots only)
     uint8_t fractured = 0;           // D3: per-affix lock bitmask (bits 0-2 prefix, 3-5 suffix)
@@ -369,7 +369,11 @@ struct Inst {
     int affix_power(uint8_t kind) const {
         if (empty() || is_currency()) return 0;
         int p = 0;
-        if (d().slot != Slot::Weapon && d().a == kind) p += d().b;  // implicit
+        if (d().slot != Slot::Weapon && d().a == kind) {  // implicit (D3: Blessed % + quality boost the local mod)
+            int imp = d().b * (enchant == 0 ? 100 : enchant) / 100;
+            imp = imp * (100 + quality) / 100;
+            p += imp;
+        }
         for (int i = 0; i < nprefix; ++i) if (pre[i].kind == kind) p += pre[i].value;
         for (int i = 0; i < nsuffix; ++i) if (suf[i].kind == kind) p += suf[i].value;
         return p;

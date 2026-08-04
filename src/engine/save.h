@@ -7,7 +7,7 @@
 #include <vector>
 
 inline constexpr uint32_t kSaveMagic = 0x54535544;  // 'DUST'
-inline constexpr uint16_t kSaveVersion = 24;  // v24: D3 widened Inst (currency/stack/fractured/istate)
+inline constexpr uint16_t kSaveVersion = 25;  // v25: D3b flask quality (pl.flask_quality)
 
 class SaveWriter {
 public:

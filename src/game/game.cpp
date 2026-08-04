@@ -176,6 +176,7 @@ struct Player {
     int ability_cd = 0;    // C7: shared ability cooldown (world turns remaining)
     int flask_charges[tune::kFlaskSlots] = {tune::kFlaskMaxCharges, tune::kFlaskMaxCharges,
                                             tune::kFlaskMaxCharges};  // Life / Will / Utility belt
+    int flask_quality = 0;  // D3: Distillate Microtubing raises it (0..20); scales flask effects
     int ail_poison_dmg = 0;    // C3: combat-poison on the player — damage/turn (DT_TOX, resisted)
     int ail_poison_turns = 0;  // C3: remaining poison ticks on the player
     int ail_scorch_dmg = 0;    // C3: Scorch DoT — DT_HEAT (Heat Resistance mitigates)
@@ -516,8 +517,9 @@ int player_attack_roll(const Foe& f, bool* crit_out) {
     const int chance = tohit < 15 ? 15 : tohit > 95 ? 95 : tohit;
     if (int(g.rng.combat.below(100)) >= chance) return 0;
     const items::Inst& w = g.pl.equip[int(items::Slot::Weapon)];
-    const int wmin = w.empty() ? 1 : w.d().a;
-    const int wmax = w.empty() ? 2 : w.d().b;
+    const int wq = w.empty() ? 0 : w.quality;  // D3: weapon quality (Worm Tooth) scales base damage
+    const int wmin = (w.empty() ? 1 : w.d().a) * (100 + wq) / 100;
+    const int wmax = (w.empty() ? 2 : w.d().b) * (100 + wq) / 100;
     int dmg = g.rng.combat.range(wmin, wmax) + player_lethality() + 2 * g.pl.st.talents[0];  // Lethality
     if (g.pl.sandwalk) dmg += 3 * g.pl.st.talents[1];
     const int critc = affix_total(items::AK_CRIT) + 4 * g.pl.st.talents[2];  // crit from GEAR (+talent), not attributes
@@ -1590,7 +1592,47 @@ bool apply_orb(uint8_t cur, items::Inst& it) {
             else it.fractured = uint8_t(1 << (3 + (pick - it.nprefix)));
             return true;
         }
-        default: return false;  // D3b ops handled elsewhere
+        // ---- D3b new-mechanic orbs ----
+        case CUR_WISDOM:  // Ancient Scroll: identify (the unID guard above only lets Wisdom through)
+            if (!it.unidentified()) return false;
+            it.istate &= uint8_t(~1);
+            return true;
+        case CUR_BLESSED:  // Osmotic Membrane: reroll the implicit value (non-weapons carry an implicit)
+            if (it.d().slot == Slot::Weapon || it.d().b == 0) return false;
+            it.enchant = uint8_t(g.rng.loot.range(75, 125));  // implicit % of the def default
+            return true;
+        case CUR_ARMORQUAL:  // Maker Hide: +armour (gear) quality
+            if (it.d().slot == Slot::Weapon || it.quality >= 20) return false;
+            it.quality = uint8_t(it.quality + 5 > 20 ? 20 : it.quality + 5);
+            return true;
+        case CUR_WEAPONQUAL:  // Worm Tooth: +weapon quality
+            if (it.d().slot != Slot::Weapon || it.quality >= 20) return false;
+            it.quality = uint8_t(it.quality + 5 > 20 ? 20 : it.quality + 5);
+            return true;
+        case CUR_VAAL: {  // Unstable Catalyst: a risky random outcome, then LOCK (corrupted)
+            const int r = int(g.rng.loot.below(100));
+            if (r < 25) { /* unchanged — a lucky corrupt */ }
+            else if (r < 55) {  // reforge (upgrade to rare if not already)
+                if (it.rarity != R_RARE) { it.rarity = R_RARE;
+                    it.rare_name = uint8_t(int(g.rng.loot.below(8)) | (int(g.rng.loot.below(8)) << 4)); }
+                it.fractured = 0; reroll_keep_rarity(it);
+            } else if (r < 80) {  // a bonus mod
+                add_one_affix(it, -1);
+            } else {  // brick: strip to Common
+                it.rarity = R_COMMON; it.nprefix = it.nsuffix = 0; it.fractured = 0; it.rare_name = 0;
+            }
+            it.istate |= 2;  // corrupted — locked from further crafting
+            return true;
+        }
+        case CUR_MIRROR:  // Echo of Shai'Hulud: duplicate into a free pack cell (both become unmodifiable)
+            for (items::Inst& s : g.pl.inv) if (s.empty()) {
+                items::Inst copy = it;
+                copy.istate |= 4; it.istate |= 4;  // both mirrored
+                s = copy;
+                return true;
+            }
+            return false;  // no room for the copy
+        default: return false;
     }
 }
 
@@ -1609,8 +1651,16 @@ bool spend_currency(uint8_t kind) {
 }
 // Bench: apply currency `cur` (owned in the pack) to the gear item at inv_idx.
 bool bench_apply(int cur, int inv_idx) {
-    if (cur <= 0 || cur >= items::CUR_COUNT || inv_idx < 0 || inv_idx >= 12) return false;
+    if (cur <= 0 || cur >= items::CUR_COUNT) return false;
     if (currency_count(uint8_t(cur)) < 1) return false;
+    if (cur == items::CUR_FLASKQUAL) {  // Distillate Microtubing targets the flask belt, not a gear item
+        if (g.pl.flask_quality >= 20) return false;
+        g.pl.flask_quality = g.pl.flask_quality + 5 > 20 ? 20 : g.pl.flask_quality + 5;
+        spend_currency(uint8_t(cur));
+        g.log.push("The flasks distil cleaner. Flask quality rises.");
+        return true;
+    }
+    if (inv_idx < 0 || inv_idx >= 12) return false;
     if (!apply_orb(uint8_t(cur), g.pl.inv[inv_idx])) return false;
     spend_currency(uint8_t(cur));
     g.log.push("Bench: applied %s.", items::currency_name(uint8_t(cur)));
@@ -2550,19 +2600,20 @@ bool use_flask(int slot) {
     if (slot < 0 || slot >= tune::kFlaskSlots || g.pl.dead) return false;
     if (g.pl.flask_charges[slot] < tune::kFlaskUseCost) return false;
     g.pl.flask_charges[slot] -= tune::kFlaskUseCost;
+    const int qmul = 100 + g.pl.flask_quality;  // D3: Distillate Microtubing boosts flask potency
     switch (slot) {
         case 0:  // Life
-            gain_hp(tune::kFlaskLifeHeal);
+            gain_hp(tune::kFlaskLifeHeal * qmul / 100);
             g.log.push("You drink deep — a Life flask. The body knits.");
             break;
         case 1:  // Will
-            gain_will(tune::kFlaskWillRestore);
+            gain_will(tune::kFlaskWillRestore * qmul / 100);
             g.log.push("A Will flask — prescience sharpens.");
             break;
         default:  // Utility: flush every ailment + raise a Focus ward
             g.pl.ail_poison_turns = g.pl.ail_scorch_turns = g.pl.ail_bleed_turns = 0;
             g.pl.ail_blind_turns = g.pl.ail_stun_turns = g.pl.ail_frozen_turns = 0;
-            gain_shield(tune::kFlaskUtilShield);
+            gain_shield(tune::kFlaskUtilShield * qmul / 100);
             g.log.push("A Utility flask — the venoms flush, the mind steadies.");
             break;
     }
@@ -6342,6 +6393,7 @@ void game_serialize(SaveWriter& w) {
     w.i32(g.pl.will);          // D1
     w.i32(g.pl.ability_cd);    // C7: shared ability cooldown
     for (int i = 0; i < tune::kFlaskSlots; ++i) w.i32(g.pl.flask_charges[i]);  // flask belt
+    w.i32(g.pl.flask_quality);  // D3: flask quality
     w.i32(g.pl.ail_poison_dmg);    // C3
     w.i32(g.pl.ail_poison_turns);  // C3
     w.i32(g.pl.ail_scorch_dmg);    // C3
@@ -6442,6 +6494,7 @@ bool game_deserialize(SaveReader& r) {
     pl.will = r.i32();          // D1
     pl.ability_cd = r.i32();    // C7: shared ability cooldown
     for (int i = 0; i < tune::kFlaskSlots; ++i) pl.flask_charges[i] = r.i32();  // flask belt
+    pl.flask_quality = r.i32();  // D3: flask quality
     pl.ail_poison_dmg = r.i32();    // C3
     pl.ail_poison_turns = r.i32();  // C3
     pl.ail_scorch_dmg = r.i32();    // C3
@@ -6876,6 +6929,36 @@ int game_debug_item_valuesum(int idx) {  // sum of affix values (detects a Divin
     for (int i = 0; i < it.nprefix; ++i) v += it.pre[i].value;
     for (int i = 0; i < it.nsuffix; ++i) v += it.suf[i].value;
     return v;
+}
+// --- D3b hooks ---
+void game_debug_set_unidentified(int idx, int on) {  // set/clear the unID bit on inv[idx]
+    if (idx < 0 || idx >= 12 || g.pl.inv[idx].empty()) return;
+    if (on) g.pl.inv[idx].istate |= 1; else g.pl.inv[idx].istate &= uint8_t(~1);
+}
+int game_debug_item_state(int idx) {  // istate bits (1 unID, 2 corrupt, 4 mirror), -1 empty/currency
+    if (idx < 0 || idx >= 12 || g.pl.inv[idx].empty() || g.pl.inv[idx].is_currency()) return -1;
+    return g.pl.inv[idx].istate;
+}
+int game_debug_item_quality(int idx) {  // item quality %; -1 for empty/currency
+    if (idx < 0 || idx >= 12 || g.pl.inv[idx].empty() || g.pl.inv[idx].is_currency()) return -1;
+    return g.pl.inv[idx].quality;
+}
+int game_debug_item_implicit(int idx) {  // implicit % (enchant); 0 = default
+    if (idx < 0 || idx >= 12 || g.pl.inv[idx].empty() || g.pl.inv[idx].is_currency()) return -1;
+    return g.pl.inv[idx].enchant;
+}
+void game_debug_setup_weapon(int idx, int ilvl) {  // place a common weapon in inv[idx]
+    if (idx < 0 || idx >= 12) return;
+    items::Inst it;
+    for (int i = 0; i < items::kDefCount; ++i)
+        if (items::kDefs[i].slot == items::Slot::Weapon) { it.def = uint8_t(i); break; }
+    it.ilvl = uint8_t(ilvl < 1 ? 1 : ilvl > 255 ? 255 : ilvl);
+    it.rarity = items::R_COMMON;
+    g.pl.inv[idx] = it;
+}
+int game_debug_flask_quality() { return g.pl.flask_quality; }
+int game_debug_inv_used() {  // count of non-empty pack cells (gear + currency)
+    int n = 0; for (const items::Inst& s : g.pl.inv) if (!s.empty()) ++n; return n;
 }
 // --- C7 ability hooks ---
 int game_debug_cast_ability(int ab, int tx, int ty) { return cast_ability(ab, tx, ty) ? 1 : 0; }
