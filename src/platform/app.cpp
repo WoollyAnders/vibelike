@@ -1916,6 +1916,41 @@ int run_currencydroptest(audio::Mixer& mixer, const Assets& assets, const Colorm
     return pass ? 0 : 1;
 }
 
+// D3d: currency is playable — walk-over pickup collects a ground drop into the pack, and the crafting
+// bench (pick a currency, then a target gear item) applies it through the keyboard menu path.
+int run_currencyuitest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    std::remove("meta.dat");
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(88, services);
+    InputState in;
+    auto key = [&](Key k) { in.pressed[int(k)] = true; game_update(in); in.end_tick(); };
+
+    // (A) walk-over pickup: a currency dropped on the player's tile is collected by a world tick
+    game_debug_spawn_currency(items::CUR_TRANSMUTE);
+    const int c0 = game_debug_currency_count(items::CUR_TRANSMUTE);
+    game_debug_world_tick(1);
+    const bool picked = game_debug_currency_count(items::CUR_TRANSMUTE) == c0 + 1;
+
+    // (B) the bench applies a picked currency to a gear item via the two-step menu
+    game_debug_grant_currency(items::CUR_TRANSMUTE, 3);
+    game_debug_setup_gear(5, 0 /*common*/, 8);
+    int rar = -1; game_debug_item_sig(5, &rar, nullptr, nullptr);
+    const bool starts_common = rar == 0;
+    const int held = game_debug_currency_count(items::CUR_TRANSMUTE);
+    game_debug_open_menu(11, 0);   // the bench, choosing a currency (only Transmute is held)
+    key(Key::Confirm);             // pick the currency
+    key(Key::Confirm);             // pick the first gear target -> apply
+    game_debug_item_sig(5, &rar, nullptr, nullptr);
+    const bool crafted = rar == 1;  // Transmutation: Common -> Magic
+    const bool spent = game_debug_currency_count(items::CUR_TRANSMUTE) == held - 1;
+
+    const bool pass = picked && starts_common && crafted && spent;
+    std::printf("currencyuitest %s (pickup %d common %d craft %d spent %d)\n",
+                pass ? "PASS" : "FAIL", picked, starts_common, crafted, spent);
+    std::remove("meta.dat");
+    return pass ? 0 : 1;
+}
+
 // C7: Will-powered prescience abilities. One shared Will pool + cooldown. 1 Voice (stun nearest seen
 // foe), 2 Blink (step toward a tile), 3 Prescient Calm (Focus-shield burst). Input/targeting/FX defer.
 int run_abilitytest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
@@ -2142,7 +2177,7 @@ int main(int argc, char** argv) {
          vendortest = false, patroltest = false, cavetest = false, trialtest = false,
          endgametest = false, striketest = false, pinnacletest = false, capstonetest = false,
          longridetest = false, choamtest = false, currencytest = false, currencymechtest = false,
-         currencydroptest = false, abilitytest = false,
+         currencydroptest = false, currencyuitest = false, abilitytest = false,
          flasktest = false, inputtest = false, menutest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
@@ -2179,6 +2214,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--currencytest") == 0) currencytest = true;
         if (SDL_strcmp(argv[i], "--currencymechtest") == 0) currencymechtest = true;
         if (SDL_strcmp(argv[i], "--currencydroptest") == 0) currencydroptest = true;
+        if (SDL_strcmp(argv[i], "--currencyuitest") == 0) currencyuitest = true;
         if (SDL_strcmp(argv[i], "--abilitytest") == 0) abilitytest = true;
         if (SDL_strcmp(argv[i], "--flasktest") == 0) flasktest = true;
         if (SDL_strcmp(argv[i], "--inputtest") == 0) inputtest = true;
@@ -2236,6 +2272,7 @@ int main(int argc, char** argv) {
     if (currencytest) return run_currencytest(mixer, assets, cmaps);
     if (currencymechtest) return run_currencymechtest(mixer, assets, cmaps);
     if (currencydroptest) return run_currencydroptest(mixer, assets, cmaps);
+    if (currencyuitest) return run_currencyuitest(mixer, assets, cmaps);
     if (abilitytest) return run_abilitytest(mixer, assets, cmaps);
     if (flasktest) return run_flasktest(mixer, assets, cmaps);
     if (inputtest) return run_inputtest(mixer, assets, cmaps);

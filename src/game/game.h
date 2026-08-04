@@ -154,6 +154,7 @@ int game_debug_flask_quality();               // D3b: current flask quality
 int game_debug_inv_used();                    // D3b: non-empty pack cells (for the Mirror copy)
 int game_debug_force_currency_drop();         // D3c: drop a currency at the player; returns its kind
 int game_debug_kill_drops(int n);             // D3c: n Trooper loot rolls; returns currency drops
+void game_debug_spawn_currency(int kind);     // D3d: place a currency entity on the player's tile
 int game_debug_cast_ability(int ab, int tx, int ty);  // C7: 1 Voice, 2 Blink, 3 Prescience (1=cast)
 int game_debug_will();                       // C7: current Will
 void game_debug_set_will(int w);             // C7: set current Will (test setup)

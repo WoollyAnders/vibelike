@@ -265,6 +265,7 @@ struct GameState {
                         // 8 war council / 9 jihad table / 10 landsraad / 11 crafting bench
     int menu_sel = 0;
     int jihad_tier = 1;  // transient UI: the commission tier chosen at the Jihad Table (Left/Right)
+    int bench_cur = 0;   // transient UI: the currency picked at the bench (0 = choosing a currency)
     int vault_page = 0;
     int last_decay_day = 0;
 
@@ -1649,6 +1650,19 @@ bool spend_currency(uint8_t kind) {
     }
     return false;
 }
+// D3d bench UI: distinct currency kinds the pack holds (>0), and the pack indices holding craftable
+// gear. Shared by the bench menu's dispatch + render so their row->item mapping agrees.
+int list_owned_currency(uint8_t* out) {
+    int n = 0;
+    for (int c = 1; c < items::CUR_COUNT; ++c) if (currency_count(uint8_t(c)) > 0) out[n++] = uint8_t(c);
+    return n;
+}
+int list_gear(int* out) {
+    int n = 0;
+    for (int i = 0; i < 12; ++i)
+        if (!g.pl.inv[i].empty() && !g.pl.inv[i].is_currency()) out[n++] = i;
+    return n;
+}
 // Bench: apply currency `cur` (owned in the pack) to the gear item at inv_idx.
 bool bench_apply(int cur, int inv_idx) {
     if (cur <= 0 || cur >= items::CUR_COUNT) return false;
@@ -1716,6 +1730,19 @@ void drop_currency(int x, int y) {
 void grant_gear_to_pack(const items::Inst& it) {
     if (it.empty()) return;
     for (items::Inst& s : g.pl.inv) if (s.empty()) { s = it; return; }
+}
+
+// D3d: auto-collect any ground currency the player is standing on, into the pack (currency needs no
+// equip decision, so — unlike gear — it's picked up on walk-over). Called each world tick.
+void pickup_currency() {
+    const Entity& p = player_ent();
+    for (int i = 1; i < kMaxEnts; ++i) {
+        Entity& e = g.ents[i];
+        if (e.type != EType::Currency || e.zone != g.cur_zone || e.x != p.x || e.y != p.y) continue;
+        grant_currency_to_pack(uint8_t(e.data), e.data2 > 0 ? e.data2 : 1);
+        g.log.push("Picked up %s.", items::currency_name(uint8_t(e.data)));
+        e = Entity{};
+    }
 }
 
 void maybe_drop_loot(EType t, int x, int y) {
@@ -3316,6 +3343,7 @@ void world_tick() {
     upkeep();
     tick_enemy_ailments();  // C3: DoTs (poison/scorch/bleed) on afflicted foes
     if (g.pl.dead) return;
+    pickup_currency();  // D3d: collect any currency underfoot
 
     // transient light flashes decay
     for (int i = 0; i < g.flash_count;) {
@@ -4657,6 +4685,12 @@ const char* describe_at(int tx, int ty) {
             case EType::SpiceCache: return "raw spice (G: gather)";
             case EType::CaveMouth: return "hidden cavern (step in to enter)";
             case EType::WarRoom: return "the War Council (enact the Jihad)";
+            case EType::Currency: {
+                static char cbuf[48];
+                std::snprintf(cbuf, sizeof cbuf, "%s (walk over to collect)",
+                              items::currency_name(uint8_t(e.data)));
+                return cbuf;
+            }
             case EType::Boss: {
                 if (e.data2 == -1) return "BARON HARKONNEN";
                 static char bbuf[96];
@@ -4800,8 +4834,12 @@ bool game_update(const InputState& in) {
     if (g.menu_open) {
         // 5 = character sheet, 6 = inventory, 7 = the vault
         int counts[12] = {0, 6, 3, 5, 4, 3 + kTalentCount + 1, 13, 13,
-                          4, 5 + 1 + 1, 5 + 1 + 1, 1};  // 8 council, 9 table, 10 landsraad, 11 bench (stub)
-        const int n = counts[g.menu_open];
+                          4, 5 + 1 + 1, 5 + 1 + 1, 1};  // 8 council, 9 table, 10 landsraad, 11 bench
+        int n = counts[g.menu_open];
+        if (g.menu_open == 11) {  // D3d bench: rows are owned currencies, or gear once a currency is picked
+            uint8_t cb[items::CUR_COUNT]; int gi[12];
+            n = 1 + (g.bench_cur == 0 ? list_owned_currency(cb) : list_gear(gi));  // + a Back row
+        }
         // A6: mouse — hovering a row selects it, left-click confirms it, right-click closes.
         const int mrow = menu_row_under_mouse(in);
         if (mrow >= 0) g.menu_sel = mrow;
@@ -4810,7 +4848,7 @@ bool game_update(const InputState& in) {
         if (g.menu_open >= 8 && g.menu_open <= 11) {  // endgame hub menus (keyboard-driven)
             if (in.was_pressed(Key::Up)) g.menu_sel = (g.menu_sel + n - 1) % n;
             if (in.was_pressed(Key::Down)) g.menu_sel = (g.menu_sel + 1) % n;
-            if (in.was_pressed(Key::Cancel)) { g.menu_open = 0; return true; }
+            if (in.was_pressed(Key::Cancel)) { g.menu_open = 0; g.bench_cur = 0; return true; }
             if (g.menu_open == 9) {  // Left/Right: commission tier
                 if (in.was_pressed(Key::Left) && g.jihad_tier > 1) --g.jihad_tier;
                 if (in.was_pressed(Key::Right) && g.jihad_tier < tune::kStrikeTiers) ++g.jihad_tier;
@@ -4818,7 +4856,7 @@ bool game_update(const InputState& in) {
             if (in.was_pressed(Key::Confirm) || mclick) {
                 const int sel = g.menu_sel;
                 if (g.menu_open == 8) {  // the War Council hub
-                    if (sel <= 2) { g.menu_open = 9 + sel; g.menu_sel = 0; }
+                    if (sel <= 2) { g.menu_open = 9 + sel; g.menu_sel = 0; g.bench_cur = 0; }
                     else g.menu_open = 0;
                 } else if (g.menu_open == 9) {  // the Jihad Table
                     if (sel < FAC_COUNT) {
@@ -4834,8 +4872,25 @@ bool game_update(const InputState& in) {
                         if (!court_house(sel)) g.log.push("That House cannot be courted now.");
                     } else if (sel == FAC_COUNT) { collect_dividend(); }
                     else { g.menu_open = 8; g.menu_sel = 0; }
-                } else {  // 11: the crafting bench — full currency roster UI lands in D3d
-                    g.menu_open = 8; g.menu_sel = 0;
+                } else {  // 11: the crafting bench — pick a currency, then a target gear item
+                    if (g.bench_cur == 0) {  // choosing a currency
+                        uint8_t cb[items::CUR_COUNT];
+                        const int nc = list_owned_currency(cb);
+                        if (sel < nc) {
+                            const int c = cb[sel];
+                            if (c == items::CUR_FLASKQUAL) {  // targets the belt, not a gear item
+                                if (!bench_apply(c, 0)) g.log.push("Flask quality is already at its peak.");
+                            } else { g.bench_cur = c; g.menu_sel = 0; }
+                        } else { g.menu_open = 8; g.menu_sel = 0; }  // Back to the council
+                    } else {  // choosing a target gear item
+                        int gi[12];
+                        const int ng = list_gear(gi);
+                        if (sel < ng) {
+                            if (!bench_apply(g.bench_cur, gi[sel]))
+                                g.log.push("That currency can't be applied to that item.");
+                            g.bench_cur = 0; g.menu_sel = 0;
+                        } else { g.bench_cur = 0; g.menu_sel = 0; }  // Back to the currency list
+                    }
                 }
             }
             return true;
@@ -5473,7 +5528,7 @@ void pass_entities(RenderCtx& r) {
         switch (e.type) {
             case EType::Glowglobe: case EType::HunterSeeker: case EType::Corpse:
             case EType::SpiceCache: case EType::Loot: case EType::Thumper:
-            case EType::CaveMouth: case EType::WarRoom: break;
+            case EType::CaveMouth: case EType::WarRoom: case EType::Currency: break;
             default:
                 if (!(e.type == EType::Player && g.pl.riding))
                     ground_shadow(r.ctx.frame, sx, sy + 16, 18, 8);
@@ -5549,6 +5604,9 @@ void pass_entities(RenderCtx& r) {
                 break;
             case EType::WarRoom:  // the War Council table (placeholder sprite until E2)
                 g.draw_list.add(&sheet_or_ph(r, "wartable"), 0, sx, sy + 12, light, 1);
+                break;
+            case EType::Currency:  // D3d: dropped crafting currency (placeholder sprite until E2)
+                g.draw_list.add(&sheet_or_ph(r, "currency"), 0, sx, sy + 8, 31, 0);
                 break;
             case EType::Boss: {
                 const int pidx = boss_is_pinnacle(e.data2) ? boss_pinnacle_idx(e.data2) : -1;
@@ -6127,10 +6185,32 @@ void pass_ui(RenderCtx& r) {
             std::snprintf(buf, sizeof buf, "Collect CHOAM dividend  (~%d sp)", choam_control());
             row(FAC_COUNT, buf, g.menu_sel == FAC_COUNT);
             row(FAC_COUNT + 1, "Back", g.menu_sel == FAC_COUNT + 1);
-        } else {  // 11: the crafting bench — the full currency-application UI lands in D3d
+        } else {  // 11: the crafting bench — pick a currency, then a target gear item
             draw_text_shadow(ctx, "THE CRAFTING BENCH", x0 + 24, y0 + 16, 230, 1);
-            draw_text(ctx, "Currency crafting comes online here soon.", x0 + 24, y0 + 46, 14);
-            row(0, "Back", g.menu_sel == 0);
+            if (g.bench_cur == 0) {  // list the currencies you hold
+                draw_text(ctx, "Choose a currency to apply:", x0 + 24, y0 + 46, 14);
+                uint8_t cb[items::CUR_COUNT];
+                const int nc = list_owned_currency(cb);
+                for (int i = 0; i < nc; ++i) {
+                    std::snprintf(buf, sizeof buf, "%s x%d  -  %s", items::currency_name(cb[i]),
+                                  currency_count(cb[i]), items::kCurrency[cb[i]].effect);
+                    row(i, buf, g.menu_sel == i);
+                }
+                if (!nc) draw_text(ctx, "(no currency held)", x0 + 28, y0 + 82, 14);
+                row(nc, "Back", g.menu_sel == nc);
+            } else {  // list the gear to apply the chosen currency to
+                std::snprintf(buf, sizeof buf, "Apply %s to which item?", items::currency_name(uint8_t(g.bench_cur)));
+                draw_text(ctx, buf, x0 + 24, y0 + 46, 14);
+                int gi[12];
+                const int ng = list_gear(gi);
+                for (int i = 0; i < ng; ++i) {
+                    char nm[48];
+                    g.pl.inv[gi[i]].full_name(nm, sizeof nm);
+                    row(i, nm, g.menu_sel == i);
+                }
+                if (!ng) draw_text(ctx, "(no gear in pack)", x0 + 28, y0 + 82, 14);
+                row(ng, "Back", g.menu_sel == ng);
+            }
         }
     } else
     // Character sheet / inventory / vault overlays (dynamic content).
@@ -7010,6 +7090,14 @@ int game_debug_force_currency_drop() {  // drop a currency at the player, return
     for (int i = 1; i < kMaxEnts; ++i)
         if (g.ents[i].type == EType::Currency) { int k = g.ents[i].data; g.ents[i] = Entity{}; return k; }
     return 0;
+}
+void game_debug_spawn_currency(int kind) {  // D3d: place a currency entity on the player's tile
+    const Entity& p = player_ent();
+    for (int i = 1; i < kMaxEnts; ++i)
+        if (g.ents[i].type == EType::None) {
+            g.ents[i] = Entity{EType::Currency, Ai::Idle, g.cur_zone, p.x, p.y, 1, 0, int16_t(kind), 1};
+            return;
+        }
 }
 int game_debug_kill_drops(int n) {  // n Trooper loot rolls at the player; return currency drops (auto-cleared)
     const Entity& p = player_ent();
