@@ -1882,6 +1882,40 @@ int run_currencymechtest(audio::Mixer& mixer, const Assets& assets, const Colorm
     return pass ? 0 : 1;
 }
 
+// D3c: PoE area-level-gated currency drops. Shallow areas drop only low-tier currency and kills drop
+// none (below the min area); deep areas (an endgame strike here) unlock high-tier drops from kills.
+int run_currencydroptest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    std::remove("meta.dat");
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(50, services);
+    game_debug_open_chosen_path();
+    game_debug_add_spice(2000);
+
+    // (A) at the hub (area level 1) forced drops are only low-tier (min area level <= 1)
+    bool shallow_low = true;
+    for (int i = 0; i < 40; ++i) {
+        const int k = game_debug_force_currency_drop();
+        if (k > 0 && items::kCurrency[k].min_alvl > 1) shallow_low = false;
+    }
+    // (B) at the hub, kills drop NO currency (area < kDropMinArea)
+    const bool shallow_no_drop = game_debug_kill_drops(60) == 0;
+
+    // (C) inside a strike (area level ~15) high-tier currency is eligible; kills DO drop currency
+    game_debug_commission_strike(0 /*BG*/, 5);
+    bool deep_high = false;
+    for (int i = 0; i < 80; ++i) {
+        const int k = game_debug_force_currency_drop();
+        if (k > 0 && items::kCurrency[k].min_alvl >= 5) deep_high = true;
+    }
+    const bool deep_drop = game_debug_kill_drops(80) > 0;
+
+    const bool pass = shallow_low && shallow_no_drop && deep_high && deep_drop;
+    std::printf("currencydroptest %s (shallowLow %d shallowNoDrop %d deepHigh %d deepDrop %d)\n",
+                pass ? "PASS" : "FAIL", shallow_low, shallow_no_drop, deep_high, deep_drop);
+    std::remove("meta.dat");
+    return pass ? 0 : 1;
+}
+
 // C7: Will-powered prescience abilities. One shared Will pool + cooldown. 1 Voice (stun nearest seen
 // foe), 2 Blink (step toward a tile), 3 Prescient Calm (Focus-shield burst). Input/targeting/FX defer.
 int run_abilitytest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
@@ -2107,7 +2141,8 @@ int main(int argc, char** argv) {
          rttest = false, stuntest = false, classtest = false, guildtest = false,
          vendortest = false, patroltest = false, cavetest = false, trialtest = false,
          endgametest = false, striketest = false, pinnacletest = false, capstonetest = false,
-         longridetest = false, choamtest = false, currencytest = false, currencymechtest = false, abilitytest = false,
+         longridetest = false, choamtest = false, currencytest = false, currencymechtest = false,
+         currencydroptest = false, abilitytest = false,
          flasktest = false, inputtest = false, menutest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
@@ -2143,6 +2178,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--choamtest") == 0) choamtest = true;
         if (SDL_strcmp(argv[i], "--currencytest") == 0) currencytest = true;
         if (SDL_strcmp(argv[i], "--currencymechtest") == 0) currencymechtest = true;
+        if (SDL_strcmp(argv[i], "--currencydroptest") == 0) currencydroptest = true;
         if (SDL_strcmp(argv[i], "--abilitytest") == 0) abilitytest = true;
         if (SDL_strcmp(argv[i], "--flasktest") == 0) flasktest = true;
         if (SDL_strcmp(argv[i], "--inputtest") == 0) inputtest = true;
@@ -2199,6 +2235,7 @@ int main(int argc, char** argv) {
     if (choamtest) return run_choamtest(mixer, assets, cmaps);
     if (currencytest) return run_currencytest(mixer, assets, cmaps);
     if (currencymechtest) return run_currencymechtest(mixer, assets, cmaps);
+    if (currencydroptest) return run_currencydroptest(mixer, assets, cmaps);
     if (abilitytest) return run_abilitytest(mixer, assets, cmaps);
     if (flasktest) return run_flasktest(mixer, assets, cmaps);
     if (inputtest) return run_inputtest(mixer, assets, cmaps);

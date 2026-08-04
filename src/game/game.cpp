@@ -29,7 +29,7 @@ constexpr int kMaxDeltas = 192;
 enum class EType : uint8_t { None = 0, Player, Hound, Corpse, Thumper, Trooper, Spotter,
                              Glowglobe, ShieldTrooper, Naib, Sayyadina, Smuggler,
                              PanAdder, Hermit, HunterSeeker, SpiceCache, Loot, Boss,
-                             Caravan, Envoy, Fremen, Paul, CaveMouth, WarRoom };
+                             Caravan, Envoy, Fremen, Paul, CaveMouth, WarRoom, Currency };
 enum class Ai : uint8_t { Idle = 0, Wander, Hunt, Guard, Patrol };  // Patrol (B8): route-walker
 
 struct Entity {
@@ -1467,7 +1467,7 @@ items::Inst roll_item(int item_level, int rarity_bonus) {
     items::Inst it;
     if (!n) return it;
     it.def = uint8_t(candidates[g.rng.loot.below(uint32_t(n))]);
-    roll_affixes(it, drop_ilvl(), rarity_bonus);
+    roll_affixes(it, area_level(), rarity_bonus);  // D3c: endgame gear finally rolls high tiers
     return it;
 }
 
@@ -1680,8 +1680,42 @@ items::Inst roll_item_for_slot(int item_level, int rarity_bonus, items::Slot s) 
             if (items::kDefs[i].slot == s) candidates[n++] = i;
     if (!n) return it;
     it.def = uint8_t(candidates[g.rng.loot.below(uint32_t(n))]);
-    roll_affixes(it, drop_ilvl(), rarity_bonus);
+    roll_affixes(it, area_level(), rarity_bonus);  // D3c: endgame gear finally rolls high tiers
     return it;
+}
+
+// D3c: grant a currency stack straight into the pack (used where there's no ground drop, e.g. the
+// Long Ride's Jacurutu jackpot). Merges an existing stack, else takes a free cell.
+void grant_currency_to_pack(uint8_t kind, int amount) {
+    if (amount <= 0 || kind == 0) return;
+    for (items::Inst& s : g.pl.inv) if (s.currency == kind) { s.stack = uint16_t(s.stack + amount); return; }
+    for (items::Inst& s : g.pl.inv) if (s.empty()) { s.currency = kind; s.stack = uint16_t(amount); return; }
+}
+
+// D3c: a weighted currency kind eligible at area level `alvl` (Divine-tier only falls deep), or 0.
+int pick_currency(int alvl) {
+    int w[items::CUR_COUNT], idx[items::CUR_COUNT], n = 0;
+    for (int c = 1; c < items::CUR_COUNT; ++c)
+        if (items::kCurrency[c].min_alvl <= alvl) { idx[n] = c; w[n] = items::kCurrency[c].weight; ++n; }
+    return n ? idx[weighted_pick(w, n)] : 0;
+}
+// Drop a piece of crafting currency on the ground (PoE area-level drop logic).
+void drop_currency(int x, int y) {
+    const int c = pick_currency(area_level());
+    if (!c) return;
+    for (int i = 1; i < kMaxEnts; ++i)
+        if (g.ents[i].type == EType::None) {
+            g.ents[i] = Entity{EType::Currency, Ai::Idle, g.cur_zone, int16_t(x), int16_t(y),
+                               1, 0, int16_t(c), 1};
+            g.log.push("Currency drops: %s.", items::currency_name(uint8_t(c)));
+            return;
+        }
+}
+// Put a rolled gear item into a free pack cell (used by the Jacurutu vault burst on the Long Ride,
+// which has no zone to spill onto yet — the playable ride room comes later).
+void grant_gear_to_pack(const items::Inst& it) {
+    if (it.empty()) return;
+    for (items::Inst& s : g.pl.inv) if (s.empty()) { s = it; return; }
 }
 
 void maybe_drop_loot(EType t, int x, int y) {
@@ -1691,22 +1725,31 @@ void maybe_drop_loot(EType t, int x, int y) {
                        t == EType::Spotter || t == EType::Hermit;
     if (!human && t != EType::Boss) return;
     const int chance = (t == EType::Boss ? 100 : 40) + 8 * g.pl.st.talents[5];
-    if (int(g.rng.loot.below(100)) >= chance) return;
-
-    const int diff = run_difficulty();
-    items::Inst it = roll_item(f->level + diff / 2, diff * 6 + (t == EType::Boss ? 60 : 0));
-    if (t == EType::Boss) it.ilvl = uint8_t(it.ilvl < 10 ? it.ilvl + 1 : 10);  // bosses drop a touch higher
-    for (int i = 1; i < kMaxEnts; ++i)
-        if (g.ents[i].type == EType::None) {
-            g.ents[i] = Entity{EType::Loot, Ai::Idle, g.cur_zone, int16_t(x), int16_t(y), 1, 0,
-                               int16_t(it.def), 0};
-            g.loot_inst[i] = it;  // D1: the full item lives in the parallel loot pool (by slot)
-            char nm[64];
-            it.full_name(nm, sizeof nm);
-            g.log.push("%s dropped: %s",
-                       it.rarity == items::R_RARE ? "RARE" : it.rarity ? "Magic" : "Gear", nm);
-            return;
-        }
+    if (int(g.rng.loot.below(100)) < chance) {  // the gear drop (unchanged draw order)
+        const int diff = run_difficulty();
+        items::Inst it = roll_item(f->level + diff / 2, diff * 6 + (t == EType::Boss ? 60 : 0));
+        if (t == EType::Boss) it.ilvl = uint8_t(it.ilvl < 10 ? it.ilvl + 1 : 10);
+        // D3c: deep gear can drop unidentified (draw gated by area, so shallow runs are unperturbed)
+        if (area_level() >= tune::kUnidMinArea && it.rarity != items::R_COMMON &&
+            g.rng.loot.below(tune::kUnidChanceDenom) == 0)
+            it.istate |= 1;
+        for (int i = 1; i < kMaxEnts; ++i)
+            if (g.ents[i].type == EType::None) {
+                g.ents[i] = Entity{EType::Loot, Ai::Idle, g.cur_zone, int16_t(x), int16_t(y), 1, 0,
+                                   int16_t(it.def), 0};
+                g.loot_inst[i] = it;
+                char nm[64];
+                it.full_name(nm, sizeof nm);
+                g.log.push("%s dropped: %s",
+                           it.rarity == items::R_RARE ? "RARE" : it.rarity ? "Magic" : "Gear", nm);
+                break;
+            }
+    }
+    // D3c: an INDEPENDENT currency drop, after the gear roll (so the gear roll is byte-identical) and
+    // gated to area >= kDropMinArea (so the shallowest areas — where the determinism tests kill — never
+    // draw for it, keeping their loot stream unshifted). PoE-faithful whole-game currency.
+    if (area_level() >= tune::kDropMinArea && g.rng.loot.below(tune::kCurrencyDropDenom) == 0)
+        drop_currency(x, y);
 }
 
 items::Inst loot_of(const Entity& e) {
@@ -2186,11 +2229,14 @@ int ride_push() {
     g.ride_restless += g.ride_leg;
     int jac = tune::kJacurutuBaseChance + g.ride_leg * tune::kJacurutuPerLeg;  // rises with depth
     if (jac > tune::kJacurutuMax) jac = tune::kJacurutuMax;
-    if (int(g.rng.world.below(100)) < jac) {  // Jacurutu — the outcast hoard, the sole Maker Hide source
-        if (g_meta.maker_hides < 255) ++g_meta.maker_hides;
-        meta_save();  // a Hide is secured on the spot (never part of the losable haul)
-        g.log.push("JACURUTU. The outcast sietch's forbidden hoard yields a MAKER HIDE (leg %d).",
+    if (int(g.rng.world.below(100)) < jac) {  // JACURUTU — the outcast hoard: a loot-vault burst
+        const int alvl = area_level();  // deep on the Long Ride -> high-tier currency + gear
+        for (int k = 0; k < 3; ++k) { int c = pick_currency(alvl); if (c) grant_currency_to_pack(uint8_t(c), 1); }
+        const int gl = alvl > 10 ? 10 : alvl;  // def level caps ~10; affixes still roll at area level
+        for (int k = 0; k < 3; ++k) grant_gear_to_pack(roll_item(gl, 60 + alvl * 3));
+        g.log.push("JACURUTU. The outcast sietch's forbidden hoard bursts open (leg %d) — currency",
                    g.ride_leg);
+        g.log.push("and mid-to-high gear spill across the sand. You fill your pack.");
     } else {
         g.ride_haul += tune::kRideHaulPerLeg * g.ride_leg;  // a spice site — deeper legs are richer
         g.log.push("You dismount at a spice blow (leg %d). Un-banked haul: %d.", g.ride_leg, g.ride_haul);
@@ -3670,12 +3716,9 @@ void enter_zone(uint8_t id, uint64_t gen_seed, bool use_spawn, int at_x = 0, int
                 }
                 break;
             }
-        } else if (roll < 57 && drop_ilvl() >= tune::kPatrolMinDepth) {
-            // D2: a sanctioned deep-desert find — a tooth pried from a long-dead Maker's jawbone in
-            // the rock (crysknife stock). Depth-gated, so shallow/headless runs never roll it.
-            if (g_meta.worm_teeth < 255) { ++g_meta.worm_teeth; meta_save(); }
-            g.log.push("Bleached in the rock: a Maker's TOOTH, long dead. You take it for the blade-makers.");
         }
+        // D3c: the old deep-desert Worm-Tooth find is retired — Worm Tooth now drops via the unified
+        // area-level currency table (maybe_drop_loot), like every other reagent.
     }
 
     refresh_fov_and_paths();
@@ -6959,6 +7002,26 @@ void game_debug_setup_weapon(int idx, int ilvl) {  // place a common weapon in i
 int game_debug_flask_quality() { return g.pl.flask_quality; }
 int game_debug_inv_used() {  // count of non-empty pack cells (gear + currency)
     int n = 0; for (const items::Inst& s : g.pl.inv) if (!s.empty()) ++n; return n;
+}
+// --- D3c drop hooks ---
+int game_debug_force_currency_drop() {  // drop a currency at the player, return its kind, then clear it
+    const Entity& p = player_ent();
+    drop_currency(p.x, p.y);
+    for (int i = 1; i < kMaxEnts; ++i)
+        if (g.ents[i].type == EType::Currency) { int k = g.ents[i].data; g.ents[i] = Entity{}; return k; }
+    return 0;
+}
+int game_debug_kill_drops(int n) {  // n Trooper loot rolls at the player; return currency drops (auto-cleared)
+    const Entity& p = player_ent();
+    int c = 0;
+    for (int i = 0; i < n; ++i) {
+        maybe_drop_loot(EType::Trooper, p.x, p.y);
+        for (int j = 1; j < kMaxEnts; ++j) {
+            if (g.ents[j].type == EType::Currency) { ++c; g.ents[j] = Entity{}; }
+            else if (g.ents[j].type == EType::Loot) g.ents[j] = Entity{};
+        }
+    }
+    return c;
 }
 // --- C7 ability hooks ---
 int game_debug_cast_ability(int ab, int tx, int ty) { return cast_ability(ab, tx, ty) ? 1 : 0; }

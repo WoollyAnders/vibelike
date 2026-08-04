@@ -118,6 +118,12 @@ inline constexpr int kGuildMobDiv = 2;            // +1 escort mob per this many
 inline constexpr int kPatrolMinDepth = 3;   // Awaken depth at which patrols/wormsign begin
 inline constexpr int kPatrolLeash = 6;      // a patroller paces within this Chebyshev radius of its anchor
 
+// --- D3c: PoE-style crafting-currency drops (area-level-gated, whole-game) ---
+inline constexpr int kCurrencyDropDenom = 12;  // ~1/N kills at area level >= kDropMinArea drop currency
+inline constexpr int kDropMinArea = 2;         // no currency/unID drops in the very shallowest areas
+inline constexpr int kUnidMinArea = 4;         // gear can drop unidentified only at this area level up
+inline constexpr int kUnidChanceDenom = 3;     // ~1/N eligible gear drops are unidentified
+
 // --- Endgame: the Jihad (spice-commissioned strikes -> directed faction pressure -> pinnacles) ---
 // Each cleared strike presses its target Great Power; at kPinnaclePressure that power's homeworld
 // pinnacle opens. Higher-tier strikes press harder (and cost more spice / hit harder).
