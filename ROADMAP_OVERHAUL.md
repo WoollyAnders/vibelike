@@ -488,7 +488,12 @@ points per level.
 **Exit:** allocate an adjacent node → the derived stat moves; hybrids by pathing;
 persists across a death.
 
-### C5 — Sietch talent tree + split currencies ⬜
+### C5 — Sietch talent tree + split currencies ✅
+**Done (C5a+C5b):** the Deathstill banks a run-scoped `pl.reclaimed` stake (corpse water × `AK_WATER_FIND`),
+rendered into meta **Litrejons** on extraction (`kLitrejonPerWater=2`), lost on death; a fixed two-track
+**Sietch tree** (`kSietchNodes`: Sandcraft + Tribe's Blessing) spends Litrejons, each node ranking an
+`AffixKind` bonus folded into `affix_total` (persists across death), opened via the Naib (menu 12). Spice
+stays the general 'gold'. Save v28 + meta DMEH/DMEI. Tests `economytest`/`sietchtreetest`; 46/46 green.
 Meta talent tree bought with banked spice; Sandcraft + tribe's-blessing tracks;
 currencies stay distinct.
 **Exit:** spend banked spice on a Sietch node → persists across a death.
@@ -573,7 +578,12 @@ Play); the world is paused on the front-end.
 **Exit:** ✅ launch opens on the menu; Manual pages turn; Options toggle; Enter
 starts play; 10/10 tests green (dettest unchanged — headless skips the menu).
 
-### E1 — Diablo character/inventory + drag-and-drop ⬜
+### E1 — Diablo character/inventory + drag-and-drop ✅
+**Done (G1-G4):** the pack is an 8×12 spatial grid of variable-size items (first-fit packing); currency
+lives at the crafting table's dedicated slots; the Vault is a buyable multi-tab (12×12) stash; mouse
+drag-and-drop + Ctrl+click quick-move across pack/paperdoll/vault/table, with item tooltips. Save v26/v27
++ meta DMEE-DMEG. Tests `gridtest`/`currencytabtest`/`vaulttest`/`guitest`; dettest re-baselined
+`b03ef8d5a9e44bc2` (the Vault became a permanent sietch entity).
 Paperdoll + equip slots + flask belt + grid; mouse drag-and-drop; affix tooltips.
 **Exit:** hovering shows affixes; drag equips/swaps/reorders; keyboard still works.
 
