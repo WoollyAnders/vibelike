@@ -102,6 +102,8 @@ int game_debug_trials();                     // Desert Trials: bitmask of ordeal
 int game_debug_can_ascend();                 // Desert Trials: 1 if the Awakening rite is open
 void game_debug_trigger_trial(int which);    // Desert Trials: pass ordeal which (0/1/2) via mark_trial
 void game_debug_complete_trials();           // Desert Trials: open the gate outright (all three)
+int game_debug_spice_essence();              // D3e: banked Spice Essence (the Awakening resource)
+void game_debug_grant_spice_essence(int n);  // D3e: set the banked Spice Essence count
 int game_debug_endgame_open();               // endgame: 1 once the Chosen Path (Jihad) is open
 void game_debug_open_chosen_path();          // endgame: simulate the Baron's fall (open the Jihad)
 int game_debug_jihad_pressure(int f);        // endgame: per-faction directed pressure (0..100)

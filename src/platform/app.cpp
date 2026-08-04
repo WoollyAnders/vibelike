@@ -1465,6 +1465,36 @@ int run_trialtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cm
     return pass ? 0 : 1;
 }
 
+// D3e: Spice Essence — the Awakening resource. It is NOT a bench currency; a rare deep-desert find
+// banks straight to meta and opens the rite as an alternative to the Desert Trials, spent when so used.
+int run_essencetest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    std::remove("meta.dat");
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(4242, services);
+    game_debug_apply_base(0);  // Knifehand (a Fedaykin base)
+
+    // (A) fresh: no Essence, no Trials -> the rite is shut
+    const bool shut = game_debug_spice_essence() == 0 && game_debug_can_ascend() == 0;
+
+    // (B) a banked Spice Essence opens the Awakening even with the Trials unpassed (the Water of Life)
+    game_debug_grant_spice_essence(2);
+    const bool opens = game_debug_spice_essence() == 2 && game_debug_can_ascend() == 1;
+
+    // (C) ascending by the Essence path succeeds and CONSUMES one (the Trials path would not)
+    const bool right = game_debug_ascend(1 /*Fedaykin*/) == 1;
+    const bool spent = game_debug_spice_essence() == 1;
+
+    // (D) DMED round-trip: the banked Essence survives a meta reload
+    int mb = -1, ma = -1; game_debug_meta_reload_class(&mb, &ma);
+    const bool persisted = game_debug_spice_essence() == 1;
+
+    const bool pass = shut && opens && right && spent && persisted;
+    std::printf("essencetest %s (shut %d opens %d ascend %d spent %d persist %d)\n",
+                pass ? "PASS" : "FAIL", shut, opens, right, spent, persisted);
+    std::remove("meta.dat");
+    return pass ? 0 : 1;
+}
+
 // Endgame (the Jihad): beating the Baron opens the Chosen Path; spice-commissioned strikes build
 // directed pressure per Great Power (factions 0 BeneGesserit,1 Tleilaxu,2 Ixian,3 Corrino,4 Guild);
 // full pressure opens that homeworld pinnacle; each pinnacle yields a Golden Path shard; all five
@@ -2177,7 +2207,7 @@ int main(int argc, char** argv) {
          vendortest = false, patroltest = false, cavetest = false, trialtest = false,
          endgametest = false, striketest = false, pinnacletest = false, capstonetest = false,
          longridetest = false, choamtest = false, currencytest = false, currencymechtest = false,
-         currencydroptest = false, currencyuitest = false, abilitytest = false,
+         currencydroptest = false, currencyuitest = false, essencetest = false, abilitytest = false,
          flasktest = false, inputtest = false, menutest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
@@ -2215,6 +2245,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--currencymechtest") == 0) currencymechtest = true;
         if (SDL_strcmp(argv[i], "--currencydroptest") == 0) currencydroptest = true;
         if (SDL_strcmp(argv[i], "--currencyuitest") == 0) currencyuitest = true;
+        if (SDL_strcmp(argv[i], "--essencetest") == 0) essencetest = true;
         if (SDL_strcmp(argv[i], "--abilitytest") == 0) abilitytest = true;
         if (SDL_strcmp(argv[i], "--flasktest") == 0) flasktest = true;
         if (SDL_strcmp(argv[i], "--inputtest") == 0) inputtest = true;
@@ -2273,6 +2304,7 @@ int main(int argc, char** argv) {
     if (currencymechtest) return run_currencymechtest(mixer, assets, cmaps);
     if (currencydroptest) return run_currencydroptest(mixer, assets, cmaps);
     if (currencyuitest) return run_currencyuitest(mixer, assets, cmaps);
+    if (essencetest) return run_essencetest(mixer, assets, cmaps);
     if (abilitytest) return run_abilitytest(mixer, assets, cmaps);
     if (flasktest) return run_flasktest(mixer, assets, cmaps);
     if (inputtest) return run_inputtest(mixer, assets, cmaps);

@@ -124,6 +124,10 @@ inline constexpr int kDropMinArea = 2;         // no currency/unID drops in the 
 inline constexpr int kUnidMinArea = 4;         // gear can drop unidentified only at this area level up
 inline constexpr int kUnidChanceDenom = 3;     // ~1/N eligible gear drops are unidentified
 
+// --- D3e: Spice Essence, the Awakening resource (a rare deep-desert find, NOT a bench currency) ---
+inline constexpr int kSpiceEssenceMinArea = 7;   // Spice Essence drops only this deep and beyond
+inline constexpr int kSpiceEssenceDenom  = 40;   // ~1/N kills at that depth yield a Spice Essence
+
 // --- Endgame: the Jihad (spice-commissioned strikes -> directed faction pressure -> pinnacles) ---
 // Each cleared strike presses its target Great Power; at kPinnaclePressure that power's homeworld
 // pinnacle opens. Higher-tier strikes press harder (and cost more spice / hit harder).

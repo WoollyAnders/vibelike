@@ -1084,10 +1084,12 @@ struct Meta {
     // --- Landsraad / CHOAM (DME10) --- the Imperial politics layer, powered by CHOAM. House alliances
     // persist; CHOAM control is DERIVED from toppled homeworlds (conquest) + courted Houses (diplomacy).
     uint8_t house_allied = 0;        // bit per faction: courted as a CHOAM ally
-    // --- D2 crafting (DME11) --- the sietch bench spends materials to work gear. Maker Hide (from
-    // Jacurutu, above) is the Divine reagent (reroll affix values); Worm Tooth (sanctioned deep-desert
-    // finds) reforges a weapon. Both persist as counts.
+    // --- D2 crafting (DME11) --- retired counters (kept for DMEB back-compat; migrated to currency).
     uint8_t worm_teeth = 0;
+    // --- D3e (DMED) --- Spice Essence: an ascension resource (NOT a bench currency). A rare deep-desert
+    // find; the Awakening rite can be opened by it as an alternative to the Desert Trials, and it is
+    // consumed when so used.
+    uint8_t spice_essence = 0;
 };
 Meta g_meta;
 
@@ -1119,6 +1121,7 @@ int guild_difficulty() {
     return d < 0 ? 0 : d > cap ? cap : d;
 }
 
+inline constexpr uint32_t kMetaVD = 0x44454D44u;  // 'DMED' (D3e: + spice_essence, the Awakening resource)
 inline constexpr uint32_t kMetaVC = 0x43454D44u;  // 'DMEC' (D3: widened Inst — currency stacks in inv)
 inline constexpr uint32_t kMetaVB = 0x42454D44u;  // 'DMEB' (D2 crafting: + worm_teeth)
 inline constexpr uint32_t kMetaVA = 0x41454D44u;  // 'DMEA' (Landsraad/CHOAM: + house_allied)
@@ -1190,8 +1193,8 @@ void meta_load() {
     if (!f) return;
     uint32_t magic = 0;
     if (std::fread(&magic, 4, 1, f) == 1) {
-        if (magic >= kMetaV4 && magic <= kMetaVC && magic != kMetaV1) {  // native widened-Inst format (DME4..DMEC)
-            const bool cur = (magic == kMetaVC);  // DMEC = new Inst layout; older = OldInst (convert)
+        if (magic >= kMetaV4 && magic <= kMetaVD && magic != kMetaV1) {  // native widened-Inst format (DME4..DMED)
+            const bool cur = (magic >= kMetaVC);  // DMEC+ = new Inst layout; older = OldInst (convert)
             (void)!std::fread(&g_meta.runs, 4, 1, f);
             (void)!std::fread(&g_meta.endings_seen, 1, 1, f);
             (void)!std::fread(&g_meta.stash_count, 1, 1, f);
@@ -1231,6 +1234,9 @@ void meta_load() {
             if (magic >= kMetaVB) {  // D2 crafting (DMEA and earlier leave it at 0)
                 (void)!std::fread(&g_meta.worm_teeth, 1, 1, f);
             }
+            if (magic >= kMetaVD) {  // D3e: the Awakening resource (DMEC and earlier -> 0)
+                (void)!std::fread(&g_meta.spice_essence, 1, 1, f);
+            }
             // D3 migration: the old Maker Hide / Worm Tooth counters become currency stacks (their
             // new roles: armour / weapon quality). No-op on a DMEC file (counters already 0).
             if (g_meta.maker_hides > 0) { meta_grant_currency(items::CUR_ARMORQUAL, g_meta.maker_hides); g_meta.maker_hides = 0; }
@@ -1265,7 +1271,7 @@ void meta_load() {
 void meta_save() {
     FILE* f = std::fopen("meta.dat", "wb");
     if (!f) return;
-    std::fwrite(&kMetaVC, 4, 1, f);  // D3: DMEC (widened Inst; currency stacks ride the inv/stash blobs)
+    std::fwrite(&kMetaVD, 4, 1, f);  // D3e: DMED (+ spice_essence; DMEC widened Inst rides the blobs)
     std::fwrite(&g_meta.runs, 4, 1, f);
     std::fwrite(&g_meta.endings_seen, 1, 1, f);
     std::fwrite(&g_meta.stash_count, 1, 1, f);
@@ -1291,6 +1297,7 @@ void meta_save() {
     std::fwrite(&g_meta.best_ride_leg, 1, 1, f);
     std::fwrite(&g_meta.house_allied, 1, 1, f);     // Landsraad/CHOAM (DMEA)
     std::fwrite(&g_meta.worm_teeth, 1, 1, f);       // D2 crafting (DMEB)
+    std::fwrite(&g_meta.spice_essence, 1, 1, f);    // D3e: the Awakening resource (DMED)
     std::fclose(f);
 }
 
@@ -1334,19 +1341,26 @@ void mark_trial(TrialBit bit) {
     meta_save();  // the Trials persist across death, like the character
 }
 
-// C3: the sietch rite of passage. Gated now by the DESERT TRIALS (all three ordeals passed —
-// replacing the placeholder Awaken>=2 gate), and the chosen ascendancy must belong to your base
-// class. You ascend once; it persists across death (character identity). Returns true on success.
+// C3: the sietch rite of passage. Opened by the DESERT TRIALS (all three ordeals passed) OR, D3e, by a
+// banked Spice Essence — the Water of Life shortcut, which the rite CONSUMES (the Trials path is free).
+// The chosen ascendancy must belong to your base class. You ascend once; it persists across death.
 bool can_ascend() {
-    return g.pl.ascendancy == Ascendancy::None && (g_meta.trials_done & TRIAL_ALL) == TRIAL_ALL;
+    return g.pl.ascendancy == Ascendancy::None &&
+           ((g_meta.trials_done & TRIAL_ALL) == TRIAL_ALL || g_meta.spice_essence > 0);
 }
 bool ascend(Ascendancy asc) {
     if (!can_ascend()) return false;
     if (int(asc) <= 0 || int(asc) >= int(Ascendancy::Count)) return false;
     if (kAscendancyBase[int(asc)] != uint8_t(g.pl.base_class)) return false;  // must match the base
+    const bool by_trials = (g_meta.trials_done & TRIAL_ALL) == TRIAL_ALL;
+    if (!by_trials && g_meta.spice_essence > 0) {  // the Water of Life path — spends the Essence
+        g_meta.spice_essence--;
+        g.log.push("You drink the Water of Life. It transforms, and does not kill you.");
+    }
     g.pl.ascendancy = asc;
     g.log.push("The Awakening takes you. The sietch names you: %s.", kAscendancyNames[int(asc)]);
     persist_character();  // the naming survives death
+    meta_save();          // bank the spent Essence
     return true;
 }
 
@@ -1777,6 +1791,14 @@ void maybe_drop_loot(EType t, int x, int y) {
     // draw for it, keeping their loot stream unshifted). PoE-faithful whole-game currency.
     if (area_level() >= tune::kDropMinArea && g.rng.loot.below(tune::kCurrencyDropDenom) == 0)
         drop_currency(x, y);
+    // D3e: Spice Essence — the Awakening resource. A rare find in the deepest content only; not a bench
+    // currency, so it banks straight to meta (persists across runs, like the Desert Trials). Drawn last
+    // and gated deeper than currency, so nothing shallower is perturbed.
+    if (area_level() >= tune::kSpiceEssenceMinArea && g.rng.loot.below(tune::kSpiceEssenceDenom) == 0) {
+        if (g_meta.spice_essence < 250) g_meta.spice_essence++;
+        meta_save();
+        g.log.push("A vein of raw Spice Essence — the Water of Life stirs.");
+    }
 }
 
 items::Inst loot_of(const Entity& e) {
@@ -6961,6 +6983,8 @@ void game_debug_trigger_trial(int which) {  // Trials: pass one ordeal via the r
     mark_trial(which == 0 ? TRIAL_SANDWALK : which == 1 ? TRIAL_STORM : TRIAL_WORM);
 }
 void game_debug_complete_trials() { g_meta.trials_done = TRIAL_ALL; }  // Trials: open the gate outright
+int game_debug_spice_essence() { return g_meta.spice_essence; }        // D3e: banked Awakening resource
+void game_debug_grant_spice_essence(int n) { g_meta.spice_essence = uint8_t(n); meta_save(); }
 
 // --- Endgame (Jihad) hooks ---
 int game_debug_endgame_open() { return endgame_open() ? 1 : 0; }
