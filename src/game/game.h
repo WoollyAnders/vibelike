@@ -191,6 +191,11 @@ int game_debug_use_flask(int slot);          // flasks: 0 Life / 1 Will / 2 Util
 int game_debug_flask_charges(int slot);      // flasks: current charges in a slot
 void game_debug_set_flask_charges(int slot, int c);  // flasks: set charges (test setup)
 void game_debug_flask_gain(int n);           // flasks: add n charges to every flask (capped)
+// --- C5 Litrejon economy hooks ---
+int game_debug_litrejons();                  // banked Litrejons (the sietch-tree currency)
+int game_debug_reclaimed();                  // this run's un-banked Deathstill reclaimed water
+void game_debug_grant_litrejons(int n);      // add n banked Litrejons (persists)
+int game_debug_deathstill(int water);        // place a corpse worth `water` + harvest it; returns reclaimed delta
 void game_debug_revelation(int* stage, int* inv_count);  // B2b: Revelation stage + inv item count
 void game_debug_revelation_pick(int idx);  // B2b: choose row idx + confirm the Revelation
 int game_debug_cur_node();  // B1.3: current graph node index

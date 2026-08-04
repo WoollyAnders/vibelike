@@ -7,7 +7,7 @@
 #include <vector>
 
 inline constexpr uint32_t kSaveMagic = 0x54535544;  // 'DUST'
-inline constexpr uint16_t kSaveVersion = 27;  // v27: G2 crafting-table currency slots (pl.cur_tab)
+inline constexpr uint16_t kSaveVersion = 28;  // v28: C5 Deathstill reclaimed-water stake (pl.reclaimed)
 
 class SaveWriter {
 public:

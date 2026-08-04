@@ -166,6 +166,7 @@ struct Player {
     items::Inst equip[int(items::Slot::Count)];  // by items::Slot (B2a: 10-slot Fremen paperdoll)
     int hp = tune::kPlayerHpMax;
     int water = tune::kStartWater;
+    int reclaimed = 0;     // C5: run-scoped reclaimed water (the Deathstill stake) -> Litrejons on extraction
     int exposure = 0;
     int turn = 0;
     int thumpers = 3;
@@ -1068,6 +1069,7 @@ struct Meta {
     uint8_t awaken_cleared = 0;    // highest pinnacle defeated
     uint8_t has_char = 0;          // 1 once a persistent character exists
     int32_t banked_spice = 0;      // safe wallet; run spice banks here on extraction
+    int32_t litrejons = 0;         // C5 (DMEH): tribal water banked from the Deathstill; the sietch-tree currency
     CharStats st;                  // persistent level / attributes / talents / xp
     items::Inst equip[int(items::Slot::Count)];
     items::Inst inv[tune::kInvCap];              // G (DMEE): the persisted pack pool (8x12 grid)
@@ -1133,6 +1135,7 @@ int guild_difficulty() {
     return d < 0 ? 0 : d > cap ? cap : d;
 }
 
+inline constexpr uint32_t kMetaVH = 0x48454D44u;  // 'DMEH' (C5: + litrejons, the sietch-tree currency)
 inline constexpr uint32_t kMetaVG = 0x47454D44u;  // 'DMEG' (G3: multi-tab grid stash + stash_tabs)
 inline constexpr uint32_t kMetaVF = 0x46454D44u;  // 'DMEF' (G2: + cur_tab, the crafting-table currency slots)
 inline constexpr uint32_t kMetaVE = 0x45454D44u;  // 'DMEE' (G: pack grid 12->96 + inv_cell)
@@ -1206,7 +1209,7 @@ void meta_load() {
     if (!f) return;
     uint32_t magic = 0;
     if (std::fread(&magic, 4, 1, f) == 1) {
-        if (magic >= kMetaV4 && magic <= kMetaVG && magic != kMetaV1) {  // native widened-Inst format (DME4..DMEG)
+        if (magic >= kMetaV4 && magic <= kMetaVH && magic != kMetaV1) {  // native widened-Inst format (DME4..DMEH)
             const bool cur = (magic >= kMetaVC);  // DMEC+ = new Inst layout; older = OldInst (convert)
             (void)!std::fread(&g_meta.runs, 4, 1, f);
             (void)!std::fread(&g_meta.endings_seen, 1, 1, f);
@@ -1275,6 +1278,9 @@ void meta_load() {
             if (magic >= kMetaVF) {  // G2: the crafting-table currency slots (DMEE and earlier -> 0)
                 (void)!std::fread(g_meta.cur_tab, sizeof g_meta.cur_tab, 1, f);
             }
+            if (magic >= kMetaVH) {  // C5: banked Litrejons (DMEG and earlier -> 0)
+                (void)!std::fread(&g_meta.litrejons, 4, 1, f);
+            }
             // D3 migration: the old Maker Hide / Worm Tooth counters become currency (their new roles:
             // armour / weapon quality), banked to the crafting table. No-op on a DMEC+ file (already 0).
             if (g_meta.maker_hides > 0) { meta_grant_currency(items::CUR_ARMORQUAL, g_meta.maker_hides); g_meta.maker_hides = 0; }
@@ -1313,7 +1319,7 @@ void meta_load() {
 void meta_save() {
     FILE* f = std::fopen("meta.dat", "wb");
     if (!f) return;
-    std::fwrite(&kMetaVG, 4, 1, f);  // G3: DMEG (multi-tab grid stash; earlier blobs ride along)
+    std::fwrite(&kMetaVH, 4, 1, f);  // C5: DMEH (+ litrejons; earlier blobs ride along)
     std::fwrite(&g_meta.runs, 4, 1, f);
     std::fwrite(&g_meta.endings_seen, 1, 1, f);
     std::fwrite(&g_meta.stash_tabs, 1, 1, f);                       // G3: owned tab count
@@ -1343,6 +1349,7 @@ void meta_save() {
     std::fwrite(&g_meta.worm_teeth, 1, 1, f);       // D2 crafting (DMEB)
     std::fwrite(&g_meta.spice_essence, 1, 1, f);    // D3e: the Awakening resource (DMED)
     std::fwrite(g_meta.cur_tab, sizeof g_meta.cur_tab, 1, f);  // G2: crafting-table currency (DMEF)
+    std::fwrite(&g_meta.litrejons, 4, 1, f);                   // C5: banked Litrejons (DMEH)
     std::fclose(f);
 }
 
@@ -3918,6 +3925,14 @@ void extract_run() {
     g.log.push("You let Muad'Dib's vision fade. The desert releases you toward home.");
     g.log.push("The Fremen forge what the vision showed. Your haul is made real.");
     g_meta.banked_spice = g.pl.spice;  // B5: the whole run's spice is now safe (banked)
+    if (g.pl.reclaimed > 0) {  // C5: the Deathstill's reclaimed water renders into Litrejons for the tribe
+        const int gained = g.pl.reclaimed / tune::kLitrejonPerWater;
+        if (gained > 0) {
+            g_meta.litrejons += gained;
+            g.log.push("The tribe's deathstills render %d litrejons from your reclaimed water.", gained);
+        }
+        g.pl.reclaimed = 0;
+    }
     guild_tithe_accrue();              // B6: the Guild expects its cut of every haul (debt creeps up)
     persist_character();               // gear + progress made real (saves meta, incl. the tithe)
     enter_node(0);      // wake in the sietch hub
@@ -4775,9 +4790,11 @@ void try_harvest() {
     }
     if (Entity* c = entity_at(p.x, p.y, g.cur_zone, EType::Corpse)) {
         p.anim.set(anim::State::Use);
-        g.pl.water += c->data * (100 + affix_total(items::AK_WATER_FIND)) / 100;  // D1: Water Find (Deathstill)
+        const int yield = c->data * (100 + affix_total(items::AK_WATER_FIND)) / 100;  // D1: Water Find
+        g.pl.water += yield;                     // survival water for the run
         if (g.pl.water > player_max_water()) g.pl.water = player_max_water();
-        g.log.push("The deathstill takes its due. +%d water.", int(c->data));
+        g.pl.reclaimed += yield;                 // C5: also banks toward Litrejons on extraction
+        g.log.push("The deathstill takes its due. +%d water (reclaimed for the tribe).", yield);
         c->type = EType::None;
         g.services.mixer->push({audio::Cmd::PlaySfx, 1, 150, 140});
         consume_action();
@@ -6972,6 +6989,7 @@ void game_serialize(SaveWriter& w) {
     for (int i = 0; i < g.graph.count; ++i) w.u8(g.graph.nodes[i].flags);
     w.i32(g.pl.hp);
     w.i32(g.pl.water);
+    w.i32(g.pl.reclaimed);  // C5: the Deathstill stake (run-scoped)
     w.i32(g.pl.exposure);
     w.i32(g.pl.turn);
     w.bytes(&g.pl.st, sizeof g.pl.st);
@@ -7075,6 +7093,7 @@ bool game_deserialize(SaveReader& r) {
     Player pl;
     pl.hp = r.i32();
     pl.water = r.i32();
+    pl.reclaimed = r.i32();  // C5: the Deathstill stake (run-scoped)
     pl.exposure = r.i32();
     pl.turn = r.i32();
     r.bytes(&pl.st, sizeof pl.st);
@@ -7648,6 +7667,21 @@ void game_debug_set_flask_charges(int slot, int c) {
     if (slot >= 0 && slot < tune::kFlaskSlots) g.pl.flask_charges[slot] = c;
 }
 void game_debug_flask_gain(int n) { flask_gain(n); }
+// --- C5 Litrejon economy hooks ---
+int game_debug_litrejons() { return g_meta.litrejons; }        // banked tribal water (the sietch currency)
+int game_debug_reclaimed() { return g.pl.reclaimed; }          // this run's un-banked Deathstill stake
+void game_debug_grant_litrejons(int n) { g_meta.litrejons += n; meta_save(); }
+int game_debug_deathstill(int water) {  // place a corpse worth `water` on the player + harvest it
+    const Entity& p = player_ent();
+    for (int i = 1; i < kMaxEnts; ++i)
+        if (g.ents[i].type == EType::None) {
+            g.ents[i] = Entity{EType::Corpse, Ai::Idle, g.cur_zone, p.x, p.y, 1, 0, int16_t(water), 0};
+            break;
+        }
+    const int before = g.pl.reclaimed;
+    try_harvest();
+    return g.pl.reclaimed - before;
+}
 
 void game_debug_revelation(int* stage, int* inv_count) {
     if (stage) *stage = g.revelation_stage;

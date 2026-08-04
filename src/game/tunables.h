@@ -133,6 +133,9 @@ inline constexpr int kPackW   = 8;               // the pack grid: 8 wide x 12 t
 inline constexpr int kPackH   = 12;
 inline constexpr int kInvCap  = kPackW * kPackH;  // pool size (worst case: an all-1x1 grid)
 
+// --- C5: the Deathstill economy — reclaimed water banks to Litrejons (the sietch-tree currency) ---
+inline constexpr int kLitrejonPerWater = 2;   // reclaimed water per 1 Litrejon banked on extraction
+
 // --- G3: the Vault — PoE-style stash tabs (each a grid bigger than the pack), bought with spice ---
 inline constexpr int kStashW       = 12;         // a stash tab: 12 wide x 12 tall = 144 cells
 inline constexpr int kStashH       = 12;

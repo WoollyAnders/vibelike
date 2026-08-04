@@ -2029,6 +2029,39 @@ int run_currencyuitest(audio::Mixer& mixer, const Assets& assets, const Colormap
     return pass ? 0 : 1;
 }
 
+// C5a: the Deathstill economy. Harvesting a corpse reclaims water (the tribe's stake); on extraction it
+// renders into banked Litrejons (the sietch-tree currency); death loses the un-banked stake.
+int run_economytest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    std::remove("meta.dat");
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(4040, services);
+
+    // (A) fresh: nothing reclaimed, nothing banked
+    const bool zero0 = game_debug_litrejons() == 0 && game_debug_reclaimed() == 0;
+
+    // (B) the Deathstill fills the run stake
+    const int got = game_debug_deathstill(10);
+    const bool reclaimed = got > 0 && game_debug_reclaimed() == got;
+
+    // (C) extraction renders the stake into banked Litrejons and clears it
+    game_debug_extract();
+    const bool banked = game_debug_litrejons() == got / 2 && game_debug_reclaimed() == 0;  // kLitrejonPerWater=2
+
+    // (D) lost on death: reclaim again, then start a NEW run without extracting -> the stake is gone,
+    //     but the banked Litrejons persist across the run boundary (meta)
+    game_debug_deathstill(8);
+    const int banked_before = game_debug_litrejons();
+    game_init(4040, services);
+    const bool lost = game_debug_reclaimed() == 0;
+    const bool kept = game_debug_litrejons() == banked_before && banked_before == got / 2;
+
+    const bool pass = zero0 && reclaimed && banked && lost && kept;
+    std::printf("economytest %s (zero %d reclaim %d bank %d lost %d kept %d | got %d litrejons %d)\n",
+                pass ? "PASS" : "FAIL", zero0, reclaimed, banked, lost, kept, got, game_debug_litrejons());
+    std::remove("meta.dat");
+    return pass ? 0 : 1;
+}
+
 // G4: the PoE mouse UI — the pack is a spatial grid you drag items around and Ctrl+click to equip. This
 // drives the real input path (ctrl flag + mouse press/hold/release) through ui_grid_input at menu 6.
 int run_guitest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
@@ -2392,7 +2425,7 @@ int main(int argc, char** argv) {
          vendortest = false, patroltest = false, cavetest = false, trialtest = false,
          endgametest = false, striketest = false, pinnacletest = false, capstonetest = false,
          longridetest = false, choamtest = false, currencytest = false, currencymechtest = false,
-         currencydroptest = false, currencyuitest = false, essencetest = false, gridtest = false, currencytabtest = false, vaulttest = false, guitest = false, abilitytest = false,
+         currencydroptest = false, currencyuitest = false, essencetest = false, gridtest = false, currencytabtest = false, vaulttest = false, guitest = false, economytest = false, abilitytest = false,
          flasktest = false, inputtest = false, menutest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
@@ -2435,6 +2468,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--currencytabtest") == 0) currencytabtest = true;
         if (SDL_strcmp(argv[i], "--vaulttest") == 0) vaulttest = true;
         if (SDL_strcmp(argv[i], "--guitest") == 0) guitest = true;
+        if (SDL_strcmp(argv[i], "--economytest") == 0) economytest = true;
         if (SDL_strcmp(argv[i], "--abilitytest") == 0) abilitytest = true;
         if (SDL_strcmp(argv[i], "--flasktest") == 0) flasktest = true;
         if (SDL_strcmp(argv[i], "--inputtest") == 0) inputtest = true;
@@ -2498,6 +2532,7 @@ int main(int argc, char** argv) {
     if (currencytabtest) return run_currencytabtest(mixer, assets, cmaps);
     if (vaulttest) return run_vaulttest(mixer, assets, cmaps);
     if (guitest) return run_guitest(mixer, assets, cmaps);
+    if (economytest) return run_economytest(mixer, assets, cmaps);
     if (abilitytest) return run_abilitytest(mixer, assets, cmaps);
     if (flasktest) return run_flasktest(mixer, assets, cmaps);
     if (inputtest) return run_inputtest(mixer, assets, cmaps);
