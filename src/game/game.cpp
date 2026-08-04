@@ -349,6 +349,7 @@ struct GameState {
     int current_song = -1;
     int16_t hover_tx = -1, hover_ty = -1;
     int16_t move_goal_x = -1, move_goal_y = -1;  // A4: click-to-move destination (-1 = none)
+    bool move_attack = false;  // C6r: the click-to-move goal is an enemy — attack it on arrival / in range
     // Click-only interaction: what the current move-goal is heading to interact with
     // once adjacent. 0 none, 1 Naib, 2 Sayyadina, 3 Smuggler, 4 door, 5 Fremen (bark).
     uint8_t interact_kind = 0;
@@ -4651,26 +4652,48 @@ Entity* hostile_at(int x, int y) {
     for (EType t : kHostiles) if (Entity* e = entity_at(x, y, g.cur_zone, t)) return e;
     return nullptr;
 }
-// C6: fire the maula pistol toward (tx,ty) — a Bresenham line from the player; a wall stops the dart,
-// else it strikes the FIRST hostile on the line for lethality-scaled damage. LOUD (the report carries).
-void fire_maula(int tx, int ty) {
-    if (g.pl.dead || g.pl.riding) return;
-    Entity& p = player_ent();
-    if (tx < 0 || ty < 0 || (tx == p.x && ty == p.y)) return;  // no valid aim
+// C6r: ranged combat is a property of the equipped weapon. The basic attack (left-click / bump) swings a
+// melee weapon or fires a ranged one; you must EQUIP a ranged weapon to shoot.
+bool weapon_is_ranged() { return g.pl.equip[int(items::Slot::Weapon)].is_ranged_weapon(); }
+int  weapon_range() {
+    const items::Inst& w = g.pl.equip[int(items::Slot::Weapon)];
+    return w.is_ranged_weapon() ? w.d().range : 0;
+}
+// Trace the maula's Bresenham line from the player toward (tx,ty), stopping at the first wall (or the
+// weapon's range). Returns the first hostile hit (or null) and writes the impact tile into (hx,hy).
+Entity* maula_trace(int tx, int ty, int& hx, int& hy) {
+    const Entity& p = player_ent();
     int x0 = p.x, y0 = p.y;
     const int dx = (tx > x0 ? tx - x0 : x0 - tx), dy = -(ty > y0 ? ty - y0 : y0 - ty);
     const int sx = x0 < tx ? 1 : -1, sy = y0 < ty ? 1 : -1;
     int err = dx + dy;
-    Entity* victim = nullptr; int hx = x0, hy = y0;
-    for (int step = 0; step < tune::kMaulaRange; ++step) {
+    const int rng = weapon_range() > 0 ? weapon_range() : tune::kMaulaRange;
+    hx = x0; hy = y0;
+    for (int step = 0; step < rng; ++step) {
         const int e2 = 2 * err;
         if (e2 >= dy) { err += dy; x0 += sx; }
         if (e2 <= dx) { err += dx; y0 += sy; }
         hx = x0; hy = y0;
-        if (!zone().walkable(x0, y0)) break;         // a wall (or the edge) stops the dart
-        if ((victim = hostile_at(x0, y0)) != nullptr) break;  // first hostile on the line
-        if (x0 == tx && y0 == ty) break;             // reached the aimed tile, nothing hit
+        if (!zone().walkable(x0, y0)) return nullptr;    // a wall (or the edge) stops the dart
+        if (Entity* e = hostile_at(x0, y0)) return e;    // first hostile on the line
+        if (x0 == tx && y0 == ty) return nullptr;        // reached the aimed tile, nothing hit
     }
+    return nullptr;  // out of range
+}
+// C6r: true iff a shot aimed at (tx,ty) would strike a hostile within range on a clear line.
+bool maula_can_hit(int tx, int ty) {
+    if (!weapon_is_ranged() || tx < 0 || ty < 0) return false;
+    int hx, hy;
+    return maula_trace(tx, ty, hx, hy) != nullptr;
+}
+// C6/C6r: fire the ranged weapon toward (tx,ty). LOUD. Requires an equipped ranged weapon.
+void fire_maula(int tx, int ty) {
+    if (g.pl.dead || g.pl.riding) return;
+    Entity& p = player_ent();
+    if (tx < 0 || ty < 0 || (tx == p.x && ty == p.y)) return;  // no valid aim
+    if (!weapon_is_ranged()) { g.log.push("You have no ranged weapon to fire."); return; }
+    int hx, hy;
+    Entity* victim = maula_trace(tx, ty, hx, hy);
     p.anim.facing = facing_from_tile_delta(tx - p.x, ty - p.y);
     p.anim.set(anim::State::Attack);
     g.noise.add(p.x, p.y, tune::kMaulaNoise);   // the crack draws every ear on the sand
@@ -4787,6 +4810,9 @@ void try_move(int dx, int dy) {
     if (!victim) victim = entity_at(nx, ny, g.cur_zone, EType::HunterSeeker);
     if (!victim) victim = entity_at(nx, ny, g.cur_zone, EType::Boss);
     if (victim) {
+        // C6r: with a ranged weapon, bumping a foe fires point-blank instead of swinging (the basic
+        // attack is weapon-defined). Melee falls through to the swing below (byte-identical).
+        if (weapon_is_ranged()) { fire_maula(nx, ny); return; }
         player_ent().anim.facing = facing_from_tile_delta(dx, dy);
         player_ent().anim.set(anim::State::Attack);
         g.impact_x = int16_t(nx);
@@ -5818,6 +5844,9 @@ bool game_update(const InputState& in) {
         else if (entity_at(g.hover_tx, g.hover_ty, g.cur_zone, EType::WarRoom)) g.interact_kind = 7;
         else if (entity_at(g.hover_tx, g.hover_ty, g.cur_zone, EType::Vault)) g.interact_kind = 8;  // G3
         else g.interact_kind = 0;
+        // C6r: left-clicking a foe = the basic attack. Mark it so the move-goal loop fires (ranged) or
+        // approaches + swings (melee).
+        g.move_attack = g.interact_kind == 0 && hostile_at(g.hover_tx, g.hover_ty) != nullptr;
     } else if (cursor_in_world && in.mouse_down[0] &&
                (g.hover_tx != g.move_goal_x || g.hover_ty != g.move_goal_y)) {
         g.move_goal_x = g.hover_tx;  // hold-drag to a new tile = pure movement
@@ -5834,9 +5863,17 @@ bool game_update(const InputState& in) {
     else if (g.move_goal_x >= 0) {
         if (ready) {
             const Entity& p = player_ent();
-            if ((p.x == g.move_goal_x && p.y == g.move_goal_y) ||
-                !click_step_toward(g.move_goal_x, g.move_goal_y))
+            // C6r: a ranged basic attack fires the moment the target is in line + range (no walk-adjacent);
+            // otherwise (melee, or out of line) step closer, and melee's bump attacks on arrival.
+            if (g.move_attack && weapon_is_ranged() && maula_can_hit(g.move_goal_x, g.move_goal_y)) {
+                fire_maula(g.move_goal_x, g.move_goal_y);
+                g.move_goal_x = -1;
+                g.move_attack = false;
+            } else if ((p.x == g.move_goal_x && p.y == g.move_goal_y) ||
+                       !click_step_toward(g.move_goal_x, g.move_goal_y)) {
                 g.move_goal_x = -1;  // arrived or stuck
+                g.move_attack = false;
+            }
         }
     }
     // Click-only interaction: once adjacent to the clicked NPC/door, act on it.
@@ -8041,6 +8078,19 @@ void game_debug_fire_maula(int dx, int dy) {  // fire the maula toward player+(d
 void game_debug_fire_maula_at(int idx) {  // fire at entity idx's live tile (re-aims as it moves)
     if (idx > 0 && idx < kMaxEnts && g.ents[idx].type != EType::None)
         fire_maula(g.ents[idx].x, g.ents[idx].y);
+}
+int game_debug_weapon_is_ranged() { return weapon_is_ranged() ? 1 : 0; }  // C6r
+void game_debug_equip_ranged() {  // C6r: equip the first ranged weapon def in the Weapon slot
+    for (int i = 0; i < items::kDefCount; ++i)
+        if (items::kDefs[i].slot == items::Slot::Weapon && items::kDefs[i].range > 0) {
+            items::Inst w; w.def = uint8_t(i); w.rarity = items::R_COMMON;
+            g.pl.equip[int(items::Slot::Weapon)] = w;
+            return;
+        }
+}
+int game_debug_maula_can_hit(int dx, int dy) {  // C6r: would a shot at player+(dx,dy) hit a hostile?
+    const Entity& p = player_ent();
+    return maula_can_hit(p.x + dx, p.y + dy) ? 1 : 0;
 }
 
 void game_debug_revelation(int* stage, int* inv_count) {

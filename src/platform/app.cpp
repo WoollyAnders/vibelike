@@ -2037,32 +2037,43 @@ int run_maulatest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cm
     game_init(6060, services);
     game_debug_clear_hostiles();
 
-    // (A) fire down a clear line -> the trooper at range takes damage (dropped or bloodied)
+    // (A) C6r gate: with the default MELEE weapon (Dust Knife), firing refuses — no ranged weapon
+    const int t0 = game_debug_spawn_hostile(5, 0);
+    const int hp0a = game_debug_entity_hp(t0);
+    game_debug_fire_maula(5, 0);
+    const bool melee_refuses = game_debug_weapon_is_ranged() == 0 &&
+                               game_debug_entity_hp(t0) == hp0a;   // untouched
+    game_debug_equip_ranged();                                    // now a ranged weapon is equipped
+    const bool now_ranged = game_debug_weapon_is_ranged() == 1;
+
+    // (B) fire down a clear line -> the trooper at range takes damage (dropped or bloodied)
+    game_debug_clear_hostiles();
     const int t1 = game_debug_spawn_hostile(5, 0);   // 5 tiles east, line cleared
     const int hp0 = game_debug_entity_hp(t1);
+    const bool can_hit = game_debug_maula_can_hit(5, 0) == 1;      // in range + clear line
     game_debug_fire_maula(5, 0);
     const int hp1 = game_debug_entity_hp(t1);        // -1 if the shot killed it
     const bool hit = t1 >= 0 && hp0 > 0 && (hp1 < 0 || hp1 < hp0);
 
-    // (B) a wall between the shooter and the target blocks the dart (the trooper is untouched)
+    // (C) a wall between the shooter and the target blocks the dart (the trooper is untouched)
     game_debug_clear_hostiles();
     const int t2 = game_debug_spawn_hostile(5, 0);
     game_debug_block_tile(2, 0);                     // raise a wall two tiles east
     const int hp2a = game_debug_entity_hp(t2);
+    const bool cant_hit = game_debug_maula_can_hit(5, 0) == 0;     // wall breaks the line
     game_debug_fire_maula(5, 0);
     const int hp2b = game_debug_entity_hp(t2);
     const bool blocked = t2 >= 0 && hp2b == hp2a;    // unchanged: the wall ate the dart
 
-    // (C) enough shots drop the trooper outright (a kill at range clears the hostile). Re-aim at its
-    // live tile since the loud report sends it hunting.
+    // (D) enough shots drop the trooper outright. Re-aim at its live tile (the loud report sends it hunting).
     game_debug_clear_hostiles();
     const int t3 = game_debug_spawn_hostile(4, 0);
     for (int i = 0; i < 40 && game_debug_hostile_count() > 0; ++i) game_debug_fire_maula_at(t3);
     const bool dropped = game_debug_hostile_count() == 0;
 
-    const bool pass = hit && blocked && dropped;
-    std::printf("maulatest %s (hit %d [%d->%d] blocked %d [%d->%d] dropped %d)\n",
-                pass ? "PASS" : "FAIL", hit, hp0, hp1, blocked, hp2a, hp2b, dropped);
+    const bool pass = melee_refuses && now_ranged && can_hit && hit && cant_hit && blocked && dropped;
+    std::printf("maulatest %s (meleeRefuse %d ranged %d canHit %d hit %d[%d->%d] cantHit %d blocked %d dropped %d)\n",
+                pass ? "PASS" : "FAIL", melee_refuses, now_ranged, can_hit, hit, hp0, hp1, cant_hit, blocked, dropped);
     std::remove("meta.dat");
     return pass ? 0 : 1;
 }

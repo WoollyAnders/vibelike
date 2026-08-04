@@ -202,6 +202,9 @@ int game_debug_entity_hp(int idx);           // hp of entity idx (-1 if none)
 void game_debug_block_tile(int dx, int dy);  // raise a wall at player+(dx,dy)
 void game_debug_fire_maula(int dx, int dy);  // fire the maula toward player+(dx,dy)
 void game_debug_fire_maula_at(int idx);      // fire at entity idx's live tile
+int game_debug_weapon_is_ranged();           // C6r: is the equipped weapon ranged?
+void game_debug_equip_ranged();              // C6r: equip a ranged weapon in the Weapon slot
+int game_debug_maula_can_hit(int dx, int dy);// C6r: would a shot at player+(dx,dy) hit a hostile?
 // --- C4 passive-tree hooks ---
 int game_debug_passive_node_count();         // number of passive-tree nodes
 int game_debug_passive_has(int n);           // is node n allocated (live character)

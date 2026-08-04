@@ -38,12 +38,15 @@ inline constexpr GridSize slot_size(Slot s) {
 
 // a/b meaning per slot: Weapon uses a=dmg_min, b=dmg_max. EVERY other piece carries one
 // intrinsic (implicit) affix: a = AffixKind, b = power, summed through affix_power.
+// C6r: `range` classifies a weapon — 0 = melee (the default; also for all non-weapons), >0 = a ranged
+// weapon whose shot travels that many tiles. Appended last so existing 6-field defs value-init it to 0.
 struct Def {
     const char* name;
     Slot slot;
     uint8_t level;
     uint8_t a, b;
     uint16_t value;  // spice
+    uint8_t range = 0;  // C6r: ranged weapon tile range (0 = melee / non-weapon)
 };
 
 // D1: the affix-kind vocabulary. The first block (AK_DMG..AK_SHIELD) predates D1; the rest are
@@ -163,6 +166,12 @@ inline constexpr Def kDefs[] = {
     {"Vial of Ibad", Slot::Token, 4, AK_TOX, 25, 14},
     {"Bloodstone Charm", Slot::Token, 5, AK_CRIT, 10, 20},     // gear source of crit (renamed off "Kindjal")
     {"Sayyadina's Eye", Slot::Token, 6, AK_SHIELD, 14, 30},    // +Focus (energy shield)
+    // C6r: ranged weapons (a=dmg_min, b=dmg_max, range>0). APPENDED at the end — def indices are stored
+    // in saves + hard-referenced by the starting-gear equips, so never reorder. They join the weapon loot
+    // pool naturally (roll_item filters by level, not by a contiguous weapon block).
+    {"Maula Pistol", Slot::Weapon, 2, 2, 5, 9, 8},
+    {"Ixian Dartgun", Slot::Weapon, 4, 4, 8, 22, 10},
+    {"Lasgun", Slot::Weapon, 6, 7, 14, 40, 12},
 };
 inline constexpr int kDefCount = int(sizeof(kDefs) / sizeof(kDefs[0]));
 
@@ -381,6 +390,10 @@ struct Inst {
     const Def& d() const { return kDefs[def]; }
     // G: this item's grid footprint (currency + empty = 1x1; gear by its slot).
     GridSize size() const { return (is_currency() || empty()) ? GridSize{1, 1} : slot_size(d().slot); }
+    // C6r: a ranged weapon (its shot travels d().range tiles). Melee weapons + non-weapons are false.
+    bool is_ranged_weapon() const {
+        return !empty() && !is_currency() && d().slot == Slot::Weapon && d().range > 0;
+    }
     bool unidentified() const { return (istate & 1) != 0; }  // D3
     bool corrupted() const { return (istate & 2) != 0; }     // D3
     bool mirrored() const { return (istate & 4) != 0; }      // D3
