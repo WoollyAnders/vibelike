@@ -196,6 +196,15 @@ int game_debug_litrejons();                  // banked Litrejons (the sietch-tre
 int game_debug_reclaimed();                  // this run's un-banked Deathstill reclaimed water
 void game_debug_grant_litrejons(int n);      // add n banked Litrejons (persists)
 int game_debug_deathstill(int water);        // place a corpse worth `water` + harvest it; returns reclaimed delta
+// --- C4 passive-tree hooks ---
+int game_debug_passive_node_count();         // number of passive-tree nodes
+int game_debug_passive_has(int n);           // is node n allocated (live character)
+int game_debug_passive_allocatable(int n);   // is node n allocatable right now
+int game_debug_passive_points();             // available passive points
+int game_debug_passive_alloc(int n);         // allocate node n; 1 on success
+int game_debug_passive_bonus(int kind);      // the tree's AffixKind contribution
+int game_debug_meta_passive_has(int n);      // is node n allocated in persisted meta (DMEJ round-trip)
+void game_debug_set_level(int lvl);          // set the character level (to grant passive points)
 // --- C5b sietch-tree hooks ---
 int game_debug_sietch_node_count();          // number of sietch-tree nodes
 int game_debug_sietch_rank(int idx);         // allocated rank of node idx (-1 invalid)

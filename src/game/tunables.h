@@ -133,6 +133,9 @@ inline constexpr int kPackW   = 8;               // the pack grid: 8 wide x 12 t
 inline constexpr int kPackH   = 12;
 inline constexpr int kInvCap  = kPackW * kPackH;  // pool size (worst case: an all-1x1 grid)
 
+// --- C4: the passive skill tree ---
+inline constexpr int kPassivePerLevel = 1;    // passive points earned per character level
+
 // --- C5: the Deathstill economy — reclaimed water banks to Litrejons (the sietch-tree currency) ---
 inline constexpr int kLitrejonPerWater = 2;   // reclaimed water per 1 Litrejon banked on extraction
 
