@@ -1946,6 +1946,54 @@ int run_currencydroptest(audio::Mixer& mixer, const Assets& assets, const Colorm
     return pass ? 0 : 1;
 }
 
+// G1: the pack is an 8x12 grid of variable-size items. Chest = 2x3, 1H weapon = 1x3, currency = 1x1;
+// items pack first-fit; a move onto an occupied footprint is rejected; a full grid stops accepting.
+int run_gridtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    std::remove("meta.dat");
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(3131, services);
+
+    // (A) footprints
+    game_debug_clear_pack();
+    const int bcell = game_debug_pack_add_slot(int(items::Slot::Body));
+    int bw = 0, bh = 0; game_debug_grid_size_of(0, &bw, &bh);
+    const bool a_body = bw == 2 && bh == 3 && bcell == 0;   // chest = 6 cells, first item at cell 0
+    game_debug_clear_pack();
+    game_debug_pack_add_slot(int(items::Slot::Weapon));
+    int ww = 0, wh = 0; game_debug_grid_size_of(0, &ww, &wh);
+    const bool a_wpn = ww == 1 && wh == 3;                  // 1H weapon = 3 cells
+
+    // (B) first-fit: two chests sit side by side (cols 0-1, then 2-3), sharing no cell
+    game_debug_clear_pack();
+    const int c0 = game_debug_pack_add_slot(int(items::Slot::Body));
+    const int c1 = game_debug_pack_add_slot(int(items::Slot::Body));
+    const bool firstfit = c0 == 0 && c1 == 2 &&
+                          game_debug_grid_item_at(0) == 0 && game_debug_grid_item_at(1) == 0 &&
+                          game_debug_grid_item_at(2) == 1;
+
+    // (C) collision: chest #1 cannot move onto chest #0; it can move to free cells (cols 4-5)
+    const bool block  = game_debug_grid_move(1, 0) == 0;
+    const bool freeok = game_debug_grid_move(1, 4) == 1;
+
+    // (D) currency is 1x1
+    game_debug_clear_pack();
+    game_debug_grant_currency(items::CUR_TRANSMUTE, 5);
+    int cw = 0, ch = 0; game_debug_grid_size_of(0, &cw, &ch);
+    const bool cur1x1 = cw == 1 && ch == 1 && game_debug_inv_used() == 1;
+
+    // (E) the 8x12 grid holds exactly 16 chests (16*6 = 96), then rejects the 17th
+    game_debug_clear_pack();
+    int placed = 0;
+    for (int i = 0; i < 20; ++i) if (game_debug_pack_add_slot(int(items::Slot::Body)) >= 0) ++placed;
+    const bool full = placed == 16 && game_debug_pack_free_cells() == 0;
+
+    const bool pass = a_body && a_wpn && firstfit && block && freeok && cur1x1 && full;
+    std::printf("gridtest %s (body %d wpn %d fit %d block %d free %d cur %d full %d)\n",
+                pass ? "PASS" : "FAIL", a_body, a_wpn, firstfit, block, freeok, cur1x1, placed);
+    std::remove("meta.dat");
+    return pass ? 0 : 1;
+}
+
 // D3d: currency is playable — walk-over pickup collects a ground drop into the pack, and the crafting
 // bench (pick a currency, then a target gear item) applies it through the keyboard menu path.
 int run_currencyuitest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
@@ -2207,7 +2255,7 @@ int main(int argc, char** argv) {
          vendortest = false, patroltest = false, cavetest = false, trialtest = false,
          endgametest = false, striketest = false, pinnacletest = false, capstonetest = false,
          longridetest = false, choamtest = false, currencytest = false, currencymechtest = false,
-         currencydroptest = false, currencyuitest = false, essencetest = false, abilitytest = false,
+         currencydroptest = false, currencyuitest = false, essencetest = false, gridtest = false, abilitytest = false,
          flasktest = false, inputtest = false, menutest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
@@ -2246,6 +2294,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--currencydroptest") == 0) currencydroptest = true;
         if (SDL_strcmp(argv[i], "--currencyuitest") == 0) currencyuitest = true;
         if (SDL_strcmp(argv[i], "--essencetest") == 0) essencetest = true;
+        if (SDL_strcmp(argv[i], "--gridtest") == 0) gridtest = true;
         if (SDL_strcmp(argv[i], "--abilitytest") == 0) abilitytest = true;
         if (SDL_strcmp(argv[i], "--flasktest") == 0) flasktest = true;
         if (SDL_strcmp(argv[i], "--inputtest") == 0) inputtest = true;
@@ -2305,6 +2354,7 @@ int main(int argc, char** argv) {
     if (currencydroptest) return run_currencydroptest(mixer, assets, cmaps);
     if (currencyuitest) return run_currencyuitest(mixer, assets, cmaps);
     if (essencetest) return run_essencetest(mixer, assets, cmaps);
+    if (gridtest) return run_gridtest(mixer, assets, cmaps);
     if (abilitytest) return run_abilitytest(mixer, assets, cmaps);
     if (flasktest) return run_flasktest(mixer, assets, cmaps);
     if (inputtest) return run_inputtest(mixer, assets, cmaps);

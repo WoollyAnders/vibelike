@@ -128,6 +128,11 @@ inline constexpr int kUnidChanceDenom = 3;     // ~1/N eligible gear drops are u
 inline constexpr int kSpiceEssenceMinArea = 7;   // Spice Essence drops only this deep and beyond
 inline constexpr int kSpiceEssenceDenom  = 40;   // ~1/N kills at that depth yield a Spice Essence
 
+// --- G: PoE/Grim Dawn grid inventory (variable-size items) ---
+inline constexpr int kPackW   = 8;               // the pack grid: 8 wide x 12 tall = 96 cells
+inline constexpr int kPackH   = 12;
+inline constexpr int kInvCap  = kPackW * kPackH;  // pool size (worst case: an all-1x1 grid)
+
 // --- Endgame: the Jihad (spice-commissioned strikes -> directed faction pressure -> pinnacles) ---
 // Each cleared strike presses its target Great Power; at kPinnaclePressure that power's homeworld
 // pinnacle opens. Higher-tier strikes press harder (and cost more spice / hit harder).

@@ -154,6 +154,14 @@ int game_debug_item_implicit(int idx);        // D3b: implicit % (0 = default)
 void game_debug_setup_weapon(int idx, int ilvl);    // D3b: place a common weapon in inv[idx]
 int game_debug_flask_quality();               // D3b: current flask quality
 int game_debug_inv_used();                    // D3b: non-empty pack cells (for the Mirror copy)
+// --- G grid hooks ---
+void game_debug_clear_pack();                 // G: empty the whole pack pool
+int game_debug_pack_free_cells();             // G: free grid cells in the pack (of kPackW*kPackH)
+int game_debug_grid_cell_of(int idx);         // G: top-left grid cell of pool entry idx (-1 if empty)
+int game_debug_grid_size_of(int idx, int* w, int* h);  // G: footprint of pool entry idx (cells; -1 empty)
+int game_debug_grid_item_at(int cell);        // G: pool index whose footprint covers grid cell (-1)
+int game_debug_pack_add_slot(int slot);       // G: first-fit an item of slot `slot`; returns its cell (-1)
+int game_debug_grid_move(int idx, int cell);  // G: collision-checked move of entry idx to top-left cell
 int game_debug_force_currency_drop();         // D3c: drop a currency at the player; returns its kind
 int game_debug_kill_drops(int n);             // D3c: n Trooper loot rolls; returns currency drops
 void game_debug_spawn_currency(int kind);     // D3d: place a currency entity on the player's tile

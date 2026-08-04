@@ -15,6 +15,27 @@ enum class Slot : uint8_t {
 };
 constexpr uint16_t sm(Slot s) { return uint16_t(1u << uint8_t(s)); }  // slot bit for family masks
 
+// G (grid inventory): a gear item's footprint (W x H cells) in the pack/stash grid. User-specified:
+// chest/cloak/2H-weapon = 6 (2x3); 1H-weapon/shield/offhand = 3 (1x3); helmet/mask/boots = 4 (2x2);
+// tube/belt = 2; plugs/tokens/rings = 1. The game has ONE Weapon slot today (all 1H blades), so weapons
+// are 3 cells; the 6-cell (2H) and shield/offhand sizes wait here for when those item classes exist.
+struct GridSize { uint8_t w, h; };
+inline constexpr GridSize slot_size(Slot s) {
+    switch (s) {
+        case Slot::Body:         return {2, 3};  // chest = 6
+        case Slot::Cloak:        return {2, 3};  // 6
+        case Slot::Weapon:       return {1, 3};  // 1H blade = 3 (a 2H would be 2x3)
+        case Slot::Hood:         return {2, 2};  // helmet = 4
+        case Slot::Mask:         return {2, 2};  // 4
+        case Slot::Pumps:        return {2, 2};  // boots = 4
+        case Slot::WaterTube:    return {1, 2};  // tube = 2
+        case Slot::Catchpockets: return {2, 1};  // belt = 2
+        case Slot::NosePlugs:    return {1, 1};
+        case Slot::Token:        return {1, 1};
+        default:                 return {1, 1};
+    }
+}
+
 // a/b meaning per slot: Weapon uses a=dmg_min, b=dmg_max. EVERY other piece carries one
 // intrinsic (implicit) affix: a = AffixKind, b = power, summed through affix_power.
 struct Def {
@@ -358,6 +379,8 @@ struct Inst {
     bool is_currency() const { return currency != 0; }
     bool empty() const { return def == 0xFF && currency == 0; }
     const Def& d() const { return kDefs[def]; }
+    // G: this item's grid footprint (currency + empty = 1x1; gear by its slot).
+    GridSize size() const { return (is_currency() || empty()) ? GridSize{1, 1} : slot_size(d().slot); }
     bool unidentified() const { return (istate & 1) != 0; }  // D3
     bool corrupted() const { return (istate & 2) != 0; }     // D3
     bool mirrored() const { return (istate & 4) != 0; }      // D3

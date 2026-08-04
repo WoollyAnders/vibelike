@@ -7,7 +7,7 @@
 #include <vector>
 
 inline constexpr uint32_t kSaveMagic = 0x54535544;  // 'DUST'
-inline constexpr uint16_t kSaveVersion = 25;  // v25: D3b flask quality (pl.flask_quality)
+inline constexpr uint16_t kSaveVersion = 26;  // v26: G grid inventory (pl.inv 96 + pl.inv_cell)
 
 class SaveWriter {
 public:

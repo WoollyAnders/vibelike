@@ -160,7 +160,8 @@ struct CharStats {
 
 struct Player {
     CharStats st;
-    items::Inst inv[12];
+    items::Inst inv[tune::kInvCap];               // G: the pack pool (8x12 grid). inv_cell[i] = item i's top-left
+    uint8_t inv_cell[tune::kInvCap] = {};         // grid cell of pool entry i (meaningful only when !inv[i].empty())
     items::Inst equip[int(items::Slot::Count)];  // by items::Slot (B2a: 10-slot Fremen paperdoll)
     int hp = tune::kPlayerHpMax;
     int water = tune::kStartWater;
@@ -1060,7 +1061,8 @@ struct Meta {
     int32_t banked_spice = 0;      // safe wallet; run spice banks here on extraction
     CharStats st;                  // persistent level / attributes / talents / xp
     items::Inst equip[int(items::Slot::Count)];
-    items::Inst inv[12];
+    items::Inst inv[tune::kInvCap];              // G (DMEE): the persisted pack pool (8x12 grid)
+    uint8_t inv_cell[tune::kInvCap] = {};        // grid cell of pool entry i
     // --- C3 (DME5) --- base class + ascendancy persist across death (character identity)
     uint8_t base_class = 0;        // BaseClass
     uint8_t ascendancy = 0;        // Ascendancy (0 = None until the rite)
@@ -1121,6 +1123,7 @@ int guild_difficulty() {
     return d < 0 ? 0 : d > cap ? cap : d;
 }
 
+inline constexpr uint32_t kMetaVE = 0x45454D44u;  // 'DMEE' (G: pack grid 12->96 + inv_cell)
 inline constexpr uint32_t kMetaVD = 0x44454D44u;  // 'DMED' (D3e: + spice_essence, the Awakening resource)
 inline constexpr uint32_t kMetaVC = 0x43454D44u;  // 'DMEC' (D3: widened Inst — currency stacks in inv)
 inline constexpr uint32_t kMetaVB = 0x42454D44u;  // 'DMEB' (D2 crafting: + worm_teeth)
@@ -1178,6 +1181,7 @@ void read_inst_blob(FILE* f, items::Inst (&dst)[N], bool current) {
     (void)!std::fread(old, sizeof old, 1, f);
     for (int i = 0; i < N; ++i) dst[i] = from_old_inst(old[i]);
 }
+void regrid_pool(items::Inst* pool, uint8_t* cell, int cap, int W, int H);  // G: fwd (defined below)
 // D3: place `amount` of currency `kind` into meta storage (merge a stack, else a free inv slot,
 // else the vault). Used to migrate the old Maker Hide / Worm Tooth counters into currency stacks.
 void meta_grant_currency(uint8_t kind, int amount) {
@@ -1193,7 +1197,7 @@ void meta_load() {
     if (!f) return;
     uint32_t magic = 0;
     if (std::fread(&magic, 4, 1, f) == 1) {
-        if (magic >= kMetaV4 && magic <= kMetaVD && magic != kMetaV1) {  // native widened-Inst format (DME4..DMED)
+        if (magic >= kMetaV4 && magic <= kMetaVE && magic != kMetaV1) {  // native widened-Inst format (DME4..DMEE)
             const bool cur = (magic >= kMetaVC);  // DMEC+ = new Inst layout; older = OldInst (convert)
             (void)!std::fread(&g_meta.runs, 4, 1, f);
             (void)!std::fread(&g_meta.endings_seen, 1, 1, f);
@@ -1205,7 +1209,16 @@ void meta_load() {
             (void)!std::fread(&g_meta.banked_spice, 4, 1, f);
             (void)!std::fread(&g_meta.st, sizeof g_meta.st, 1, f);
             read_inst_blob(f, g_meta.equip, cur);
-            read_inst_blob(f, g_meta.inv, cur);
+            if (magic >= kMetaVE) {  // G: the pack grid is 96 pool slots + inv_cell
+                read_inst_blob(f, g_meta.inv, cur);
+                (void)!std::fread(g_meta.inv_cell, sizeof g_meta.inv_cell, 1, f);
+            } else {  // DMED and earlier: a flat 12-slot pack -> migrate into the grid (first-fit repack)
+                items::Inst old_inv[12];
+                read_inst_blob(f, old_inv, cur);
+                for (items::Inst& s : g_meta.inv) s = items::Inst{};
+                for (int i = 0; i < 12; ++i) g_meta.inv[i] = old_inv[i];
+                regrid_pool(g_meta.inv, g_meta.inv_cell, tune::kInvCap, tune::kPackW, tune::kPackH);
+            }
             if (magic >= kMetaV5) {  // C3: base class + ascendancy (DME4 -> 0/None)
                 (void)!std::fread(&g_meta.base_class, 1, 1, f);
                 (void)!std::fread(&g_meta.ascendancy, 1, 1, f);
@@ -1259,6 +1272,7 @@ void meta_load() {
                 (void)!std::fread(li, sizeof li, 1, f);
                 for (int i = 0; i < int(items::Slot::Count); ++i) g_meta.equip[i] = convert_legacy(le[i]);
                 for (int i = 0; i < 12; ++i) g_meta.inv[i] = convert_legacy(li[i]);
+                regrid_pool(g_meta.inv, g_meta.inv_cell, tune::kInvCap, tune::kPackW, tune::kPackH);  // G
             }
         } else if (magic == kMetaV1) {  // v1: carry runs/endings forward only
             (void)!std::fread(&g_meta.runs, 4, 1, f);
@@ -1271,7 +1285,7 @@ void meta_load() {
 void meta_save() {
     FILE* f = std::fopen("meta.dat", "wb");
     if (!f) return;
-    std::fwrite(&kMetaVD, 4, 1, f);  // D3e: DMED (+ spice_essence; DMEC widened Inst rides the blobs)
+    std::fwrite(&kMetaVE, 4, 1, f);  // G: DMEE (pack grid 96 + inv_cell; earlier fields unchanged)
     std::fwrite(&g_meta.runs, 4, 1, f);
     std::fwrite(&g_meta.endings_seen, 1, 1, f);
     std::fwrite(&g_meta.stash_count, 1, 1, f);
@@ -1282,7 +1296,8 @@ void meta_save() {
     std::fwrite(&g_meta.banked_spice, 4, 1, f);
     std::fwrite(&g_meta.st, sizeof g_meta.st, 1, f);
     std::fwrite(g_meta.equip, sizeof g_meta.equip, 1, f);
-    std::fwrite(g_meta.inv, sizeof g_meta.inv, 1, f);
+    std::fwrite(g_meta.inv, sizeof g_meta.inv, 1, f);          // G: 96-slot pack pool
+    std::fwrite(g_meta.inv_cell, sizeof g_meta.inv_cell, 1, f);  // G: grid cells (DMEE)
     std::fwrite(&g_meta.base_class, 1, 1, f);  // C3 (DME5)
     std::fwrite(&g_meta.ascendancy, 1, 1, f);  // C3 (DME5)
     std::fwrite(&g_meta.guild_debt, 1, 1, f);    // B6 (DME6)
@@ -1309,6 +1324,7 @@ void persist_character() {
     g_meta.ascendancy = uint8_t(g.pl.ascendancy);
     std::memcpy(g_meta.equip, g.pl.equip, sizeof g_meta.equip);
     std::memcpy(g_meta.inv, g.pl.inv, sizeof g_meta.inv);
+    std::memcpy(g_meta.inv_cell, g.pl.inv_cell, sizeof g_meta.inv_cell);  // G: grid layout persists
     meta_save();
 }
 
@@ -1486,6 +1502,116 @@ items::Inst roll_item(int item_level, int rarity_bonus) {
     return it;
 }
 
+// ---- G: grid packing (variable-size items) ---------------------------------------------------------
+// A grid is a pool of items::Inst[cap] + a parallel cell[] of top-left indices; only non-empty pool
+// entries occupy space. Every helper is parameterized by (W,H) so the pack (8x12) and, later, the stash
+// tabs (12x12) share one implementation. Grid position is unhashed (off the determinism firewall).
+inline constexpr int kGridCellsMax = 12 * 12;  // biggest grid we build (a 12x12 stash tab)
+
+// Occupancy of a W*H grid from every placed pool item except `ignore` (-1 = none).
+void grid_occupancy(const items::Inst* pool, const uint8_t* cell, int cap, int W, int H,
+                    int ignore, bool* occ) {
+    for (int i = 0; i < W * H; ++i) occ[i] = false;
+    for (int i = 0; i < cap; ++i) {
+        if (i == ignore || pool[i].empty()) continue;
+        const items::GridSize s = pool[i].size();
+        const int cx = cell[i] % W, cy = cell[i] / W;
+        for (int dy = 0; dy < s.h; ++dy)
+            for (int dx = 0; dx < s.w; ++dx) {
+                const int x = cx + dx, y = cy + dy;
+                if (x < W && y < H) occ[y * W + x] = true;
+            }
+    }
+}
+// First-fit (row-major) top-left cell for a w x h footprint in `occ`, or -1 if it does not fit.
+int grid_find_fit(const bool* occ, int W, int H, int w, int h) {
+    for (int y = 0; y + h <= H; ++y)
+        for (int x = 0; x + w <= W; ++x) {
+            bool ok = true;
+            for (int dy = 0; dy < h && ok; ++dy)
+                for (int dx = 0; dx < w; ++dx)
+                    if (occ[(y + dy) * W + (x + dx)]) { ok = false; break; }
+            if (ok) return y * W + x;
+        }
+    return -1;
+}
+// Can footprint `s` sit with top-left at `topleft`, ignoring the item at pool index `moving`?
+bool grid_can_place(const items::Inst* pool, const uint8_t* cell, int cap, int W, int H,
+                    int moving, int topleft, items::GridSize s) {
+    const int cx = topleft % W, cy = topleft / W;
+    if (topleft < 0 || cx + s.w > W || cy + s.h > H) return false;
+    bool occ[kGridCellsMax];
+    grid_occupancy(pool, cell, cap, W, H, moving, occ);
+    for (int dy = 0; dy < s.h; ++dy)
+        for (int dx = 0; dx < s.w; ++dx)
+            if (occ[(cy + dy) * W + (cx + dx)]) return false;
+    return true;
+}
+// Add `it` to the grid at the first free pool slot + first-fit cell. Returns the pool index, or -1 if
+// the grid (or pool) has no room.
+int grid_add(items::Inst* pool, uint8_t* cell, int cap, int W, int H, const items::Inst& it) {
+    if (it.empty()) return -1;
+    bool occ[kGridCellsMax];
+    grid_occupancy(pool, cell, cap, W, H, -1, occ);
+    const items::GridSize s = it.size();
+    const int c = grid_find_fit(occ, W, H, s.w, s.h);
+    if (c < 0) return -1;
+    for (int i = 0; i < cap; ++i)
+        if (pool[i].empty()) { pool[i] = it; cell[i] = uint8_t(c); return i; }
+    return -1;
+}
+// Assign every placed item in a pool a first-fit grid cell, in pool order (used to migrate a flat
+// pre-grid save into the grid: the items are already loaded; only their cells need computing).
+void regrid_pool(items::Inst* pool, uint8_t* cell, int cap, int W, int H) {
+    bool occ[kGridCellsMax];
+    for (int i = 0; i < W * H; ++i) occ[i] = false;
+    for (int i = 0; i < cap; ++i) {
+        if (pool[i].empty()) { cell[i] = 0; continue; }
+        const items::GridSize s = pool[i].size();
+        int c = grid_find_fit(occ, W, H, s.w, s.h);
+        if (c < 0) c = 0;  // overflow guard (a dozen migrated items always fit an empty grid)
+        cell[i] = uint8_t(c);
+        const int cx = c % W, cy = c / W;
+        for (int dy = 0; dy < s.h; ++dy)
+            for (int dx = 0; dx < s.w; ++dx) {
+                const int x = cx + dx, y = cy + dy;
+                if (x < W && y < H) occ[y * W + x] = true;
+            }
+    }
+}
+// The pool item whose footprint covers grid cell `gc` (or -1). Used by the mouse UI + tests.
+int grid_item_at(const items::Inst* pool, const uint8_t* cell, int cap, int W, int gc) {
+    const int gx = gc % W, gy = gc / W;
+    for (int i = 0; i < cap; ++i) {
+        if (pool[i].empty()) continue;
+        const items::GridSize s = pool[i].size();
+        const int cx = cell[i] % W, cy = cell[i] / W;
+        if (gx >= cx && gx < cx + s.w && gy >= cy && gy < cy + s.h) return i;
+    }
+    return -1;
+}
+// The pack (g.pl.inv) is the canonical 8x12 grid. Thin wrappers keep call sites terse.
+int pack_add(const items::Inst& it) {
+    return grid_add(g.pl.inv, g.pl.inv_cell, tune::kInvCap, tune::kPackW, tune::kPackH, it);
+}
+int pack_free_cells() {
+    bool occ[kGridCellsMax];
+    grid_occupancy(g.pl.inv, g.pl.inv_cell, tune::kInvCap, tune::kPackW, tune::kPackH, -1, occ);
+    int n = 0;
+    for (int i = 0; i < tune::kPackW * tune::kPackH; ++i) if (!occ[i]) ++n;
+    return n;
+}
+// Put `it` at a caller-chosen pool index and give it a valid first-fit grid cell (used by the
+// debug/setup hooks, which address the pool by index rather than by grid position).
+void pack_place_at(int idx, const items::Inst& it) {
+    g.pl.inv[idx] = it;
+    bool occ[kGridCellsMax];
+    grid_occupancy(g.pl.inv, g.pl.inv_cell, tune::kInvCap, tune::kPackW, tune::kPackH, idx, occ);
+    const items::GridSize s = it.size();
+    const int c = grid_find_fit(occ, tune::kPackW, tune::kPackH, s.w, s.h);
+    g.pl.inv_cell[idx] = uint8_t(c < 0 ? 0 : c);
+}
+
 // ---- D2 crafting: the sietch bench spends materials to work gear -----------------------------------
 
 // The Maker Hide (Divine reagent): reroll the VALUE of every affix within its own tier, keeping the
@@ -1639,14 +1765,13 @@ bool apply_orb(uint8_t cur, items::Inst& it) {
             it.istate |= 2;  // corrupted — locked from further crafting
             return true;
         }
-        case CUR_MIRROR:  // Echo of Shai'Hulud: duplicate into a free pack cell (both become unmodifiable)
-            for (items::Inst& s : g.pl.inv) if (s.empty()) {
-                items::Inst copy = it;
-                copy.istate |= 4; it.istate |= 4;  // both mirrored
-                s = copy;
-                return true;
-            }
-            return false;  // no room for the copy
+        case CUR_MIRROR: {  // Echo of Shai'Hulud: duplicate into a free pack cell (both become unmodifiable)
+            items::Inst copy = it;
+            copy.istate |= 4;
+            if (pack_add(copy) < 0) return false;  // no room in the grid for the copy
+            it.istate |= 4;  // both mirrored
+            return true;
+        }
         default: return false;
     }
 }
@@ -1673,7 +1798,7 @@ int list_owned_currency(uint8_t* out) {
 }
 int list_gear(int* out) {
     int n = 0;
-    for (int i = 0; i < 12; ++i)
+    for (int i = 0; i < tune::kInvCap; ++i)
         if (!g.pl.inv[i].empty() && !g.pl.inv[i].is_currency()) out[n++] = i;
     return n;
 }
@@ -1688,7 +1813,7 @@ bool bench_apply(int cur, int inv_idx) {
         g.log.push("The flasks distil cleaner. Flask quality rises.");
         return true;
     }
-    if (inv_idx < 0 || inv_idx >= 12) return false;
+    if (inv_idx < 0 || inv_idx >= tune::kInvCap) return false;
     if (!apply_orb(uint8_t(cur), g.pl.inv[inv_idx])) return false;
     spend_currency(uint8_t(cur));
     g.log.push("Bench: applied %s.", items::currency_name(uint8_t(cur)));
@@ -1717,7 +1842,8 @@ items::Inst roll_item_for_slot(int item_level, int rarity_bonus, items::Slot s) 
 void grant_currency_to_pack(uint8_t kind, int amount) {
     if (amount <= 0 || kind == 0) return;
     for (items::Inst& s : g.pl.inv) if (s.currency == kind) { s.stack = uint16_t(s.stack + amount); return; }
-    for (items::Inst& s : g.pl.inv) if (s.empty()) { s.currency = kind; s.stack = uint16_t(amount); return; }
+    items::Inst c; c.currency = kind; c.stack = uint16_t(amount);  // a fresh 1x1 currency stack
+    pack_add(c);
 }
 
 // D3c: a weighted currency kind eligible at area level `alvl` (Divine-tier only falls deep), or 0.
@@ -1743,7 +1869,7 @@ void drop_currency(int x, int y) {
 // which has no zone to spill onto yet — the playable ride room comes later).
 void grant_gear_to_pack(const items::Inst& it) {
     if (it.empty()) return;
-    for (items::Inst& s : g.pl.inv) if (s.empty()) { s = it; return; }
+    pack_add(it);
 }
 
 // D3d: auto-collect any ground currency the player is standing on, into the pack (currency needs no
@@ -1861,8 +1987,7 @@ void raise_standing(int amount) {
     if (!g.season.crysknife_granted &&
         g.season.standing >= campaign::kStandingCrysknifeAt) {
         g.season.crysknife_granted = 1;
-        for (items::Inst& slot : g.pl.inv)
-            if (slot.empty()) { slot.def = 4; break; }  // the Crysknife itself
+        { items::Inst c; c.def = 4; pack_add(c); }  // the Crysknife itself, into the grid
         g.pl.maker_hooks = true;
         g.log.push("The Naib unwraps a pale blade. 'Honored one. It is yours.'");
         g.log.push("Crysknife and MAKER HOOKS taken. R mounts a surfaced worm.");
@@ -2056,14 +2181,11 @@ void resolve_strike() {
     g.in_strike = false;
     press_faction(f, tier);
     items::Inst it = roll_item(tier + 2, 40 + tier * 12);  // the richer-at-higher-tier payoff
-    for (items::Inst& slot : g.pl.inv)
-        if (slot.empty() && !it.empty()) {
-            slot = it;
-            char nm[64];
-            it.full_name(nm, sizeof nm);
-            g.log.push("Strike spoils: %s.", nm);
-            break;
-        }
+    if (pack_add(it) >= 0) {
+        char nm[64];
+        it.full_name(nm, sizeof nm);
+        g.log.push("Strike spoils: %s.", nm);
+    }
     g.pl.spice += tier * 4;
     raise_standing(4);
     g.log.push("The strike succeeds. The Jihad tightens on %s.", faction_name(f));
@@ -2153,14 +2275,11 @@ void resolve_pinnacle() {
     g.in_pinnacle = false;
     clear_pinnacle(f);  // shard + (Guild) guild_broken; announces the shard count / capstone
     items::Inst it = roll_item(10, 120);  // a pinnacle-tier prize
-    for (items::Inst& slot : g.pl.inv)
-        if (slot.empty() && !it.empty()) {
-            slot = it;
-            char nm[64];
-            it.full_name(nm, sizeof nm);
-            g.log.push("Pinnacle spoils: %s.", nm);
-            break;
-        }
+    if (pack_add(it) >= 0) {
+        char nm[64];
+        it.full_name(nm, sizeof nm);
+        g.log.push("Pinnacle spoils: %s.", nm);
+    }
     g.pl.spice += 40;
     raise_standing(10);
     enter_node(0);
@@ -2217,14 +2336,11 @@ void resolve_capstone() {
     g.in_capstone = false;
     finish_capstone();  // refuse the Golden Path (the apex trophy)
     items::Inst it = roll_item(10, 200);  // the ultimate spoils
-    for (items::Inst& slot : g.pl.inv)
-        if (slot.empty() && !it.empty()) {
-            slot = it;
-            char nm[64];
-            it.full_name(nm, sizeof nm);
-            g.log.push("The other-Paul dissolves into sand, leaving: %s.", nm);
-            break;
-        }
+    if (pack_add(it) >= 0) {
+        char nm[64];
+        it.full_name(nm, sizeof nm);
+        g.log.push("The other-Paul dissolves into sand, leaving: %s.", nm);
+    }
     raise_standing(20);
     enter_node(0);
     refresh_fov_and_paths();
@@ -3977,14 +4093,11 @@ void revelation_confirm() {
         g.rev_sel = 0;
     } else if (g.revelation_stage == 2) {  // item chosen -> take it, then advance
         const items::Inst chosen = g.rev_item_offer[g.rev_sel];
-        bool placed = false;
-        if (!chosen.empty())
-            for (items::Inst& slot : g.pl.inv)
-                if (slot.empty()) { slot = chosen; placed = true; break; }
+        const bool placed = !chosen.empty() && pack_add(chosen) >= 0;
         char nm[64];
         chosen.full_name(nm, sizeof nm);
         g.log.push(placed ? "Muad'Dib's sight was true. You will bear: %s"
-                          : "Your pack is full; the vision of %s fades.", nm);
+                          : "Your pack has no room; the vision of %s fades.", nm);
         const int dest = g.rev_dest;
         g.revelation_stage = 0;
         enter_node(dest);
@@ -4027,17 +4140,12 @@ void try_move(int dx, int dy) {
 
     if (Entity* car = entity_at(nx, ny, g.cur_zone, EType::Caravan)) {
         const items::Inst gift = roll_item(2 + run_difficulty(), 30 + run_difficulty() * 6);
-        bool taken = false;
-        for (items::Inst& slot : g.pl.inv)
-            if (slot.empty() && !gift.empty()) {
-                slot = gift;
-                char nm[64];
-                gift.full_name(nm, sizeof nm);
-                g.log.push("The caravan master presses contraband on you: %s.", nm);
-                taken = true;
-                break;
-            }
-        if (!taken) g.log.push("The caravan has wares, but your pack is full.");
+        const bool taken = pack_add(gift) >= 0;
+        if (taken) {
+            char nm[64];
+            gift.full_name(nm, sizeof nm);
+            g.log.push("The caravan master presses contraband on you: %s.", nm);
+        } else g.log.push("The caravan has wares, but your pack has no room.");
         g.pl.spice += 2;
         g.log.push("They share two grains for the road. The caravan breaks camp.");
         car->type = EType::None;
@@ -4379,18 +4487,16 @@ void try_harvest() {
     }
     if (Entity* drop = entity_at(p.x, p.y, g.cur_zone, EType::Loot)) {
         const items::Inst it = loot_of(*drop);
-        for (items::Inst& slot : g.pl.inv)
-            if (slot.empty()) {
-                slot = it;
-                char nm[64];
-                it.full_name(nm, sizeof nm);
-                g.log.push("Taken: %s (I to equip).", nm);
-                drop->type = EType::None;
-                g.services.mixer->push({audio::Cmd::PlaySfx, 1, 150, 140});
-                consume_action();
-                return;
-            }
-        g.log.push("Your pack is full. Bank gear at the Naib's vault.");
+        if (pack_add(it) >= 0) {  // G: place into the first-fit grid cell that fits its footprint
+            char nm[64];
+            it.full_name(nm, sizeof nm);
+            g.log.push("Taken: %s (I to equip).", nm);
+            drop->type = EType::None;
+            g.services.mixer->push({audio::Cmd::PlaySfx, 1, 150, 140});
+            consume_action();
+            return;
+        }
+        g.log.push("Your pack has no room for that. Bank gear at the sietch vault.");
         return;
     }
     if (Entity* cache = entity_at(p.x, p.y, g.cur_zone, EType::SpiceCache)) {
@@ -4453,6 +4559,7 @@ void game_init(uint64_t seed, const GameServices& services) {
         g.pl.ascendancy = Ascendancy(g_meta.ascendancy);
         std::memcpy(g.pl.equip, g_meta.equip, sizeof g.pl.equip);
         std::memcpy(g.pl.inv, g_meta.inv, sizeof g.pl.inv);
+        std::memcpy(g.pl.inv_cell, g_meta.inv_cell, sizeof g.pl.inv_cell);  // G: restore the grid layout
         g.pl.spice = g_meta.banked_spice;   // spendable wallet = the safe banked amount
         g.choosing = false;
     } else {
@@ -4993,19 +5100,14 @@ bool game_update(const InputState& in) {
                         meta_save();
                     }
                 } else {  // withdraw
-                    if (g.menu_sel < g_meta.stash_count) {
-                        for (items::Inst& slot : g.pl.inv)
-                            if (slot.empty()) {
-                                slot = g_meta.stash[g.menu_sel];
-                                for (int i = g.menu_sel; i + 1 < g_meta.stash_count; ++i)
-                                    g_meta.stash[i] = g_meta.stash[i + 1];
-                                --g_meta.stash_count;
-                                char nm[64];
-                                slot.full_name(nm, sizeof nm);
-                                g.log.push("Withdrawn: %s", nm);
-                                meta_save();
-                                break;
-                            }
+                    if (g.menu_sel < g_meta.stash_count && pack_add(g_meta.stash[g.menu_sel]) >= 0) {
+                        char nm[64];
+                        g_meta.stash[g.menu_sel].full_name(nm, sizeof nm);
+                        for (int i = g.menu_sel; i + 1 < g_meta.stash_count; ++i)
+                            g_meta.stash[i] = g_meta.stash[i + 1];
+                        --g_meta.stash_count;
+                        g.log.push("Withdrawn: %s", nm);
+                        meta_save();
                     }
                 }
             }
@@ -6526,6 +6628,7 @@ void game_serialize(SaveWriter& w) {
     w.i32(g.pl.turn);
     w.bytes(&g.pl.st, sizeof g.pl.st);
     w.bytes(g.pl.inv, sizeof g.pl.inv);
+    w.bytes(g.pl.inv_cell, sizeof g.pl.inv_cell);  // G: pack grid layout
     w.bytes(g.pl.equip, sizeof g.pl.equip);
     w.i32(g.pl.thumpers);
     w.i32(g.pl.charges);
@@ -6627,6 +6730,7 @@ bool game_deserialize(SaveReader& r) {
     pl.turn = r.i32();
     r.bytes(&pl.st, sizeof pl.st);
     r.bytes(pl.inv, sizeof pl.inv);
+    r.bytes(pl.inv_cell, sizeof pl.inv_cell);  // G: pack grid layout
     r.bytes(pl.equip, sizeof pl.equip);
     pl.thumpers = r.i32();
     pl.charges = r.i32();
@@ -7041,12 +7145,11 @@ int game_debug_opposing_houses() { return opposing_houses(); }
 // --- D3 currency / crafting hooks ---
 void game_debug_grant_currency(int kind, int n) {  // add n of a currency to the active pack
     if (kind <= 0 || kind >= items::CUR_COUNT || n <= 0) return;
-    for (items::Inst& s : g.pl.inv) if (s.currency == kind) { s.stack = uint16_t(s.stack + n); return; }
-    for (items::Inst& s : g.pl.inv) if (s.empty()) { s.currency = uint8_t(kind); s.stack = uint16_t(n); return; }
+    grant_currency_to_pack(uint8_t(kind), n);  // G: merges same-type, else a first-fit 1x1 grid cell
 }
 int game_debug_currency_count(int kind) { return currency_count(uint8_t(kind)); }
 void game_debug_setup_gear(int idx, int rarity, int ilvl) {  // place a known ARMOUR item in inv[idx]
-    if (idx < 0 || idx >= 12) return;
+    if (idx < 0 || idx >= tune::kInvCap) return;
     items::Inst it;
     for (int i = 0; i < items::kDefCount; ++i)
         if (items::kDefs[i].slot != items::Slot::Weapon) { it.def = uint8_t(i); break; }
@@ -7055,11 +7158,11 @@ void game_debug_setup_gear(int idx, int rarity, int ilvl) {  // place a known AR
     it.nprefix = it.nsuffix = 0;
     if (rarity == items::R_MAGIC) { roll_one_side(it, ilvl, true, 1); roll_one_side(it, ilvl, false, 1); }
     else if (rarity == items::R_RARE) { roll_one_side(it, ilvl, true, 2); roll_one_side(it, ilvl, false, 1); }
-    g.pl.inv[idx] = it;
+    pack_place_at(idx, it);
 }
 int game_debug_bench(int cur, int idx) { return bench_apply(cur, idx) ? 1 : 0; }
 int game_debug_item_sig(int idx, int* rarity, int* naffix, int* frac) {  // inspect inv[idx]; returns slot
-    if (idx < 0 || idx >= 12) return -3;
+    if (idx < 0 || idx >= tune::kInvCap) return -3;
     const items::Inst& it = g.pl.inv[idx];
     if (it.is_currency()) return -2;
     if (it.empty()) return -1;
@@ -7069,7 +7172,7 @@ int game_debug_item_sig(int idx, int* rarity, int* naffix, int* frac) {  // insp
     return int(it.d().slot);
 }
 int game_debug_item_valuesum(int idx) {  // sum of affix values (detects a Divine reroll)
-    if (idx < 0 || idx >= 12) return 0;
+    if (idx < 0 || idx >= tune::kInvCap) return 0;
     const items::Inst& it = g.pl.inv[idx];
     if (it.empty() || it.is_currency()) return 0;
     int v = 0;
@@ -7079,33 +7182,68 @@ int game_debug_item_valuesum(int idx) {  // sum of affix values (detects a Divin
 }
 // --- D3b hooks ---
 void game_debug_set_unidentified(int idx, int on) {  // set/clear the unID bit on inv[idx]
-    if (idx < 0 || idx >= 12 || g.pl.inv[idx].empty()) return;
+    if (idx < 0 || idx >= tune::kInvCap || g.pl.inv[idx].empty()) return;
     if (on) g.pl.inv[idx].istate |= 1; else g.pl.inv[idx].istate &= uint8_t(~1);
 }
 int game_debug_item_state(int idx) {  // istate bits (1 unID, 2 corrupt, 4 mirror), -1 empty/currency
-    if (idx < 0 || idx >= 12 || g.pl.inv[idx].empty() || g.pl.inv[idx].is_currency()) return -1;
+    if (idx < 0 || idx >= tune::kInvCap || g.pl.inv[idx].empty() || g.pl.inv[idx].is_currency()) return -1;
     return g.pl.inv[idx].istate;
 }
 int game_debug_item_quality(int idx) {  // item quality %; -1 for empty/currency
-    if (idx < 0 || idx >= 12 || g.pl.inv[idx].empty() || g.pl.inv[idx].is_currency()) return -1;
+    if (idx < 0 || idx >= tune::kInvCap || g.pl.inv[idx].empty() || g.pl.inv[idx].is_currency()) return -1;
     return g.pl.inv[idx].quality;
 }
 int game_debug_item_implicit(int idx) {  // implicit % (enchant); 0 = default
-    if (idx < 0 || idx >= 12 || g.pl.inv[idx].empty() || g.pl.inv[idx].is_currency()) return -1;
+    if (idx < 0 || idx >= tune::kInvCap || g.pl.inv[idx].empty() || g.pl.inv[idx].is_currency()) return -1;
     return g.pl.inv[idx].enchant;
 }
 void game_debug_setup_weapon(int idx, int ilvl) {  // place a common weapon in inv[idx]
-    if (idx < 0 || idx >= 12) return;
+    if (idx < 0 || idx >= tune::kInvCap) return;
     items::Inst it;
     for (int i = 0; i < items::kDefCount; ++i)
         if (items::kDefs[i].slot == items::Slot::Weapon) { it.def = uint8_t(i); break; }
     it.ilvl = uint8_t(ilvl < 1 ? 1 : ilvl > 255 ? 255 : ilvl);
     it.rarity = items::R_COMMON;
-    g.pl.inv[idx] = it;
+    pack_place_at(idx, it);
 }
 int game_debug_flask_quality() { return g.pl.flask_quality; }
 int game_debug_inv_used() {  // count of non-empty pack cells (gear + currency)
     int n = 0; for (const items::Inst& s : g.pl.inv) if (!s.empty()) ++n; return n;
+}
+// --- G grid hooks ---
+void game_debug_clear_pack() {  // empty the whole pack pool
+    for (int i = 0; i < tune::kInvCap; ++i) { g.pl.inv[i] = items::Inst{}; g.pl.inv_cell[i] = 0; }
+}
+int game_debug_pack_free_cells() { return pack_free_cells(); }  // free grid cells (of kPackW*kPackH)
+int game_debug_grid_cell_of(int idx) {  // top-left grid cell of pool entry idx (-1 if empty)
+    if (idx < 0 || idx >= tune::kInvCap || g.pl.inv[idx].empty()) return -1;
+    return g.pl.inv_cell[idx];
+}
+int game_debug_grid_size_of(int idx, int* w, int* h) {  // footprint of pool entry idx (cells; -1 if empty)
+    if (idx < 0 || idx >= tune::kInvCap || g.pl.inv[idx].empty()) return -1;
+    const items::GridSize s = g.pl.inv[idx].size();
+    if (w) *w = s.w; if (h) *h = s.h;
+    return s.w * s.h;
+}
+int game_debug_grid_item_at(int cell) {  // pool index whose footprint covers grid cell (-1 = empty)
+    return grid_item_at(g.pl.inv, g.pl.inv_cell, tune::kInvCap, tune::kPackW, cell);
+}
+// Build an item of slot `slot` and place it via first-fit; returns its assigned cell (-1 if no room).
+int game_debug_pack_add_slot(int slot) {
+    items::Inst it;
+    for (int i = 0; i < items::kDefCount; ++i)
+        if (int(items::kDefs[i].slot) == slot) { it.def = uint8_t(i); break; }
+    if (it.empty()) return -1;
+    const int idx = pack_add(it);
+    return idx < 0 ? -1 : g.pl.inv_cell[idx];
+}
+// Try to move pool entry idx so its top-left sits at `cell` (collision-checked). Returns 1 on success.
+int game_debug_grid_move(int idx, int cell) {
+    if (idx < 0 || idx >= tune::kInvCap || g.pl.inv[idx].empty()) return 0;
+    if (!grid_can_place(g.pl.inv, g.pl.inv_cell, tune::kInvCap, tune::kPackW, tune::kPackH,
+                        idx, cell, g.pl.inv[idx].size())) return 0;
+    g.pl.inv_cell[idx] = uint8_t(cell);
+    return 1;
 }
 // --- D3c drop hooks ---
 int game_debug_force_currency_drop() {  // drop a currency at the player, return its kind, then clear it
@@ -7328,7 +7466,7 @@ void game_debug_roll_item(int ilvl, int rarity_bonus, int slot,
 // full display name into `out`; returns 1 if the slot holds an item, 0 if empty/out of range.
 int game_debug_item_name(int where, int idx, char* out, int cap) {
     const items::Inst* it = nullptr;
-    if (where == 0 && idx >= 0 && idx < 12) it = &g.pl.inv[idx];
+    if (where == 0 && idx >= 0 && idx < tune::kInvCap) it = &g.pl.inv[idx];
     else if (where == 1 && idx >= 0 && idx < int(items::Slot::Count)) it = &g.pl.equip[idx];
     if (!it) { if (cap > 0) out[0] = 0; return 0; }
     it->full_name(out, cap);
@@ -7357,12 +7495,7 @@ void game_debug_rpg(int* level, int* inv_count, int* stash_count) {
 void game_debug_grab_loot() {
     for (Entity& e : g.ents) {
         if (e.type != EType::Loot || e.zone != g.cur_zone) continue;
-        for (items::Inst& slot : g.pl.inv)
-            if (slot.empty()) {
-                slot = loot_of(e);
-                e.type = EType::None;
-                break;
-            }
+        if (pack_add(loot_of(e)) >= 0) e.type = EType::None;
     }
 }
 
@@ -7377,13 +7510,10 @@ void game_debug_vault_deposit_all() {
 
 int game_debug_vault_withdraw_one() {
     if (g_meta.stash_count == 0) return 0;
-    for (items::Inst& slot : g.pl.inv)
-        if (slot.empty()) {
-            slot = g_meta.stash[--g_meta.stash_count];
-            meta_save();
-            return 1;
-        }
-    return 0;
+    if (pack_add(g_meta.stash[g_meta.stash_count - 1]) < 0) return 0;
+    --g_meta.stash_count;
+    meta_save();
+    return 1;
 }
 
 void game_debug_clear_hostiles() {
