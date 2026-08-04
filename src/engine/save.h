@@ -7,7 +7,7 @@
 #include <vector>
 
 inline constexpr uint32_t kSaveMagic = 0x54535544;  // 'DUST'
-inline constexpr uint16_t kSaveVersion = 29;  // v29: C4 passive-tree allocation mask (pl.passives)
+inline constexpr uint16_t kSaveVersion = 30;  // v30: C7b skill-bar bindings (pl.skill_bind)
 
 class SaveWriter {
 public:

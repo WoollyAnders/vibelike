@@ -178,6 +178,9 @@ struct Player {
     int shield_delay = 0;  // C2: turns until the shield recharges (reset on taking a hit)
     int will = 0;          // D1: current Will (ability fuel); C7 abilities spend it
     int ability_cd = 0;    // C7: shared ability cooldown (world turns remaining)
+    // C7b: the 12-slot skill bar — 2 bars (bar 1 = the Ctrl secondary) x 6 slots
+    // (LMB/RMB/MMB/Q/E/R). Each holds an action id: 0 none, 1 Basic Attack, else (ability + 1).
+    uint8_t skill_bind[2][6] = {{1, 1, 0, 2, 3, 4}, {0, 0, 0, 0, 0, 0}};
     int flask_charges[tune::kFlaskSlots] = {tune::kFlaskMaxCharges, tune::kFlaskMaxCharges,
                                             tune::kFlaskMaxCharges};  // Life / Will / Utility belt
     int flask_quality = 0;  // D3: Distillate Microtubing raises it (0..20); scales flask effects
@@ -1129,6 +1132,7 @@ struct Meta {
     int32_t litrejons = 0;         // C5 (DMEH): tribal water banked from the Deathstill; the sietch-tree currency
     uint8_t sietch_rank[kSietchNodeCount] = {};  // C5b (DMEI): allocated ranks per sietch-tree node
     uint64_t passives = 0;                       // C4 (DMEJ): the character's allocated passive-tree nodes
+    uint8_t skill_bind[2][6] = {{1, 1, 0, 2, 3, 4}, {0, 0, 0, 0, 0, 0}};  // C7b (DMEK): the skill bar
     CharStats st;                  // persistent level / attributes / talents / xp
     items::Inst equip[int(items::Slot::Count)];
     items::Inst inv[tune::kInvCap];              // G (DMEE): the persisted pack pool (8x12 grid)
@@ -1194,6 +1198,7 @@ int guild_difficulty() {
     return d < 0 ? 0 : d > cap ? cap : d;
 }
 
+inline constexpr uint32_t kMetaVK = 0x4B454D44u;  // 'DMEK' (C7b: + skill_bind, the 12-slot skill bar)
 inline constexpr uint32_t kMetaVJ = 0x4A454D44u;  // 'DMEJ' (C4: + passives, the passive-tree allocation mask)
 inline constexpr uint32_t kMetaVI = 0x49454D44u;  // 'DMEI' (C5b: + sietch_rank, the sietch talent tree)
 inline constexpr uint32_t kMetaVH = 0x48454D44u;  // 'DMEH' (C5: + litrejons, the sietch-tree currency)
@@ -1332,7 +1337,7 @@ void meta_load() {
     if (!f) return;
     uint32_t magic = 0;
     if (std::fread(&magic, 4, 1, f) == 1) {
-        if (magic >= kMetaV4 && magic <= kMetaVJ && magic != kMetaV1) {  // native widened-Inst format (DME4..DMEJ)
+        if (magic >= kMetaV4 && magic <= kMetaVK && magic != kMetaV1) {  // native widened-Inst format (DME4..DMEK)
             const bool cur = (magic >= kMetaVC);  // DMEC+ = new Inst layout; older = OldInst (convert)
             (void)!std::fread(&g_meta.runs, 4, 1, f);
             (void)!std::fread(&g_meta.endings_seen, 1, 1, f);
@@ -1410,6 +1415,9 @@ void meta_load() {
             if (magic >= kMetaVJ) {  // C4: the character's passive-tree allocation (DMEI and earlier -> 0)
                 (void)!std::fread(&g_meta.passives, 8, 1, f);
             }
+            if (magic >= kMetaVK) {  // C7b: the skill-bar bindings (DMEJ and earlier keep the defaults)
+                (void)!std::fread(g_meta.skill_bind, sizeof g_meta.skill_bind, 1, f);
+            }
             // D3 migration: the old Maker Hide / Worm Tooth counters become currency (their new roles:
             // armour / weapon quality), banked to the crafting table. No-op on a DMEC+ file (already 0).
             if (g_meta.maker_hides > 0) { meta_grant_currency(items::CUR_ARMORQUAL, g_meta.maker_hides); g_meta.maker_hides = 0; }
@@ -1448,7 +1456,7 @@ void meta_load() {
 void meta_save() {
     FILE* f = std::fopen("meta.dat", "wb");
     if (!f) return;
-    std::fwrite(&kMetaVJ, 4, 1, f);  // C4: DMEJ (+ passives; earlier blobs ride along)
+    std::fwrite(&kMetaVK, 4, 1, f);  // C7b: DMEK (+ skill_bind; earlier blobs ride along)
     std::fwrite(&g_meta.runs, 4, 1, f);
     std::fwrite(&g_meta.endings_seen, 1, 1, f);
     std::fwrite(&g_meta.stash_tabs, 1, 1, f);                       // G3: owned tab count
@@ -1481,6 +1489,7 @@ void meta_save() {
     std::fwrite(&g_meta.litrejons, 4, 1, f);                   // C5: banked Litrejons (DMEH)
     std::fwrite(g_meta.sietch_rank, sizeof g_meta.sietch_rank, 1, f);  // C5b: sietch tree ranks (DMEI)
     std::fwrite(&g_meta.passives, 8, 1, f);                            // C4: passive-tree mask (DMEJ)
+    std::fwrite(g_meta.skill_bind, sizeof g_meta.skill_bind, 1, f);    // C7b: skill bar (DMEK)
     std::fclose(f);
 }
 
@@ -1491,6 +1500,7 @@ void persist_character() {
     g_meta.base_class = uint8_t(g.pl.base_class);   // C3: class identity survives death
     g_meta.ascendancy = uint8_t(g.pl.ascendancy);
     g_meta.passives = g.pl.passives;                // C4: the passive tree persists with the character
+    std::memcpy(g_meta.skill_bind, g.pl.skill_bind, sizeof g_meta.skill_bind);  // C7b: skill bar persists
     std::memcpy(g_meta.equip, g.pl.equip, sizeof g_meta.equip);
     std::memcpy(g_meta.inv, g.pl.inv, sizeof g_meta.inv);
     std::memcpy(g_meta.inv_cell, g.pl.inv_cell, sizeof g_meta.inv_cell);  // G: grid layout persists
@@ -1869,6 +1879,23 @@ inline int node_at(int mx, int my) {  // the node whose disc contains (mx,my), o
     return -1;
 }
 }  // namespace passiveui
+
+// C7b: the skill-bar loadout screen (menu 15) — 2 bars x 6 slot boxes; click a box to cycle its bind.
+namespace loadout {
+inline constexpr int BW = 190, BH = 60, GAP = 8;
+inline int ox() { return fb::W / 2 - (6 * (BW + GAP) - GAP) / 2; }
+inline int oy() { return 320; }
+inline int row_y(int bar) { return oy() + bar * (BH + 40); }
+inline int slot_at(int mx, int my) {  // returns bar*6 + slot, or -1
+    if (mx < 0) return -1;
+    for (int b = 0; b < 2; ++b)
+        for (int s = 0; s < 6; ++s) {
+            const int x = ox() + s * (BW + GAP), y = row_y(b);
+            if (mx >= x && mx < x + BW && my >= y && my < y + BH) return b * 6 + s;
+        }
+    return -1;
+}
+}  // namespace loadout
 
 // A hit on some interactive region of a grid screen.
 enum class UIHit { None, PackCell, EquipSlot, StashCell, TabButton, BuyTab, CurTabSlot };
@@ -3145,6 +3172,33 @@ void freeze_player(int turns) { if (turns > g.pl.ail_frozen_turns) g.pl.ail_froz
 // One Will pool, one shared cooldown. Cast at a target tile; effects reuse the stun / teleport / Focus
 // systems. Deterministic + player-initiated (never auto-fired, no RNG) — off every test's det path.
 enum Ability : uint8_t { AB_NONE = 0, AB_VOICE, AB_BLINK, AB_PRESCIENCE, AB_COUNT };
+const char* ability_name(int ab) {
+    switch (ab) {
+        case AB_VOICE: return "The Voice";
+        case AB_BLINK: return "Prescient Step";
+        case AB_PRESCIENCE: return "Prescient Calm";
+        default: return "-";
+    }
+}
+// C7b: name of a skill-bar action id (0 none, 1 Basic Attack, else ability+1).
+const char* skill_action_name(int act) {
+    if (act == 0) return "(empty)";
+    if (act == 1) return "Basic Attack";
+    return ability_name(act - 1);
+}
+// C7b: does the character have ability `ab`? All three are owned in C7b; C7c gates this by the dropped
+// Teaching collection.
+bool ability_owned(int ab) { return ab > AB_NONE && ab < AB_COUNT; }
+// Cycle a skill-bar slot's binding to the next valid action: none -> Basic Attack -> each owned ability.
+void skill_cycle(int bar, int slot) {
+    if (bar < 0 || bar > 1 || slot < 0 || slot > 5) return;
+    int act = g.pl.skill_bind[bar][slot];
+    for (int guard = 0; guard < AB_COUNT + 2; ++guard) {
+        act = (act + 1) % (AB_COUNT + 1);              // 0..AB_COUNT (0 none, 1 basic, 2.. abilities)
+        if (act <= 1 || ability_owned(act - 1)) break;  // stop on none / basic / an owned ability
+    }
+    g.pl.skill_bind[bar][slot] = uint8_t(act);
+}
 
 bool ability_is_hostile(EType t) {
     switch (t) {
@@ -4721,6 +4775,25 @@ void fire_maula(int tx, int ty) {
     consume_action();
 }
 
+void try_move(int dx, int dy);  // fwd — basic_attack_at melees an adjacent foe through it
+// C7b: the weapon-defined basic attack aimed at (tx,ty): a ranged weapon fires; a melee weapon swings
+// only if (tx,ty) is an adjacent foe (melee has no reach). Used by any bar slot bound to Basic Attack.
+void basic_attack_at(int tx, int ty) {
+    if (tx < 0 || ty < 0) return;
+    if (weapon_is_ranged()) { fire_maula(tx, ty); return; }
+    const Entity& p = player_ent();
+    const int ddx = tx - p.x, ddy = ty - p.y;
+    if (ddx >= -1 && ddx <= 1 && ddy >= -1 && ddy <= 1 && (ddx || ddy) && hostile_at(tx, ty))
+        try_move(ddx < 0 ? -1 : ddx > 0 ? 1 : 0, ddy < 0 ? -1 : ddy > 0 ? 1 : 0);  // the bump swings
+}
+// C7b: run the action bound to bar `bar` slot `slot`, aimed at the cursor. (Basic Attack / an ability.)
+void run_skill_slot(int slot, bool ctrl) {
+    const int act = g.pl.skill_bind[ctrl ? 1 : 0][slot];
+    if (act == 0) return;
+    if (act == 1) { basic_attack_at(g.hover_tx, g.hover_ty); return; }
+    if (cast_ability(act - 1, g.hover_tx, g.hover_ty)) consume_action();
+}
+
 void try_move(int dx, int dy) {
     Entity& p = player_ent();
     const int nx = p.x + dx, ny = p.y + dy;
@@ -5069,6 +5142,7 @@ void game_init(uint64_t seed, const GameServices& services) {
         g.pl.base_class = BaseClass(g_meta.base_class);   // C3: restore class identity
         g.pl.ascendancy = Ascendancy(g_meta.ascendancy);
         g.pl.passives = g_meta.passives;                  // C4: restore the passive tree
+        std::memcpy(g.pl.skill_bind, g_meta.skill_bind, sizeof g.pl.skill_bind);  // C7b: restore the skill bar
         std::memcpy(g.pl.equip, g_meta.equip, sizeof g.pl.equip);
         std::memcpy(g.pl.inv, g_meta.inv, sizeof g.pl.inv);
         std::memcpy(g.pl.inv_cell, g_meta.inv_cell, sizeof g.pl.inv_cell);  // G: restore the grid layout
@@ -5472,8 +5546,8 @@ bool game_update(const InputState& in) {
     // vendor menus pause the world (browsing is free)
     if (g.menu_open) {
         // 5 = character sheet, 6 = inventory, 7 = the vault
-        int counts[14] = {0, 6, 3, 5, 4, 3 + kTalentCount + 1, 13, 13, 4, 5 + 1 + 1, 5 + 1 + 1, 1,
-                          kSietchNodeCount + 1, kPassiveNodeCount};  // C5b menu 12 tree, C4 menu 13 tree
+        int counts[16] = {0, 6, 3, 5, 4, 3 + kTalentCount + 1, 13, 13, 4, 5 + 1 + 1, 5 + 1 + 1, 1,
+                          kSietchNodeCount + 1, kPassiveNodeCount, 1, 12};  // 12 tree,13 tree,15 loadout
         int n = counts[g.menu_open];
         if (g.menu_open == 11) {  // D3d bench: rows are owned currencies, or gear once a currency is picked
             uint8_t cb[items::CUR_COUNT]; int gi[12];
@@ -5491,6 +5565,16 @@ bool game_update(const InputState& in) {
         }
         // G4: on the grid screens (pack/vault/bench), mouse drag-drop + Ctrl-click drive item movement.
         if (ui_grid_input(in)) return true;
+        if (g.menu_open == 15) {  // C7b: the skill-bar loadout — click a slot box to cycle its binding
+            if (in.was_pressed(Key::Cancel) || in.was_pressed(Key::Loadout)) { g.menu_open = 0; return true; }
+            const int hit = in.mouse_pressed[0] ? loadout::slot_at(in.mouse_x, in.mouse_y) : -1;
+            if (hit >= 0) g.menu_sel = hit;
+            if (in.was_pressed(Key::Up)) g.menu_sel = (g.menu_sel + 11) % 12;
+            if (in.was_pressed(Key::Down)) g.menu_sel = (g.menu_sel + 1) % 12;
+            if (in.was_pressed(Key::Left) || in.was_pressed(Key::Right)) g.menu_sel = (g.menu_sel + 6) % 12;
+            if (in.was_pressed(Key::Confirm) || hit >= 0) skill_cycle(g.menu_sel / 6, g.menu_sel % 6);
+            return true;
+        }
         if (g.menu_open == 13) {  // C4: the passive skill tree (a node graph; click a node to allocate)
             if (in.was_pressed(Key::Cancel) || in.was_pressed(Key::Character)) { g.menu_open = 0; return true; }
             if (in.was_pressed(Key::Up)) g.menu_sel = (g.menu_sel + n - 1) % n;
@@ -5832,7 +5916,13 @@ bool game_update(const InputState& in) {
     }
     const bool cursor_in_world = in.mouse_x >= 0 && in.mouse_y >= 30 &&
                                  in.mouse_y < ui::kPanelY && g.hover_tx >= 0 && !g.pl.riding;
-    if (cursor_in_world && in.mouse_pressed[0]) {  // fresh press: aim + classify target
+    // C7b: LMB rebound to an ability casts it at the cursor (no move goal). Default LMB = Basic Attack
+    // -> the C6r move/attack below.
+    if (cursor_in_world && in.mouse_pressed[0] && g.pl.skill_bind[in.ctrl ? 1 : 0][0] >= 2) {
+        if (ready && cast_ability(g.pl.skill_bind[in.ctrl ? 1 : 0][0] - 1, g.hover_tx, g.hover_ty))
+            consume_action();
+        g.move_goal_x = -1; g.interact_kind = 0; g.move_attack = false;
+    } else if (cursor_in_world && in.mouse_pressed[0]) {  // fresh press: aim + classify target
         g.move_goal_x = g.hover_tx;
         g.move_goal_y = g.hover_ty;
         if (entity_at(g.hover_tx, g.hover_ty, g.cur_zone, EType::Naib)) g.interact_kind = 1;
@@ -5844,9 +5934,10 @@ bool game_update(const InputState& in) {
         else if (entity_at(g.hover_tx, g.hover_ty, g.cur_zone, EType::WarRoom)) g.interact_kind = 7;
         else if (entity_at(g.hover_tx, g.hover_ty, g.cur_zone, EType::Vault)) g.interact_kind = 8;  // G3
         else g.interact_kind = 0;
-        // C6r: left-clicking a foe = the basic attack. Mark it so the move-goal loop fires (ranged) or
-        // approaches + swings (melee).
-        g.move_attack = g.interact_kind == 0 && hostile_at(g.hover_tx, g.hover_ty) != nullptr;
+        // C6r/C7b: left-clicking a foe = LMB's basic attack (only when LMB is bound to Basic Attack).
+        // The move-goal loop then fires (ranged) or approaches + swings (melee).
+        g.move_attack = g.pl.skill_bind[in.ctrl ? 1 : 0][0] == 1 &&
+                        g.interact_kind == 0 && hostile_at(g.hover_tx, g.hover_ty) != nullptr;
     } else if (cursor_in_world && in.mouse_down[0] &&
                (g.hover_tx != g.move_goal_x || g.hover_ty != g.move_goal_y)) {
         g.move_goal_x = g.hover_tx;  // hold-drag to a new tile = pure movement
@@ -5922,6 +6013,7 @@ bool game_update(const InputState& in) {
     else if (in.was_pressed(Key::Powers)) { g.menu_open = 4; g.menu_sel = 0; }
     else if (in.was_pressed(Key::Inventory)) { g.menu_open = 6; g.menu_sel = 0; }
     else if (in.was_pressed(Key::Character)) { g.menu_open = 5; g.menu_sel = 0; }
+    else if (in.was_pressed(Key::Loadout)) { g.menu_open = 15; g.menu_sel = 0; }  // C7b: the skill bar
     else if (ready && in.was_pressed(Key::Harvest)) try_harvest();
     else if (ready && in.was_pressed(Key::Thumper)) place_thumper();
     else if (ready && in.was_pressed(Key::Glowglobe)) place_glowglobe();
@@ -5932,18 +6024,13 @@ bool game_update(const InputState& in) {
         g.log.push(g.pl.sandwalk ? "You break your rhythm. Walk without wormsign."
                                  : "You stride freely again.");
     }
-    // C7: cast a prescience ability at the cursor tile (Voice ignores it, Blink aims at it).
-    else if (ready && in.was_pressed(Key::Ability1)) {
-        if (cast_ability(AB_VOICE, g.hover_tx, g.hover_ty)) consume_action();
-    }
-    else if (ready && in.was_pressed(Key::Ability2)) {
-        if (cast_ability(AB_BLINK, g.hover_tx, g.hover_ty)) consume_action();
-    }
-    else if (ready && in.was_pressed(Key::Ability3)) {
-        if (cast_ability(AB_PRESCIENCE, g.hover_tx, g.hover_ty)) consume_action();
-    }
-    // C6: right-click fires the maula pistol at the cursor tile (a loud, lethality-scaled ranged shot).
-    else if (ready && cursor_in_world && in.mouse_pressed[1]) fire_maula(g.hover_tx, g.hover_ty);
+    // C7b: the skill bar. Each input runs its bound slot's action at the cursor; Ctrl swaps to the
+    // secondary bar. Slots: 0 LMB (handled above with move), 1 RMB, 2 MMB, 3 Q, 4 E, 5 R.
+    else if (ready && cursor_in_world && in.mouse_pressed[1]) run_skill_slot(1, in.ctrl);
+    else if (ready && cursor_in_world && in.mouse_pressed[2]) run_skill_slot(2, in.ctrl);
+    else if (ready && in.was_pressed(Key::Ability1)) run_skill_slot(3, in.ctrl);
+    else if (ready && in.was_pressed(Key::Ability2)) run_skill_slot(4, in.ctrl);
+    else if (ready && in.was_pressed(Key::Ability3)) run_skill_slot(5, in.ctrl);
 
     // Flasks quaff instantly (not gated by the action cooldown) — independent of the move/act chain.
     if (in.was_pressed(Key::Flask1)) use_flask(0);
@@ -6727,6 +6814,40 @@ void draw_passive_tree(DrawCtx& ctx) {
         draw_text_shadow(ctx, buf, fb::W / 2 - 200, fb::H - 70, 231, 1);
     }
 }
+// C7b: the skill-bar loadout screen — two bars of six slot boxes; the selected/hovered one is lit.
+void draw_loadout(DrawCtx& ctx) {
+    fill_rect(ctx, 0, 0, fb::W, fb::H, 1);
+    draw_text_shadow(ctx, "SKILL BAR - LOADOUT", fb::W / 2 - 14 * 8, 60, 230, 1);
+    draw_text(ctx, "Click a slot to cycle its skill.  Hold Ctrl in play for the secondary bar.  K / ESC closes.",
+              fb::W / 2 - 360, 96, 14);
+    static const char* keys[6] = {"LMB", "RMB", "MMB", "Q", "E", "R"};
+    for (int b = 0; b < 2; ++b) {
+        draw_text(ctx, b == 0 ? "PRIMARY BAR" : "SECONDARY BAR  (hold Ctrl)",
+                  loadout::ox(), loadout::row_y(b) - 22, 200);
+        for (int s = 0; s < 6; ++s) {
+            const int x = loadout::ox() + s * (loadout::BW + loadout::GAP), y = loadout::row_y(b);
+            const bool sel = g.menu_sel == b * 6 + s;
+            fill_rect(ctx, x, y, loadout::BW, loadout::BH, uint8_t(sel ? 4 : 2));
+            fill_rect(ctx, x, y, loadout::BW, 2, 228);
+            draw_text(ctx, keys[s], x + 8, y + 8, 231);
+            const uint8_t act = g.pl.skill_bind[b][s];
+            draw_text(ctx, skill_action_name(act), x + 8, y + 34, uint8_t(act ? 245 : 8));
+        }
+    }
+}
+// C7b: the compact HUD skill bar — the primary bar's six slots (the Ctrl secondary shows on the loadout).
+void draw_skillbar_hud(DrawCtx& ctx) {
+    static const char* keys[6] = {"LMB", "RMB", "MMB", "Q", "E", "R"};
+    const int bw = 150, gap = 4, y = fb::H - 30;
+    const int ox = fb::W / 2 - (6 * (bw + gap) - gap) / 2;
+    for (int s = 0; s < 6; ++s) {
+        const int x = ox + s * (bw + gap);
+        const uint8_t act = g.pl.skill_bind[0][s];
+        fill_rect(ctx, x, y, bw, 26, uint8_t(act ? 3 : 2));
+        char buf[40]; std::snprintf(buf, sizeof buf, "%s %.14s", keys[s], skill_action_name(act));
+        draw_text(ctx, buf, x + 5, y + 7, uint8_t(act ? 200 : 8));
+    }
+}
 // G4: draw the item currently being dragged, floating at the cursor.
 void draw_drag_ghost(DrawCtx& ctx) {
     if (!g.drag_kind || g.ui_mx < 0) return;
@@ -6843,11 +6964,12 @@ void pass_ui(RenderCtx& r) {
         draw_text_shadow(ctx, buf, 4, ui::kPanelY - 22, 136, 1);
         // C7 + flasks readout: the Will pool, the three flask charges, and ability readiness.
         char abuf[96];
-        std::snprintf(abuf, sizeof abuf, "Will %d/%d   flasks [L%d W%d U%d]   abilities %s",
+        std::snprintf(abuf, sizeof abuf, "Will %d/%d   flasks [L%d W%d U%d]   abilities %s  (K: bind)",
                       g.pl.will, player_max_will(),
                       g.pl.flask_charges[0], g.pl.flask_charges[1], g.pl.flask_charges[2],
-                      g.pl.ability_cd > 0 ? "(cooldown)" : "ready Q/E/F");
+                      g.pl.ability_cd > 0 ? "(cooldown)" : "ready");
         draw_text_shadow(ctx, abuf, 4, ui::kPanelY - 40, 208, 1);
+        draw_skillbar_hud(ctx);  // C7b: the primary skill bar along the bottom edge
         if (g.hover_tx >= 0)
             if (const char* what = describe_at(g.hover_tx, g.hover_ty))
                 draw_text_shadow(ctx, what, fb::W / 2 - int(std::strlen(what)) * kCh,
@@ -6929,6 +7051,7 @@ void pass_ui(RenderCtx& r) {
     }
 
     if (g.menu_open == 13) draw_passive_tree(ctx);  // C4: the passive-tree screen
+    if (g.menu_open == 15) draw_loadout(ctx);        // C7b: the skill-bar loadout screen
 
     // Endgame hub menus (War Council / Jihad Table / Landsraad / Bench) — dynamic, keyboard-driven.
     if (g.menu_open >= 8 && g.menu_open <= 12) {
@@ -7331,6 +7454,7 @@ void game_serialize(SaveWriter& w) {
     w.i32(g.pl.water);
     w.i32(g.pl.reclaimed);  // C5: the Deathstill stake (run-scoped)
     w.u64(g.pl.passives);   // C4: the passive-tree allocation mask
+    w.bytes(g.pl.skill_bind, sizeof g.pl.skill_bind);  // C7b: the skill bar
     w.i32(g.pl.exposure);
     w.i32(g.pl.turn);
     w.bytes(&g.pl.st, sizeof g.pl.st);
@@ -7436,6 +7560,7 @@ bool game_deserialize(SaveReader& r) {
     pl.water = r.i32();
     pl.reclaimed = r.i32();  // C5: the Deathstill stake (run-scoped)
     pl.passives = r.u64();   // C4: the passive-tree allocation mask
+    r.bytes(pl.skill_bind, sizeof pl.skill_bind);  // C7b: the skill bar
     pl.exposure = r.i32();
     pl.turn = r.i32();
     r.bytes(&pl.st, sizeof pl.st);
@@ -8091,6 +8216,22 @@ void game_debug_equip_ranged() {  // C6r: equip the first ranged weapon def in t
 int game_debug_maula_can_hit(int dx, int dy) {  // C6r: would a shot at player+(dx,dy) hit a hostile?
     const Entity& p = player_ent();
     return maula_can_hit(p.x + dx, p.y + dy) ? 1 : 0;
+}
+// --- C7b skill-bar hooks ---
+int game_debug_skill_bind(int bar, int slot) {
+    return (bar >= 0 && bar < 2 && slot >= 0 && slot < 6) ? g.pl.skill_bind[bar][slot] : -1;
+}
+void game_debug_set_skill_bind(int bar, int slot, int act) {
+    if (bar >= 0 && bar < 2 && slot >= 0 && slot < 6) g.pl.skill_bind[bar][slot] = uint8_t(act);
+}
+int game_debug_skill_cycle(int bar, int slot) { skill_cycle(bar, slot); return game_debug_skill_bind(bar, slot); }
+int game_debug_meta_skill_bind(int bar, int slot) {
+    return (bar >= 0 && bar < 2 && slot >= 0 && slot < 6) ? g_meta.skill_bind[bar][slot] : -1;
+}
+void game_debug_run_skill_slot(int slot, int ctrl, int dx, int dy) {  // aim at player+(dx,dy) + run the slot
+    const Entity& p = player_ent();
+    g.hover_tx = int16_t(p.x + dx); g.hover_ty = int16_t(p.y + dy);
+    run_skill_slot(slot, ctrl != 0);
 }
 
 void game_debug_revelation(int* stage, int* inv_count) {

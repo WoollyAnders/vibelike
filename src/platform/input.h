@@ -16,6 +16,7 @@ enum class Key : uint8_t {
     WalkUp, WalkDown, WalkLeft, WalkRight,  // A4: PoE2 screen-relative WASD (W = up on screen)
     Ability1, Ability2, Ability3,           // C7: cast prescience abilities at the cursor
     Flask1, Flask2, Flask3,                 // quaff Life / Will / Utility flasks
+    Loadout,                                // C7b: open the skill-bar loadout screen
     Count
 };
 inline constexpr int kKeyCount = int(Key::Count);

@@ -211,6 +211,7 @@ constexpr Binding kBindings[] = {
     {SDL_SCANCODE_F5, Key::Save},
     {SDL_SCANCODE_F9, Key::Load},
     {SDL_SCANCODE_Q, Key::Ability1}, {SDL_SCANCODE_E, Key::Ability2}, {SDL_SCANCODE_F, Key::Ability3},
+    {SDL_SCANCODE_K, Key::Loadout},
     {SDL_SCANCODE_1, Key::Flask1},   {SDL_SCANCODE_2, Key::Flask2},   {SDL_SCANCODE_3, Key::Flask3},
 };
 
@@ -2029,6 +2030,49 @@ int run_currencyuitest(audio::Mixer& mixer, const Assets& assets, const Colormap
     return pass ? 0 : 1;
 }
 
+// C7b: the 12-slot dual skill bar. Slots hold action ids (0 none, 1 Basic Attack, else ability+1);
+// bar 1 is the Ctrl secondary; the loadout cycles a slot's binding; binds persist with the character.
+int run_skillbartest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    std::remove("meta.dat");
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(7070, services);
+
+    // (A) defaults: primary LMB = Basic Attack, Q/E/R = the three abilities, secondary bar empty
+    const bool defaults = game_debug_skill_bind(0, 0) == 1 && game_debug_skill_bind(0, 3) == 2 &&
+                          game_debug_skill_bind(0, 4) == 3 && game_debug_skill_bind(0, 5) == 4 &&
+                          game_debug_skill_bind(1, 0) == 0;
+
+    // (B) the loadout cycles a slot: none -> Basic -> Voice -> Blink -> Prescience -> none
+    game_debug_set_skill_bind(0, 2, 0);
+    const bool cycle = game_debug_skill_cycle(0, 2) == 1 && game_debug_skill_cycle(0, 2) == 2 &&
+                       game_debug_skill_cycle(0, 2) == 3 && game_debug_skill_cycle(0, 2) == 4 &&
+                       game_debug_skill_cycle(0, 2) == 0;
+
+    // (C) Ctrl picks the secondary bar. Bind Prescient Calm (a Will-spending self-buff, no to-hit RNG)
+    // to the PRIMARY RMB; leave the SECONDARY RMB empty. The Ctrl run must do nothing; the primary must
+    // spend Will. (Test the empty bar first so the ability cooldown from the real cast can't confound it.)
+    game_debug_set_skill_bind(0, 1, 4);   // primary RMB = Prescient Calm (ability id 4)
+    game_debug_set_skill_bind(1, 1, 0);   // secondary RMB = none
+    const int will0 = game_debug_will();
+    game_debug_run_skill_slot(1, 1, 0, 0);           // Ctrl -> secondary RMB = none -> no cast
+    const bool secondary_empty = game_debug_will() == will0;
+    game_debug_run_skill_slot(1, 0, 0, 0);           // primary RMB -> casts (spends Will)
+    const bool primary_casts = game_debug_will() < will0;
+    const bool ctrl_bar = primary_casts && secondary_empty;
+
+    // (D) binds persist across a meta reload (DMEK round-trip)
+    game_debug_set_skill_bind(0, 2, 3);   // MMB = Prescient Step
+    game_debug_extract();
+    int mb = -1, ma = -1; game_debug_meta_reload_class(&mb, &ma);
+    const bool persisted = game_debug_meta_skill_bind(0, 2) == 3;
+
+    const bool pass = defaults && cycle && ctrl_bar && persisted;
+    std::printf("skillbartest %s (defaults %d cycle %d ctrlBar %d[%d/%d] persist %d)\n",
+                pass ? "PASS" : "FAIL", defaults, cycle, ctrl_bar, primary_casts, secondary_empty, persisted);
+    std::remove("meta.dat");
+    return pass ? 0 : 1;
+}
+
 // C6: the maula pistol — a cursor-aimed ranged shot. Bresenham line-of-fire: it drops a foe at range,
 // a wall between blocks the dart, and every shot is loud.
 int run_maulatest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
@@ -2560,7 +2604,7 @@ int main(int argc, char** argv) {
          vendortest = false, patroltest = false, cavetest = false, trialtest = false,
          endgametest = false, striketest = false, pinnacletest = false, capstonetest = false,
          longridetest = false, choamtest = false, currencytest = false, currencymechtest = false,
-         currencydroptest = false, currencyuitest = false, essencetest = false, gridtest = false, currencytabtest = false, vaulttest = false, guitest = false, economytest = false, sietchtreetest = false, passivetreetest = false, maulatest = false, abilitytest = false,
+         currencydroptest = false, currencyuitest = false, essencetest = false, gridtest = false, currencytabtest = false, vaulttest = false, guitest = false, economytest = false, sietchtreetest = false, passivetreetest = false, maulatest = false, skillbartest = false, abilitytest = false,
          flasktest = false, inputtest = false, menutest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
@@ -2607,6 +2651,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--sietchtreetest") == 0) sietchtreetest = true;
         if (SDL_strcmp(argv[i], "--passivetreetest") == 0) passivetreetest = true;
         if (SDL_strcmp(argv[i], "--maulatest") == 0) maulatest = true;
+        if (SDL_strcmp(argv[i], "--skillbartest") == 0) skillbartest = true;
         if (SDL_strcmp(argv[i], "--abilitytest") == 0) abilitytest = true;
         if (SDL_strcmp(argv[i], "--flasktest") == 0) flasktest = true;
         if (SDL_strcmp(argv[i], "--inputtest") == 0) inputtest = true;
@@ -2674,6 +2719,7 @@ int main(int argc, char** argv) {
     if (sietchtreetest) return run_sietchtreetest(mixer, assets, cmaps);
     if (passivetreetest) return run_passivetreetest(mixer, assets, cmaps);
     if (maulatest) return run_maulatest(mixer, assets, cmaps);
+    if (skillbartest) return run_skillbartest(mixer, assets, cmaps);
     if (abilitytest) return run_abilitytest(mixer, assets, cmaps);
     if (flasktest) return run_flasktest(mixer, assets, cmaps);
     if (inputtest) return run_inputtest(mixer, assets, cmaps);

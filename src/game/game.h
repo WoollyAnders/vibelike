@@ -205,6 +205,12 @@ void game_debug_fire_maula_at(int idx);      // fire at entity idx's live tile
 int game_debug_weapon_is_ranged();           // C6r: is the equipped weapon ranged?
 void game_debug_equip_ranged();              // C6r: equip a ranged weapon in the Weapon slot
 int game_debug_maula_can_hit(int dx, int dy);// C6r: would a shot at player+(dx,dy) hit a hostile?
+// --- C7b skill-bar hooks ---
+int game_debug_skill_bind(int bar, int slot);          // action bound at bar/slot (-1 invalid)
+void game_debug_set_skill_bind(int bar, int slot, int act);
+int game_debug_skill_cycle(int bar, int slot);         // cycle a slot's bind; returns the new action
+int game_debug_meta_skill_bind(int bar, int slot);     // persisted skill bind (DMEK round-trip)
+void game_debug_run_skill_slot(int slot, int ctrl, int dx, int dy);  // aim at player+(dx,dy) + run the slot
 // --- C4 passive-tree hooks ---
 int game_debug_passive_node_count();         // number of passive-tree nodes
 int game_debug_passive_has(int n);           // is node n allocated (live character)
