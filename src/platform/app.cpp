@@ -2029,6 +2029,50 @@ int run_currencyuitest(audio::Mixer& mixer, const Assets& assets, const Colormap
     return pass ? 0 : 1;
 }
 
+// G3: the Vault is its own sietch feature — a multi-tab grid stash (each tab bigger than the pack),
+// bought with spice at an escalating cost. It is no longer opened through the Naib.
+int run_vaulttest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    std::remove("meta.dat");
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(321, services);  // starts in the sietch
+
+    // (A) the Vault stands in the sietch as its own interactable
+    const bool present = game_debug_vault_present() >= 1;
+
+    // (B) fresh: 1 tab; the next costs the base (20); poor -> refused
+    const bool start1 = game_debug_stash_tabs() == 1 && game_debug_stash_tab_cost() == 20;
+    const bool poor = game_debug_buy_stash_tab() == 0 && game_debug_stash_tabs() == 1;
+
+    // (C) buying escalates (doubling): 20 -> tab2, then 40 -> tab3
+    game_debug_add_spice(20);
+    const bool buy2 = game_debug_buy_stash_tab() == 1 && game_debug_stash_tabs() == 2 &&
+                      game_debug_stash_tab_cost() == 40 && game_debug_buy_stash_tab() == 0;  // spice spent
+    game_debug_add_spice(40);
+    const bool buy3 = game_debug_buy_stash_tab() == 1 && game_debug_stash_tabs() == 3 &&
+                      game_debug_stash_tab_cost() == 80;
+
+    // (D) deposit a pack item into a bought tab (tab 1), freeing its pack cell; then withdraw it back
+    game_debug_clear_pack();
+    game_debug_setup_gear(0, 2 /*rare*/, 8);
+    const bool dep = game_debug_stash_deposit(0, 1) == 1 && game_debug_stash_used(1) == 1 &&
+                     game_debug_grid_size_of(0, nullptr, nullptr) == -1;  // pack cell 0 freed
+    const int sidx = game_debug_stash_item_at(1, 0);  // top-left cell of the tab holds it
+    const bool wd = sidx >= 0 && game_debug_stash_withdraw(1, sidx) == 1 &&
+                    game_debug_stash_used(1) == 0 && game_debug_inv_used() == 1;
+
+    // (E) tabs + their contents persist across a meta reload (DMEG round-trip)
+    game_debug_setup_gear(0, 1 /*magic*/, 8);
+    game_debug_stash_deposit(0, 2);
+    int mb = -1, ma = -1; game_debug_meta_reload_class(&mb, &ma);
+    const bool persisted = game_debug_stash_tabs() == 3 && game_debug_stash_used(2) == 1;
+
+    const bool pass = present && start1 && poor && buy2 && buy3 && dep && wd && persisted;
+    std::printf("vaulttest %s (present %d start1 %d poor %d buy2 %d buy3 %d dep %d wd %d persist %d)\n",
+                pass ? "PASS" : "FAIL", present, start1, poor, buy2, buy3, dep, wd, persisted);
+    std::remove("meta.dat");
+    return pass ? 0 : 1;
+}
+
 // G2: the crafting table is the currency store. Carried currency sits in the pack grid (1 cell each);
 // depositing moves a stack into the table's dedicated slots (freeing the cell); the bench applies from
 // the table; Ctrl-click quick-moves (currency -> table, gear -> equip). No deposit menus.
@@ -2306,7 +2350,7 @@ int main(int argc, char** argv) {
          vendortest = false, patroltest = false, cavetest = false, trialtest = false,
          endgametest = false, striketest = false, pinnacletest = false, capstonetest = false,
          longridetest = false, choamtest = false, currencytest = false, currencymechtest = false,
-         currencydroptest = false, currencyuitest = false, essencetest = false, gridtest = false, currencytabtest = false, abilitytest = false,
+         currencydroptest = false, currencyuitest = false, essencetest = false, gridtest = false, currencytabtest = false, vaulttest = false, abilitytest = false,
          flasktest = false, inputtest = false, menutest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
@@ -2347,6 +2391,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--essencetest") == 0) essencetest = true;
         if (SDL_strcmp(argv[i], "--gridtest") == 0) gridtest = true;
         if (SDL_strcmp(argv[i], "--currencytabtest") == 0) currencytabtest = true;
+        if (SDL_strcmp(argv[i], "--vaulttest") == 0) vaulttest = true;
         if (SDL_strcmp(argv[i], "--abilitytest") == 0) abilitytest = true;
         if (SDL_strcmp(argv[i], "--flasktest") == 0) flasktest = true;
         if (SDL_strcmp(argv[i], "--inputtest") == 0) inputtest = true;
@@ -2408,6 +2453,7 @@ int main(int argc, char** argv) {
     if (essencetest) return run_essencetest(mixer, assets, cmaps);
     if (gridtest) return run_gridtest(mixer, assets, cmaps);
     if (currencytabtest) return run_currencytabtest(mixer, assets, cmaps);
+    if (vaulttest) return run_vaulttest(mixer, assets, cmaps);
     if (abilitytest) return run_abilitytest(mixer, assets, cmaps);
     if (flasktest) return run_flasktest(mixer, assets, cmaps);
     if (inputtest) return run_inputtest(mixer, assets, cmaps);

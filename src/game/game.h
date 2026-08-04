@@ -61,6 +61,15 @@ void game_debug_rpg(int* level, int* inv_count, int* stash_count);
 void game_debug_grab_loot();
 void game_debug_vault_deposit_all();
 int game_debug_vault_withdraw_one();
+// --- G3 multi-tab Vault hooks ---
+int game_debug_stash_tabs();                     // owned stash tabs
+int game_debug_stash_tab_cost();                 // spice cost of the next tab (0 if maxed)
+int game_debug_buy_stash_tab();                  // buy a tab; 1 on success
+int game_debug_stash_used(int t);                // banked items in tab t
+int game_debug_stash_deposit(int pidx, int t);   // pack pool entry pidx -> tab t
+int game_debug_stash_withdraw(int t, int sidx);  // tab t pool entry sidx -> pack
+int game_debug_stash_item_at(int t, int gc);     // tab-t pool index covering stash cell gc (-1)
+int game_debug_vault_present();                  // count of Vault interactables in the current zone
 void game_debug_warp_to_boss(int* atk_dx, int* atk_dy);
 bool game_debug_boss_alive();
 bool game_debug_boss_is_baron();

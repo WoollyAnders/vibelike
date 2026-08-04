@@ -29,7 +29,7 @@ constexpr int kMaxDeltas = 192;
 enum class EType : uint8_t { None = 0, Player, Hound, Corpse, Thumper, Trooper, Spotter,
                              Glowglobe, ShieldTrooper, Naib, Sayyadina, Smuggler,
                              PanAdder, Hermit, HunterSeeker, SpiceCache, Loot, Boss,
-                             Caravan, Envoy, Fremen, Paul, CaveMouth, WarRoom, Currency };
+                             Caravan, Envoy, Fremen, Paul, CaveMouth, WarRoom, Currency, Vault };
 enum class Ai : uint8_t { Idle = 0, Wander, Hunt, Guard, Patrol };  // Patrol (B8): route-walker
 
 struct Entity {
@@ -269,6 +269,7 @@ struct GameState {
     int jihad_tier = 1;  // transient UI: the commission tier chosen at the Jihad Table (Left/Right)
     int bench_cur = 0;   // transient UI: the currency picked at the bench (0 = choosing a currency)
     int vault_page = 0;
+    int stash_tab = 0;   // G3: the stash tab the Vault screen is viewing (0..stash_tabs-1)
     int last_decay_day = 0;
 
     // Naib task: 0 none, 1 kill hounds, 2 gather spice, 3 quiet denial
@@ -643,6 +644,7 @@ void spawn_zone_wildlife(map::Zone& z, uint8_t zone_id) {
         place_npc_near(EType::Naib, z, zone_id, 30, 30);       // great hall
         place_npc_near(EType::Sayyadina, z, zone_id, 32, 16);  // cistern chamber
         place_npc_near(EType::Smuggler, z, zone_id, 50, 28);   // storeroom
+        place_npc_near(EType::Vault, z, zone_id, 52, 25);      // G3: the sietch vault (its own storeroom prop)
         // dialog-only Fremen — one per chamber, each in open floor well away from
         // the vendors and the wall-hugging props (so no NPC+prop "huddle" reads as
         // a cluster), each a distinct tribesperson (data = sprite/bark index).
@@ -1053,8 +1055,11 @@ void refresh_fov_and_paths() {
 struct Meta {
     uint32_t runs = 0;
     uint8_t endings_seen = 0;      // bit per campaign::Ending
-    uint8_t stash_count = 0;       // X4: the tribe vault — gear that survived
-    items::Inst stash[24];
+    // G3 (DMEG): the Vault is a set of PoE-style stash tabs, each a 12x12 grid. `stash_tabs` owned (>=1),
+    // bought with spice. (The old flat stash[24]/stash_count retire; old saves migrate into tab 0.)
+    uint8_t stash_tabs = 1;
+    items::Inst stash[tune::kMaxStashTabs][tune::kStashCap];
+    uint8_t stash_cell[tune::kMaxStashTabs][tune::kStashCap] = {};
     // --- B5 (DME3) ---
     uint8_t awaken_unlocked = 1;   // highest Awaken level the player may launch (1..10)
     uint8_t awaken_cleared = 0;    // highest pinnacle defeated
@@ -1125,6 +1130,7 @@ int guild_difficulty() {
     return d < 0 ? 0 : d > cap ? cap : d;
 }
 
+inline constexpr uint32_t kMetaVG = 0x47454D44u;  // 'DMEG' (G3: multi-tab grid stash + stash_tabs)
 inline constexpr uint32_t kMetaVF = 0x46454D44u;  // 'DMEF' (G2: + cur_tab, the crafting-table currency slots)
 inline constexpr uint32_t kMetaVE = 0x45454D44u;  // 'DMEE' (G: pack grid 12->96 + inv_cell)
 inline constexpr uint32_t kMetaVD = 0x44454D44u;  // 'DMED' (D3e: + spice_essence, the Awakening resource)
@@ -1197,12 +1203,25 @@ void meta_load() {
     if (!f) return;
     uint32_t magic = 0;
     if (std::fread(&magic, 4, 1, f) == 1) {
-        if (magic >= kMetaV4 && magic <= kMetaVF && magic != kMetaV1) {  // native widened-Inst format (DME4..DMEF)
+        if (magic >= kMetaV4 && magic <= kMetaVG && magic != kMetaV1) {  // native widened-Inst format (DME4..DMEG)
             const bool cur = (magic >= kMetaVC);  // DMEC+ = new Inst layout; older = OldInst (convert)
             (void)!std::fread(&g_meta.runs, 4, 1, f);
             (void)!std::fread(&g_meta.endings_seen, 1, 1, f);
-            (void)!std::fread(&g_meta.stash_count, 1, 1, f);
-            read_inst_blob(f, g_meta.stash, cur);
+            if (magic >= kMetaVG) {  // G3: the multi-tab grid stash (Inst layout is current here)
+                (void)!std::fread(&g_meta.stash_tabs, 1, 1, f);
+                (void)!std::fread(g_meta.stash, sizeof g_meta.stash, 1, f);
+                (void)!std::fread(g_meta.stash_cell, sizeof g_meta.stash_cell, 1, f);
+            } else {  // DMEF and earlier: a flat 24-slot stash -> migrate the banked items into tab 0
+                uint8_t old_count = 0;
+                (void)!std::fread(&old_count, 1, 1, f);
+                items::Inst old_stash[24];
+                read_inst_blob(f, old_stash, cur);
+                for (int t = 0; t < tune::kMaxStashTabs; ++t)
+                    for (int i = 0; i < tune::kStashCap; ++i) g_meta.stash[t][i] = items::Inst{};
+                for (int i = 0; i < old_count && i < 24; ++i) g_meta.stash[0][i] = old_stash[i];
+                regrid_pool(g_meta.stash[0], g_meta.stash_cell[0], tune::kStashCap, tune::kStashW, tune::kStashH);
+                g_meta.stash_tabs = 1;
+            }
             (void)!std::fread(&g_meta.awaken_unlocked, 1, 1, f);
             (void)!std::fread(&g_meta.awaken_cleared, 1, 1, f);
             (void)!std::fread(&g_meta.has_char, 1, 1, f);
@@ -1260,10 +1279,13 @@ void meta_load() {
         } else if (magic == kMetaV3 || magic == kMetaV2) {  // legacy 4-byte items -> convert
             (void)!std::fread(&g_meta.runs, 4, 1, f);
             (void)!std::fread(&g_meta.endings_seen, 1, 1, f);
-            (void)!std::fread(&g_meta.stash_count, 1, 1, f);
+            uint8_t old_count = 0;
+            (void)!std::fread(&old_count, 1, 1, f);
             LegacyInst ls[24] = {};
             (void)!std::fread(ls, sizeof ls, 1, f);
-            for (int i = 0; i < 24; ++i) g_meta.stash[i] = convert_legacy(ls[i]);
+            for (int i = 0; i < old_count && i < 24; ++i) g_meta.stash[0][i] = convert_legacy(ls[i]);  // G3: tab 0
+            regrid_pool(g_meta.stash[0], g_meta.stash_cell[0], tune::kStashCap, tune::kStashW, tune::kStashH);
+            g_meta.stash_tabs = 1;
             if (magic == kMetaV3) {
                 (void)!std::fread(&g_meta.awaken_unlocked, 1, 1, f);
                 (void)!std::fread(&g_meta.awaken_cleared, 1, 1, f);
@@ -1288,11 +1310,12 @@ void meta_load() {
 void meta_save() {
     FILE* f = std::fopen("meta.dat", "wb");
     if (!f) return;
-    std::fwrite(&kMetaVF, 4, 1, f);  // G2: DMEF (+ cur_tab; DMEE pack grid + inv_cell ride the blobs)
+    std::fwrite(&kMetaVG, 4, 1, f);  // G3: DMEG (multi-tab grid stash; earlier blobs ride along)
     std::fwrite(&g_meta.runs, 4, 1, f);
     std::fwrite(&g_meta.endings_seen, 1, 1, f);
-    std::fwrite(&g_meta.stash_count, 1, 1, f);
-    std::fwrite(g_meta.stash, sizeof g_meta.stash, 1, f);
+    std::fwrite(&g_meta.stash_tabs, 1, 1, f);                       // G3: owned tab count
+    std::fwrite(g_meta.stash, sizeof g_meta.stash, 1, f);          // G3: per-tab grid pools
+    std::fwrite(g_meta.stash_cell, sizeof g_meta.stash_cell, 1, f);  // G3: per-tab grid cells
     std::fwrite(&g_meta.awaken_unlocked, 1, 1, f);
     std::fwrite(&g_meta.awaken_cleared, 1, 1, f);
     std::fwrite(&g_meta.has_char, 1, 1, f);
@@ -1615,6 +1638,45 @@ void pack_place_at(int idx, const items::Inst& it) {
     const items::GridSize s = it.size();
     const int c = grid_find_fit(occ, tune::kPackW, tune::kPackH, s.w, s.h);
     g.pl.inv_cell[idx] = uint8_t(c < 0 ? 0 : c);
+}
+
+// ---- G3: the Vault — PoE-style stash tabs (each a 12x12 grid), bought with spice -------------------
+int stash_tab_cost() {  // spice for the NEXT tab (doubling from a base); 0 if maxed out
+    if (g_meta.stash_tabs >= tune::kMaxStashTabs) return 0;
+    return tune::kStashTabBase << (g_meta.stash_tabs - 1);  // 2nd tab = base, 3rd = 2*base, ...
+}
+bool buy_stash_tab() {
+    const int cost = stash_tab_cost();
+    if (cost <= 0 || g.pl.spice < cost) return false;
+    g.pl.spice -= cost;
+    ++g_meta.stash_tabs;
+    meta_save();
+    return true;
+}
+int stash_used(int t) {  // non-empty entries in tab t
+    if (t < 0 || t >= tune::kMaxStashTabs) return 0;
+    int n = 0;
+    for (int i = 0; i < tune::kStashCap; ++i) if (!g_meta.stash[t][i].empty()) ++n;
+    return n;
+}
+// Deposit pack pool entry `pidx` into stash tab `t` (first-fit), freeing the pack cell. -> ok?
+bool stash_deposit(int pidx, int t) {
+    if (pidx < 0 || pidx >= tune::kInvCap || g.pl.inv[pidx].empty()) return false;
+    if (t < 0 || t >= g_meta.stash_tabs) return false;
+    if (grid_add(g_meta.stash[t], g_meta.stash_cell[t], tune::kStashCap, tune::kStashW, tune::kStashH,
+                 g.pl.inv[pidx]) < 0) return false;  // no room in the tab
+    g.pl.inv[pidx] = items::Inst{};
+    meta_save();
+    return true;
+}
+// Withdraw stash tab `t` pool entry `sidx` back into the pack (first-fit). -> ok?
+bool stash_withdraw(int t, int sidx) {
+    if (t < 0 || t >= g_meta.stash_tabs || sidx < 0 || sidx >= tune::kStashCap) return false;
+    if (g_meta.stash[t][sidx].empty()) return false;
+    if (pack_add(g_meta.stash[t][sidx]) < 0) return false;  // no pack room
+    g_meta.stash[t][sidx] = items::Inst{};
+    meta_save();
+    return true;
 }
 
 // ---- D2 crafting: the sietch bench spends materials to work gear -----------------------------------
@@ -4855,6 +4917,7 @@ const char* describe_at(int tx, int ty) {
             case EType::SpiceCache: return "raw spice (G: gather)";
             case EType::CaveMouth: return "hidden cavern (step in to enter)";
             case EType::WarRoom: return "the War Council (enact the Jihad)";
+            case EType::Vault: return "the sietch vault (stash tabs)";
             case EType::Currency: {
                 static char cbuf[48];
                 std::snprintf(cbuf, sizeof cbuf, "%s (walk over to collect)",
@@ -4912,7 +4975,7 @@ int menu_row_under_mouse(const InputState& in) {
     if (g.menu_open >= 1 && g.menu_open <= 4) {           // vendor lists (R2: 2x)
         const int x0 = fb::W / 2 - 300, y0 = 280;
         if (mx < x0 + 16 || mx > x0 + 16 + 568) return -1;
-        const int counts[5] = {0, 6, 3, 5, 4};  // B7: Naib gained "Signal the Guild"
+        const int counts[5] = {0, 5, 3, 5, 4};  // G3: Naib lost the vault row (moved to its own prop)
         for (int i = 0; i < counts[g.menu_open]; ++i) {
             const int ry = y0 + 80 + i * 32 - 4;
             if (my >= ry && my < ry + 32) return i;
@@ -5003,8 +5066,8 @@ bool game_update(const InputState& in) {
     // vendor menus pause the world (browsing is free)
     if (g.menu_open) {
         // 5 = character sheet, 6 = inventory, 7 = the vault
-        int counts[12] = {0, 6, 3, 5, 4, 3 + kTalentCount + 1, 13, 13,
-                          4, 5 + 1 + 1, 5 + 1 + 1, 1};  // 8 council, 9 table, 10 landsraad, 11 bench
+        int counts[12] = {0, 5, 3, 5, 4, 3 + kTalentCount + 1, 13, 13,
+                          4, 5 + 1 + 1, 5 + 1 + 1, 1};  // G3: Naib 6->5 (vault moved out)
         int n = counts[g.menu_open];
         if (g.menu_open == 11) {  // D3d bench: rows are owned currencies, or gear once a currency is picked
             uint8_t cb[items::CUR_COUNT]; int gi[12];
@@ -5117,7 +5180,8 @@ bool game_update(const InputState& in) {
             return true;
         }
         if (g.menu_open == 7) {
-            // vault: Left/Right pages (0 deposit inv, 1 withdraw stash)
+            // G3 Vault (interim keyboard UI; G4 makes it a spatial multi-tab grid): Left/Right toggles
+            // deposit/withdraw, the current stash tab is g.stash_tab. Row 12 = buy the next tab.
             if (in.was_pressed(Key::Left) || in.was_pressed(Key::Right)) {
                 g.vault_page ^= 1;
                 g.menu_sel = 0;
@@ -5126,29 +5190,25 @@ bool game_update(const InputState& in) {
             if (in.was_pressed(Key::Down)) g.menu_sel = (g.menu_sel + 1) % n;
             if (in.was_pressed(Key::Cancel)) g.menu_open = 0;
             if (in.was_pressed(Key::Confirm) || mclick) {
-                if (g.menu_sel == 12) {
-                    g.menu_open = 0;
-                } else if (g.vault_page == 0) {  // deposit
-                    items::Inst& it = g.pl.inv[g.menu_sel];
-                    if (g.season.denied < 1) {
+                if (g.menu_sel == 12) {  // buy the next stash tab (spice, escalating)
+                    const int cost = stash_tab_cost();
+                    if (cost <= 0) g.log.push("The vault is at its full span (%d tabs).", int(g_meta.stash_tabs));
+                    else if (buy_stash_tab()) g.log.push("A new stash tab is carved. -%d spice.", cost);
+                    else g.log.push("Not enough spice for a new tab (%d needed).", cost);
+                } else if (g.vault_page == 0) {  // deposit inv[sel] -> the current tab
+                    if (g.season.denied < 1)
                         g.log.push("'The vault opens for the blooded. Deny a harvest first.'");
-                    } else if (!it.empty() && g_meta.stash_count < 24) {
-                        g_meta.stash[g_meta.stash_count++] = it;
-                        char nm[64];
-                        it.full_name(nm, sizeof nm);
-                        g.log.push("Banked: %s. It is the tribe's now - and yours.", nm);
-                        it = items::Inst{};
-                        meta_save();
+                    else if (!g.pl.inv[g.menu_sel].empty()) {
+                        char nm[64]; g.pl.inv[g.menu_sel].full_name(nm, sizeof nm);
+                        if (stash_deposit(g.menu_sel, g.stash_tab))
+                            g.log.push("Banked: %s. It is the tribe's now - and yours.", nm);
+                        else g.log.push("This stash tab has no room for that.");
                     }
-                } else {  // withdraw
-                    if (g.menu_sel < g_meta.stash_count && pack_add(g_meta.stash[g.menu_sel]) >= 0) {
-                        char nm[64];
-                        g_meta.stash[g.menu_sel].full_name(nm, sizeof nm);
-                        for (int i = g.menu_sel; i + 1 < g_meta.stash_count; ++i)
-                            g_meta.stash[i] = g_meta.stash[i + 1];
-                        --g_meta.stash_count;
-                        g.log.push("Withdrawn: %s", nm);
-                        meta_save();
+                } else {  // withdraw the current tab's entry sel -> the pack
+                    if (!g_meta.stash[g.stash_tab][g.menu_sel].empty()) {
+                        char nm[64]; g_meta.stash[g.stash_tab][g.menu_sel].full_name(nm, sizeof nm);
+                        if (stash_withdraw(g.stash_tab, g.menu_sel)) g.log.push("Withdrawn: %s", nm);
+                        else g.log.push("Your pack has no room for that.");
                     }
                 }
             }
@@ -5196,16 +5256,11 @@ bool game_update(const InputState& in) {
                         }
                     }
                     break;
-                case 13:  // the tribe vault
-                    g.menu_open = 7;
-                    g.menu_sel = 0;
-                    g.vault_page = 0;
-                    break;
-                case 14:  // Naib: ride out to the Ninth Rock to meet the Guild (B7 rendezvous)
-                    g.menu_open = 0;
+                case 13:  // Naib: ride out to the Ninth Rock to meet the Guild (B7 rendezvous)
+                    g.menu_open = 0;  // G3: the vault moved to its own sietch prop; this row shifted up
                     enter_rendezvous();
                     break;
-                case 15: g.menu_open = 0; break;  // leave
+                case 14: g.menu_open = 0; break;  // leave
                 case 20:  // Sayyadina: spice tribute
                     if (g.pl.spice >= 5) {
                         g.pl.spice -= 5;
@@ -5349,6 +5404,7 @@ bool game_update(const InputState& in) {
         else if (entity_at(g.hover_tx, g.hover_ty, g.cur_zone, EType::Fremen)) g.interact_kind = 5;
         else if (entity_at(g.hover_tx, g.hover_ty, g.cur_zone, EType::Paul)) g.interact_kind = 6;
         else if (entity_at(g.hover_tx, g.hover_ty, g.cur_zone, EType::WarRoom)) g.interact_kind = 7;
+        else if (entity_at(g.hover_tx, g.hover_ty, g.cur_zone, EType::Vault)) g.interact_kind = 8;  // G3
         else g.interact_kind = 0;
     } else if (cursor_in_world && in.mouse_down[0] &&
                (g.hover_tx != g.move_goal_x || g.hover_ty != g.move_goal_y)) {
@@ -5398,6 +5454,11 @@ bool game_update(const InputState& in) {
                 } else if (g.interact_kind == 7) {  // the War Council table -> the Jihad hub menu (8)
                     g.menu_open = 8;
                     g.menu_sel = 0;
+                } else if (g.interact_kind == 8) {  // G3: the sietch Vault -> the stash screen (menu 7)
+                    g.menu_open = 7;
+                    g.menu_sel = 0;
+                    g.vault_page = 0;
+                    g.stash_tab = 0;
                 } else {
                     g.menu_open = g.interact_kind;  // 1 Naib / 2 Sayyadina / 3 Smuggler
                     g.menu_sel = 0;
@@ -5693,7 +5754,7 @@ void pass_entities(RenderCtx& r) {
         switch (e.type) {
             case EType::Glowglobe: case EType::HunterSeeker: case EType::Corpse:
             case EType::SpiceCache: case EType::Loot: case EType::Thumper:
-            case EType::CaveMouth: case EType::WarRoom: case EType::Currency: break;
+            case EType::CaveMouth: case EType::WarRoom: case EType::Currency: case EType::Vault: break;
             default:
                 if (!(e.type == EType::Player && g.pl.riding))
                     ground_shadow(r.ctx.frame, sx, sy + 16, 18, 8);
@@ -5769,6 +5830,9 @@ void pass_entities(RenderCtx& r) {
                 break;
             case EType::WarRoom:  // the War Council table (placeholder sprite until E2)
                 g.draw_list.add(&sheet_or_ph(r, "wartable"), 0, sx, sy + 12, light, 1);
+                break;
+            case EType::Vault:  // G3: the sietch stash (placeholder sprite until art exists)
+                g.draw_list.add(&sheet_or_ph(r, "vault"), 0, sx, sy + 12, light, 1);
                 break;
             case EType::Currency:  // D3d: dropped crafting currency (placeholder sprite until E2)
                 g.draw_list.add(&sheet_or_ph(r, "currency"), 0, sx, sy + 8, 31, 0);
@@ -5975,7 +6039,8 @@ const ManualPage kManual[] = {
     {"THE SIETCH (YOUR HUB)", {
         "Between raids you rest in the sietch. It is safe: no worms, no death.",
         "",
-        "The Naib ...... tribe tasks, and the vault (banked gear survives death)",
+        "The Naib ...... tribe tasks and the ride to the Ninth Rock",
+        "The Vault ..... stash tabs (banked gear survives death; buy more with spice)",
         "The Sayyadina . spice-rites and healing",
         "The Smuggler .. gear, water, and consumables for spice",
         "",
@@ -6457,11 +6522,11 @@ void pass_ui(RenderCtx& r) {
             draw_text(ctx, g.menu_sel == 12 ? "> Close" : "  Close", x0 + 32, y0 + 460,
                       uint8_t(g.menu_sel == 12 ? 245 : 20));
         } else {
-            std::snprintf(buf, sizeof buf, "THE TRIBE VAULT - %s (left/right)",
-                          g.vault_page == 0 ? "DEPOSIT" : "WITHDRAW");
+            std::snprintf(buf, sizeof buf, "THE SIETCH VAULT - tab %d/%d - %s (left/right)",
+                          g.stash_tab + 1, int(g_meta.stash_tabs), g.vault_page == 0 ? "DEPOSIT" : "WITHDRAW");
             draw_text_shadow(ctx, buf, x0 + 24, y0 + 16, 230, 1);
-            std::snprintf(buf, sizeof buf, "banked %d/24 - the vault survives your death",
-                          int(g_meta.stash_count));
+            const int cost = stash_tab_cost();
+            std::snprintf(buf, sizeof buf, "tab holds %d - the vault survives your death", stash_used(g.stash_tab));
             draw_text(ctx, buf, x0 + 24, y0 + 44, 14);
             for (int i = 0; i < 12; ++i) {
                 const bool sel = g.menu_sel == i;
@@ -6469,11 +6534,13 @@ void pass_ui(RenderCtx& r) {
                 if (sel) fill_rect(ctx, x0 + 16, y - 2, 728, 22, 4);
                 char nm[64] = "-";
                 if (g.vault_page == 0) g.pl.inv[i].full_name(nm, sizeof nm);
-                else if (i < g_meta.stash_count) g_meta.stash[i].full_name(nm, sizeof nm);
+                else g_meta.stash[g.stash_tab][i].full_name(nm, sizeof nm);
                 draw_text(ctx, nm, x0 + 32, y, uint8_t(sel ? 245 : 20));
             }
-            draw_text(ctx, g.menu_sel == 12 ? "> Close" : "  Close", x0 + 32, y0 + 420,
-                      uint8_t(g.menu_sel == 12 ? 245 : 20));
+            if (cost > 0) std::snprintf(buf, sizeof buf, "%s Buy a new tab  (%d spice)",
+                                        g.menu_sel == 12 ? ">" : " ", cost);
+            else std::snprintf(buf, sizeof buf, "%s Close  (vault at full span)", g.menu_sel == 12 ? ">" : " ");
+            draw_text(ctx, buf, x0 + 32, y0 + 420, uint8_t(g.menu_sel == 12 ? 245 : 20));
         }
     } else
     // Vendor menu overlay.
@@ -6481,7 +6548,7 @@ void pass_ui(RenderCtx& r) {
         static const char* kMenus[5][6] = {
             {},
             {"Tribute 200 water  (+10 standing)", "Ask about the season",
-             "A task for the tribe", "Open the tribe vault", "Ride out to the Ninth Rock (Guild tithe)", "Leave"},
+             "A task for the tribe", "Ride out to the Ninth Rock (Guild tithe)", "Leave", nullptr},
             {"Offer 5 spice  (+12 standing)", "Healing trance  (6 spice)", "Leave", nullptr},
             {"Demolition charge  (5 spice)", "Two thumpers  (3 spice)",
              "Toxin vial  (2 spice)", "Glowglobe  (3 spice)", "Leave"},
@@ -7493,9 +7560,10 @@ int game_debug_meta_migrate_selftest() {
     }
     g_meta = Meta{};
     meta_load();
-    return (g_meta.stash_count == 2 && g_meta.banked_spice == 1234 && g_meta.awaken_unlocked == 5 &&
-            !g_meta.stash[0].empty() && g_meta.stash[0].ilvl >= 1 &&
-            (g_meta.stash[0].nprefix + g_meta.stash[0].nsuffix) >= 2 && g_meta.stash[1].rarity == items::R_COMMON)
+    return (stash_used(0) == 2 && g_meta.stash_tabs == 1 && g_meta.banked_spice == 1234 &&
+            g_meta.awaken_unlocked == 5 && !g_meta.stash[0][0].empty() && g_meta.stash[0][0].ilvl >= 1 &&
+            (g_meta.stash[0][0].nprefix + g_meta.stash[0][0].nsuffix) >= 2 &&
+            g_meta.stash[0][1].rarity == items::R_COMMON)
                ? 1 : 0;
 }
 // D1 harness: roll an item of `slot` at a forced item level; report rarity, affix count, top tier.
@@ -7540,7 +7608,10 @@ void game_debug_rpg(int* level, int* inv_count, int* stash_count) {
             if (!it.empty()) ++n;
         *inv_count = n;
     }
-    if (stash_count) *stash_count = g_meta.stash_count;
+    if (stash_count) {  // G3: total banked items across all owned tabs
+        int n = 0; for (int t = 0; t < g_meta.stash_tabs; ++t) n += stash_used(t);
+        *stash_count = n;
+    }
 }
 
 void game_debug_grab_loot() {
@@ -7550,21 +7621,33 @@ void game_debug_grab_loot() {
     }
 }
 
-void game_debug_vault_deposit_all() {
-    for (items::Inst& it : g.pl.inv)
-        if (!it.empty() && g_meta.stash_count < 24) {
-            g_meta.stash[g_meta.stash_count++] = it;
-            it = items::Inst{};
-        }
+void game_debug_vault_deposit_all() {  // G3: bank every pack item into tab 0 (first-fit)
+    for (int i = 0; i < tune::kInvCap; ++i)
+        if (!g.pl.inv[i].empty()) stash_deposit(i, 0);
     meta_save();
 }
 
-int game_debug_vault_withdraw_one() {
-    if (g_meta.stash_count == 0) return 0;
-    if (pack_add(g_meta.stash[g_meta.stash_count - 1]) < 0) return 0;
-    --g_meta.stash_count;
-    meta_save();
-    return 1;
+int game_debug_vault_withdraw_one() {  // G3: pull the first banked item (tab 0) back into the pack
+    for (int i = 0; i < tune::kStashCap; ++i)
+        if (!g_meta.stash[0][i].empty()) return stash_withdraw(0, i) ? 1 : 0;
+    return 0;
+}
+// --- G3 vault hooks ---
+int game_debug_stash_tabs() { return g_meta.stash_tabs; }
+int game_debug_stash_tab_cost() { return stash_tab_cost(); }
+int game_debug_buy_stash_tab() { return buy_stash_tab() ? 1 : 0; }
+int game_debug_stash_used(int t) { return stash_used(t); }
+int game_debug_stash_deposit(int pidx, int t) { return stash_deposit(pidx, t) ? 1 : 0; }
+int game_debug_stash_withdraw(int t, int sidx) { return stash_withdraw(t, sidx) ? 1 : 0; }
+// The tab pool index whose footprint covers stash-grid cell `gc` in tab `t` (-1 = empty).
+int game_debug_stash_item_at(int t, int gc) {
+    if (t < 0 || t >= tune::kMaxStashTabs) return -1;
+    return grid_item_at(g_meta.stash[t], g_meta.stash_cell[t], tune::kStashCap, tune::kStashW, gc);
+}
+int game_debug_vault_present() {  // count of EType::Vault interactables in the current zone
+    int n = 0;
+    for (const Entity& e : g.ents) if (e.type == EType::Vault && e.zone == g.cur_zone) ++n;
+    return n;
 }
 
 void game_debug_clear_hostiles() {

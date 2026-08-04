@@ -133,6 +133,13 @@ inline constexpr int kPackW   = 8;               // the pack grid: 8 wide x 12 t
 inline constexpr int kPackH   = 12;
 inline constexpr int kInvCap  = kPackW * kPackH;  // pool size (worst case: an all-1x1 grid)
 
+// --- G3: the Vault — PoE-style stash tabs (each a grid bigger than the pack), bought with spice ---
+inline constexpr int kStashW       = 12;         // a stash tab: 12 wide x 12 tall = 144 cells
+inline constexpr int kStashH       = 12;
+inline constexpr int kStashCap     = kStashW * kStashH;  // per-tab pool size
+inline constexpr int kMaxStashTabs = 8;          // hard cap on owned tabs
+inline constexpr int kStashTabBase = 20;         // spice cost of the 2nd tab; each next tab doubles
+
 // --- Endgame: the Jihad (spice-commissioned strikes -> directed faction pressure -> pinnacles) ---
 // Each cleared strike presses its target Great Power; at kPinnaclePressure that power's homeworld
 // pinnacle opens. Higher-tier strikes press harder (and cost more spice / hit harder).
