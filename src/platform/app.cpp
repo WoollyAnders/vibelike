@@ -2181,51 +2181,6 @@ int run_maulatest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cm
     return pass ? 0 : 1;
 }
 
-// C4: the passive skill tree. A shared node graph, a class anchor per corner, adjacency-gated
-// allocation, one point per level; node bonuses fold into every derived stat and persist with the
-// character. (Nodes: 0/1/2 anchors; 4 Killer's Edge +6% Lethality adjacent to the Knifehand anchor.)
-int run_passivetreetest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
-    std::remove("meta.dat");
-    GameServices services{&mixer, &assets, &cmaps};
-    game_init(6160, services);
-    game_debug_apply_base(0);      // Knifehand -> node 0 anchor auto-allocated
-    game_debug_set_level(6);       // 5 passive points (1/level after 1)
-
-    // (A) the class anchor is allocated for free; 5 points available
-    const bool anchor = game_debug_passive_has(0) == 1 && game_debug_passive_points() == 5;
-
-    // (B) adjacency gating: node 4 (adjacent to the anchor) is allocatable; node 5 (a hop further) and
-    //     node 8 (the Wanderer arm) are not yet reachable
-    const bool gate = game_debug_passive_allocatable(4) == 1 &&
-                      game_debug_passive_allocatable(5) == 0 &&
-                      game_debug_passive_allocatable(8) == 0;
-
-    // (C) allocating node 4 spends a point and moves the derived stat (+6% Lethality)
-    const bool alloc4 = game_debug_passive_alloc(4) == 1 && game_debug_passive_points() == 4 &&
-                        game_debug_passive_bonus(items::AK_INC_DMG) == 6;
-    const bool opened5 = game_debug_passive_allocatable(5) == 1;  // now the next node opens up
-
-    // (D) hybrid by pathing: walk 5 -> 6 -> 3 (center), then the Wanderer arm (node 10, adjacent to
-    //     center) becomes reachable from a Knifehand start
-    game_debug_passive_alloc(5); game_debug_passive_alloc(6); game_debug_passive_alloc(3);
-    const bool hybrid = game_debug_passive_has(3) == 1 && game_debug_passive_allocatable(10) == 1;
-
-    // (E) points gating: spend the last point, then nothing is allocatable
-    game_debug_passive_alloc(10);                         // that was the 5th point
-    const bool broke = game_debug_passive_points() == 0 && game_debug_passive_allocatable(16) == 0;
-
-    // (F) persistence: extract banks the character (incl. passives) to meta; the DMEJ round-trip keeps them
-    game_debug_extract();
-    int mb = -1, ma = -1; game_debug_meta_reload_class(&mb, &ma);
-    const bool persisted = game_debug_meta_passive_has(4) == 1 && game_debug_meta_passive_has(10) == 1;
-
-    const bool pass = anchor && gate && alloc4 && opened5 && hybrid && broke && persisted;
-    std::printf("passivetreetest %s (anchor %d gate %d alloc %d opened %d hybrid %d broke %d persist %d)\n",
-                pass ? "PASS" : "FAIL", anchor, gate, alloc4, opened5, hybrid, broke, persisted);
-    std::remove("meta.dat");
-    return pass ? 0 : 1;
-}
-
 // C5b: the Sietch talent tree. Litrejons buy ranks of AffixKind bonuses that fold into every derived
 // stat (via affix_total) and persist across death. Node 4 = Tribe's Vigor (+6% Life / rank).
 int run_sietchtreetest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
@@ -2675,7 +2630,7 @@ int main(int argc, char** argv) {
          vendortest = false, patroltest = false, cavetest = false, trialtest = false,
          endgametest = false, striketest = false, pinnacletest = false, capstonetest = false,
          longridetest = false, choamtest = false, currencytest = false, currencymechtest = false,
-         currencydroptest = false, currencyuitest = false, essencetest = false, gridtest = false, currencytabtest = false, vaulttest = false, guitest = false, economytest = false, sietchtreetest = false, passivetreetest = false, maulatest = false, skillbartest = false, skilltreetest = false, abilitytest = false,
+         currencydroptest = false, currencyuitest = false, essencetest = false, gridtest = false, currencytabtest = false, vaulttest = false, guitest = false, economytest = false, sietchtreetest = false, maulatest = false, skillbartest = false, skilltreetest = false, abilitytest = false,
          flasktest = false, inputtest = false, menutest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
@@ -2720,7 +2675,6 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--guitest") == 0) guitest = true;
         if (SDL_strcmp(argv[i], "--economytest") == 0) economytest = true;
         if (SDL_strcmp(argv[i], "--sietchtreetest") == 0) sietchtreetest = true;
-        if (SDL_strcmp(argv[i], "--passivetreetest") == 0) passivetreetest = true;
         if (SDL_strcmp(argv[i], "--maulatest") == 0) maulatest = true;
         if (SDL_strcmp(argv[i], "--skillbartest") == 0) skillbartest = true;
         if (SDL_strcmp(argv[i], "--skilltreetest") == 0) skilltreetest = true;
@@ -2789,7 +2743,6 @@ int main(int argc, char** argv) {
     if (guitest) return run_guitest(mixer, assets, cmaps);
     if (economytest) return run_economytest(mixer, assets, cmaps);
     if (sietchtreetest) return run_sietchtreetest(mixer, assets, cmaps);
-    if (passivetreetest) return run_passivetreetest(mixer, assets, cmaps);
     if (maulatest) return run_maulatest(mixer, assets, cmaps);
     if (skillbartest) return run_skillbartest(mixer, assets, cmaps);
     if (skilltreetest) return run_skilltree_test(mixer, assets, cmaps);

@@ -484,9 +484,8 @@ int foe_hp(EType t) {
 Entity& player_ent() { return g.ents[0]; }
 
 int sietch_affix_bonus(uint8_t kind);   // C5b: fwd — the sietch tree contributes to every derived stat
-int passive_affix_bonus(uint8_t kind);  // C4: fwd — the character's allocated passive tree, likewise
 int affix_total(uint8_t kind) {
-    int p = sietch_affix_bonus(kind) + passive_affix_bonus(kind);  // tree bonuses, on top of equipped gear
+    int p = sietch_affix_bonus(kind);  // C8b: the Sietch tree is the only stat tree now (C4 retired)
     for (const items::Inst& it : g.pl.equip) p += it.affix_power(kind);
     return p;
 }
@@ -1086,39 +1085,8 @@ inline constexpr SietchNode kSietchNodes[] = {
 };
 inline constexpr int kSietchNodeCount = int(sizeof kSietchNodes / sizeof *kSietchNodes);
 
-// C4: the passive skill tree — one shared node graph, a class-start anchor per corner, adjacency-gated
-// allocation, one point per level. Each allocated node grants an AffixKind bonus folded into
-// affix_total() (like the sietch tree). The 3 START nodes are pure anchors (value 0) so a fresh
-// auto-allocated character perturbs no derived stat (dettest stays put). Up to 64 nodes (a u64 mask).
-struct PassiveNode { const char* name; uint8_t x, y, kind; int value; int8_t start_class; };
-inline constexpr PassiveNode kPassiveNodes[] = {
-    {"Knifehand",       3,  3,  items::AK_ADD_ALL,    0,  0},  // 0  class-start anchors (no bonus)
-    {"Wanderer",        13, 3,  items::AK_ADD_ALL,    0,  1},  // 1
-    {"Oracle",          8,  14, items::AK_ADD_ALL,    0,  2},  // 2
-    {"The Weirding Way",8,  8,  items::AK_ADD_ALL,    2, -1},  // 3  central hub (+2 all attributes)
-    {"Killer's Edge",   5,  4,  items::AK_INC_DMG,    6, -1},  // 4  Knifehand arm
-    {"Bloodletting",    6,  6,  items::AK_CRIT,       4, -1},  // 5
-    {"War Discipline",  7,  7,  items::AK_INC_DMG,    6, -1},  // 6
-    {"Scarred Hide",    3,  6,  items::AK_HP,        20, -1},  // 7  (K leaf)
-    {"Sure Foot",       11, 4,  items::AK_INC_DODGE,  6, -1},  // 8  Wanderer arm
-    {"Keen Aim",        10, 6,  items::AK_INC_TOHIT,  6, -1},  // 9
-    {"Sand Sense",      9,  7,  items::AK_INC_DODGE,  6, -1},  // 10
-    {"Storm-ward",      13, 6,  items::AK_RES_STORM, 12, -1},  // 11 (W leaf)
-    {"Inner Calm",      7,  11, items::AK_SHIELD,    10, -1},  // 12 Oracle arm
-    {"Deep Will",       8,  10, items::AK_WILL,       8, -1},  // 13
-    {"Prescience",      8,  9,  items::AK_INC_FOCUS, 10, -1},  // 14
-    {"Water Discipline",5,  12, items::AK_WATER,     40, -1},  // 15 (O leaf)
-    {"Bladestorm",      6,  8,  items::AK_CRIT_MULT, 12, -1},  // 16 notable (behind center)
-    {"Ghoststep",       10, 8,  items::AK_INC_DODGE, 10, -1},  // 17 notable
-};
-inline constexpr int kPassiveNodeCount = int(sizeof kPassiveNodes / sizeof *kPassiveNodes);
-inline constexpr uint8_t kPassiveEdges[][2] = {
-    {0,4},{4,5},{5,6},{6,3},{4,7},          // Knifehand arm -> center + leaf
-    {1,8},{8,9},{9,10},{10,3},{8,11},       // Wanderer arm -> center + leaf
-    {2,12},{12,13},{13,14},{14,3},{12,15},  // Oracle arm -> center + leaf
-    {6,16},{16,3},{10,17},{17,3},           // notables gated behind the center
-};
-inline constexpr int kPassiveEdgeCount = int(sizeof kPassiveEdges / sizeof *kPassiveEdges);
+// C4 passive tree RETIRED by C8b — the Sietch tree (above) is the sole stat tree. The `passives` mask
+// remains a vestigial (unused) save field so the run-save / meta layout is unchanged.
 
 // meta.dat: cross-run memory. B5 grows it to hold the Awaken ladder, a banked spice wallet,
 // and the PERSISTENT character (level/attributes/gear survive death — the ARPG spine).
@@ -1302,46 +1270,7 @@ bool buy_sietch_node(int idx) {  // spend Litrejons to rank up a node; persists
     return true;
 }
 
-// ---- C4: the passive skill tree (per-character; allocations live in g.pl.passives, persist on extract) ----
-int passive_start_of(int base_class) {  // the anchor node for a base class (-1 if none)
-    for (int i = 0; i < kPassiveNodeCount; ++i) if (kPassiveNodes[i].start_class == base_class) return i;
-    return -1;
-}
-bool passive_has(int n) { return n >= 0 && n < kPassiveNodeCount && (g.pl.passives & (1ull << n)); }
-void passive_ensure_start() {  // the character's own class-start anchor is always allocated (free)
-    const int s = passive_start_of(int(g.pl.base_class));
-    if (s >= 0) g.pl.passives |= (1ull << s);
-}
-int passive_affix_bonus(uint8_t kind) {  // sum of every allocated node's bonus of this AffixKind
-    int p = 0;
-    for (int i = 0; i < kPassiveNodeCount; ++i)
-        if (passive_has(i) && kPassiveNodes[i].kind == kind) p += kPassiveNodes[i].value;
-    return p;
-}
-int passive_points_available() {  // earned by level, minus spent (the free own-start does not count)
-    const int earned = (g.pl.st.level - 1) * tune::kPassivePerLevel;
-    int spent = __builtin_popcountll(g.pl.passives);
-    if (passive_has(passive_start_of(int(g.pl.base_class)))) --spent;  // the anchor is free
-    const int avail = earned - spent;
-    return avail < 0 ? 0 : avail;
-}
-bool passive_adjacent_to_allocated(int n) {  // is n on an edge with an already-allocated node?
-    for (int e = 0; e < kPassiveEdgeCount; ++e) {
-        const int a = kPassiveEdges[e][0], b = kPassiveEdges[e][1];
-        if (a == n && passive_has(b)) return true;
-        if (b == n && passive_has(a)) return true;
-    }
-    return false;
-}
-bool passive_allocatable(int n) {  // unallocated, reachable from your tree, and you have a point
-    return n >= 0 && n < kPassiveNodeCount && !passive_has(n) &&
-           passive_points_available() > 0 && passive_adjacent_to_allocated(n);
-}
-bool passive_alloc(int n) {  // allocate node n (persists to meta on extraction, like level/gear)
-    if (!passive_allocatable(n)) return false;
-    g.pl.passives |= (1ull << n);
-    return true;
-}
+// C4 passive-tree functions RETIRED by C8b (the Sietch tree is the sole stat tree).
 
 void meta_load() {
     FILE* f = std::fopen("meta.dat", "rb");
@@ -1886,24 +1815,6 @@ inline int cell_at(int mx, int my, int ox, int oy, int W, int H) {
 }
 }  // namespace gridui
 
-// C4: the passive-tree screen (menu 13) — node graph geometry shared by its dispatch + render.
-namespace passiveui {
-inline constexpr int SCALE = 44, OY = 150, R = 16;
-inline int ox() { return fb::W / 2 - 8 * SCALE; }
-inline void node_screen(int i, int& sx, int& sy) {
-    sx = ox() + kPassiveNodes[i].x * SCALE;
-    sy = OY + kPassiveNodes[i].y * SCALE;
-}
-inline int node_at(int mx, int my) {  // the node whose disc contains (mx,my), or -1
-    if (mx < 0) return -1;
-    for (int i = 0; i < kPassiveNodeCount; ++i) {
-        int sx, sy; node_screen(i, sx, sy);
-        const int dx = mx - sx, dy = my - sy;
-        if (dx * dx + dy * dy <= (R + 5) * (R + 5)) return i;
-    }
-    return -1;
-}
-}  // namespace passiveui
 
 // C7b: the skill-bar loadout screen (menu 15) — 2 bars x 6 slot boxes; click a box to cycle its bind.
 namespace loadout {
@@ -5543,7 +5454,6 @@ void game_init(uint64_t seed, const GameServices& services) {
         g.choosing = services.interactive;
         if (!g.choosing) apply_base_class(g.pl, BaseClass::Knifehand);
     }
-    passive_ensure_start();  // C4: the class-start anchor is always allocated (fresh + pre-DMEJ saves)
     grant_class_starter();   // C7c: guarantee the class's starter ability (fresh + pre-DMEL saves)
     g.pl.hp = player_max_hp();
     g.pl.shield = player_max_shield();  // C2: begin a run with a full Focus shield
@@ -5913,7 +5823,6 @@ bool game_update(const InputState& in) {
         if (in.was_pressed(Key::Right)) g.choose_idx = (g.choose_idx + 1) % n;
         if (in.was_pressed(Key::Confirm)) {
             apply_base_class(g.pl, BaseClass(g.choose_idx));
-            passive_ensure_start();  // C4: anchor this class's passive-tree corner
             grant_class_starter();   // C7c: this class's starter ability
             g.choosing = false;
             g.log.push("You are %s. The Tanzerouft waits.", kBaseClasses[g.choose_idx].name);
@@ -5931,7 +5840,7 @@ bool game_update(const InputState& in) {
     if (g.menu_open) {
         // 5 = character sheet, 6 = inventory, 7 = the vault
         int counts[17] = {0, 6, 3, 5, 4, 3 + kTalentCount + 1, 13, 13, 4, 5 + 1 + 1, 5 + 1 + 1, 1,
-                          kSietchNodeCount + 1, kPassiveNodeCount, 1, 12, 1};  // 12/13 tree,15 loadout,16 disciplines; Sayyadina=4
+                          kSietchNodeCount + 1, 1, 1, 12, 1};  // 12 sietch tree, 13 retired, 15 loadout, 16 skill tree
         int n = counts[g.menu_open];
         if (g.menu_open == 11) {  // D3d bench: rows are owned currencies, or gear once a currency is picked
             uint8_t cb[items::CUR_COUNT]; int gi[12];
@@ -5983,20 +5892,6 @@ bool game_update(const InputState& in) {
                             g.log.push("%s now shapes %s.", discipline_name(n.mod), ability_name(n.ability));
                     }
                 }
-            }
-            return true;
-        }
-        if (g.menu_open == 13) {  // C4: the passive skill tree (a node graph; click a node to allocate)
-            if (in.was_pressed(Key::Cancel) || in.was_pressed(Key::Character)) { g.menu_open = 0; return true; }
-            if (in.was_pressed(Key::Up)) g.menu_sel = (g.menu_sel + n - 1) % n;
-            if (in.was_pressed(Key::Down)) g.menu_sel = (g.menu_sel + 1) % n;
-            const int hit = in.mouse_pressed[0] ? passiveui::node_at(in.mouse_x, in.mouse_y) : -1;
-            if (hit >= 0) g.menu_sel = hit;
-            if (in.was_pressed(Key::Confirm) || hit >= 0) {
-                if (passive_alloc(g.menu_sel))
-                    g.log.push("The vision sharpens: %s.", kPassiveNodes[g.menu_sel].name);
-                else if (!passive_has(g.menu_sel))
-                    g.log.push("%s is out of reach (no point, or not connected).", kPassiveNodes[g.menu_sel].name);
             }
             return true;
         }
@@ -6061,7 +5956,7 @@ bool game_update(const InputState& in) {
         }
         if (g.menu_open == 5) {
             // 0..2 stats, 3..11 talents, 12 close
-            if (in.was_pressed(Key::Character)) { g.menu_open = 13; g.menu_sel = 0; return true; }  // C4: to the tree
+            if (in.was_pressed(Key::Character)) { g.menu_open = 0; return true; }  // C toggles the sheet closed
             if (in.was_pressed(Key::Up)) g.menu_sel = (g.menu_sel + n - 1) % n;
             if (in.was_pressed(Key::Down)) g.menu_sel = (g.menu_sel + 1) % n;
             if (in.was_pressed(Key::Cancel)) g.menu_open = 0;
@@ -6993,8 +6888,8 @@ const ManualPage kManual[] = {
         "The Sayyadina . spice-rites and healing",
         "The Smuggler .. gear, water, and consumables for spice",
         "",
-        "Spend banked SPICE on the Sietch tree (permanent tribe upgrades). Level",
-        "up to earn attribute points and passive-tree points. Leave by the door.",
+        "Reclaim water for the Sietch tree (your stat progression); spend class",
+        "points in the class skill trees. Level up endlessly. Leave by the door.",
         nullptr}},
     {"GEAR, FLASKS & CRAFTING", {
         "Loot drops with affixes and rarities (normal / magic / rare). Equip it",
@@ -7178,51 +7073,6 @@ void draw_paperdoll(DrawCtx& ctx, int ox, int oy, int hover_slot) {
         char nm[48]; g.pl.equip[i].full_name(nm, sizeof nm);
         char buf[80]; std::snprintf(buf, sizeof buf, "%-6s %s", slots[i], nm);
         draw_text(ctx, buf, ox + 8, y + 13, uint8_t(g.pl.equip[i].empty() ? 8 : 136));
-    }
-}
-// C4: a thin line (Bresenham, plotted as 3x3 dots) — for the passive-tree edges. No engine primitive.
-void draw_line(DrawCtx& ctx, int x0, int y0, int x1, int y1, uint8_t col) {
-    int dx = x1 > x0 ? x1 - x0 : x0 - x1, dy = y1 > y0 ? y0 - y1 : y1 - y0;  // dy negative
-    int sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1, err = dx + dy;
-    for (int guard = 0; guard < 4000; ++guard) {
-        fill_rect(ctx, x0 - 1, y0 - 1, 3, 3, col);
-        if (x0 == x1 && y0 == y1) break;
-        const int e2 = 2 * err;
-        if (e2 >= dy) { err += dy; x0 += sx; }
-        if (e2 <= dx) { err += dx; y0 += sy; }
-    }
-}
-// C4: the passive skill tree — the node graph (edges + discs, coloured by allocated/allocatable/locked).
-void draw_passive_tree(DrawCtx& ctx) {
-    fill_rect(ctx, 0, 0, fb::W, fb::H, 1);
-    draw_text_shadow(ctx, "THE PASSIVE TREE", fb::W / 2 - 15 * 8, 56, 230, 1);
-    char buf[96];
-    std::snprintf(buf, sizeof buf, "passive points: %d      (click a lit node to allocate  -  C / ESC to close)",
-                  passive_points_available());
-    draw_text(ctx, buf, fb::W / 2 - 300, 92, 14);
-    for (int e = 0; e < kPassiveEdgeCount; ++e) {  // edges under the nodes
-        int ax, ay, bx, by;
-        passiveui::node_screen(kPassiveEdges[e][0], ax, ay);
-        passiveui::node_screen(kPassiveEdges[e][1], bx, by);
-        const bool lit = passive_has(kPassiveEdges[e][0]) && passive_has(kPassiveEdges[e][1]);
-        draw_line(ctx, ax, ay, bx, by, uint8_t(lit ? 231 : 3));
-    }
-    const int hov = passiveui::node_at(g.ui_mx, g.ui_my);
-    for (int i = 0; i < kPassiveNodeCount; ++i) {
-        int sx, sy; passiveui::node_screen(i, sx, sy);
-        const bool alloc = passive_has(i), can = passive_allocatable(i);
-        const uint8_t col = alloc ? 245 : can ? 231 : 8;  // gold / lit / dim
-        const int r = passiveui::R;
-        fill_rect(ctx, sx - r, sy - r, 2 * r, 2 * r, uint8_t(i == hov ? 4 : 2));
-        fill_rect(ctx, sx - r + 2, sy - r + 2, 2 * r - 4, 2 * r - 4, col);
-        char lbl[10]; std::snprintf(lbl, sizeof lbl, "%.7s", kPassiveNodes[i].name);
-        draw_text(ctx, lbl, sx - r, sy + r + 2, uint8_t(alloc ? 245 : can ? 200 : 14));
-    }
-    if (hov >= 0) {  // detail for the hovered node
-        const PassiveNode& nd = kPassiveNodes[hov];
-        if (nd.value > 0) std::snprintf(buf, sizeof buf, "%s   +%d %s", nd.name, nd.value, items::stat_name(nd.kind));
-        else std::snprintf(buf, sizeof buf, "%s   (class anchor)", nd.name);
-        draw_text_shadow(ctx, buf, fb::W / 2 - 200, fb::H - 70, 231, 1);
     }
 }
 // C7b: the skill-bar loadout screen — two bars of six slot boxes; the selected/hovered one is lit.
@@ -7513,7 +7363,6 @@ void pass_ui(RenderCtx& r) {
         }
     }
 
-    if (g.menu_open == 13) draw_passive_tree(ctx);  // C4: the passive-tree screen
     if (g.menu_open == 15) draw_loadout(ctx);        // C7b: the skill-bar loadout screen
     if (g.menu_open == 16) draw_skilltree(ctx);      // C8a: the class skill-tree screen
 
@@ -7667,9 +7516,8 @@ void pass_ui(RenderCtx& r) {
                           g.pl.shield, player_max_shield(), player_max_will(),
                           affix_total(items::AK_CRIT) + 4 * g.pl.st.talents[2]);
             draw_text(ctx, buf, x0 + 24, y0 + 440, 136);
-            std::snprintf(buf, sizeof buf, "Press C for the PASSIVE TREE  (%d points to spend)",
-                          passive_points_available());
-            draw_text(ctx, buf, x0 + 24, y0 + 484, 230);
+            draw_text(ctx, "The Sietch tree (via the Naib) holds your stat progression.",
+                      x0 + 24, y0 + 484, 230);
             draw_text(ctx, g.menu_sel == 12 ? "> Close" : "  Close", x0 + 32, y0 + 460,
                       uint8_t(g.menu_sel == 12 ? 245 : 20));
         } else if (g.menu_open == 6) {  // G4: gear paperdoll (left) + the 8x12 pack grid (right)
@@ -8636,15 +8484,8 @@ int game_debug_sietch_cost(int idx) { return sietch_node_cost(idx); }
 int game_debug_buy_sietch_node(int idx) { return buy_sietch_node(idx) ? 1 : 0; }
 int game_debug_sietch_bonus(int kind) { return sietch_affix_bonus(uint8_t(kind)); }
 int game_debug_max_hp() { return player_max_hp(); }   // for verifying a tree node moves a derived stat
-// --- C4 passive-tree hooks ---
-int game_debug_passive_node_count() { return kPassiveNodeCount; }
-int game_debug_passive_has(int n) { return passive_has(n) ? 1 : 0; }
-int game_debug_passive_allocatable(int n) { return passive_allocatable(n) ? 1 : 0; }
-int game_debug_passive_points() { return passive_points_available(); }
-int game_debug_passive_alloc(int n) { return passive_alloc(n) ? 1 : 0; }
-int game_debug_passive_bonus(int kind) { return passive_affix_bonus(uint8_t(kind)); }
-int game_debug_meta_passive_has(int n) { return (n >= 0 && n < 64 && (g_meta.passives & (1ull << n))) ? 1 : 0; }
-void game_debug_set_level(int lvl) { g.pl.st.level = int16_t(lvl < 1 ? 1 : lvl > 30 ? 30 : lvl); }
+// C4 passive-tree hooks RETIRED by C8b.
+void game_debug_set_level(int lvl) { g.pl.st.level = int16_t(lvl < 1 ? 1 : lvl > 9999 ? 9999 : lvl); }
 int game_debug_deathstill(int water) {  // place a corpse worth `water` on the player + harvest it
     const Entity& p = player_ent();
     for (int i = 1; i < kMaxEnts; ++i)
@@ -8807,7 +8648,7 @@ void game_debug_stun_player(int ticks) { stun_player(ticks); }  // RT2: force a 
 int game_debug_player_stun_turns() { return g.pl.ail_stun_turns; }
 int game_debug_player_ready() { return player_ready() ? 1 : 0; }  // RT2: is the player able to act?
 // C3: base class / ascendancy hooks (classtest).
-void game_debug_apply_base(int bc) { apply_base_class(g.pl, BaseClass(bc)); passive_ensure_start(); grant_class_starter(); }
+void game_debug_apply_base(int bc) { apply_base_class(g.pl, BaseClass(bc)); grant_class_starter(); }
 void game_debug_class(int* base, int* asc) {
     if (base) *base = int(g.pl.base_class);
     if (asc) *asc = int(g.pl.ascendancy);

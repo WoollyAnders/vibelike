@@ -227,15 +227,8 @@ void game_debug_set_skill_bind(int bar, int slot, int act);
 int game_debug_skill_cycle(int bar, int slot);         // cycle a slot's bind; returns the new action
 int game_debug_meta_skill_bind(int bar, int slot);     // persisted skill bind (DMEK round-trip)
 void game_debug_run_skill_slot(int slot, int ctrl, int dx, int dy);  // aim at player+(dx,dy) + run the slot
-// --- C4 passive-tree hooks ---
-int game_debug_passive_node_count();         // number of passive-tree nodes
-int game_debug_passive_has(int n);           // is node n allocated (live character)
-int game_debug_passive_allocatable(int n);   // is node n allocatable right now
-int game_debug_passive_points();             // available passive points
-int game_debug_passive_alloc(int n);         // allocate node n; 1 on success
-int game_debug_passive_bonus(int kind);      // the tree's AffixKind contribution
-int game_debug_meta_passive_has(int n);      // is node n allocated in persisted meta (DMEJ round-trip)
-void game_debug_set_level(int lvl);          // set the character level (to grant passive points)
+// C4 passive-tree hooks RETIRED by C8b.
+void game_debug_set_level(int lvl);          // set the character level (grants class/Sietch points)
 // --- C5b sietch-tree hooks ---
 int game_debug_sietch_node_count();          // number of sietch-tree nodes
 int game_debug_sietch_rank(int idx);         // allocated rank of node idx (-1 invalid)
