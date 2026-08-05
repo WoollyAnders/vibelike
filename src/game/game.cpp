@@ -1070,18 +1070,26 @@ void refresh_fov_and_paths() {
 // SANDCRAFT (the warrior's edge) and TRIBE'S BLESSING (the tribe's sustain). Each node grants ranks of
 // an AffixKind bonus folded into affix_total(), so every derived stat picks it up; ranks persist across
 // death (meta). Cost per rank = cost_base * (rank+1) Litrejons.
-struct SietchNode { const char* name; uint8_t kind; int per_rank; uint8_t track; uint8_t max_rank; int cost_base; };
+// C8b: the Sietch tree is the infinite, level-based generic-stat progression (it absorbed the retired
+// C4 stat kinds). Every node ranks UNBOUNDED — one Sietch point per rank — so uncapped leveling feeds it
+// forever (Dune "paragon"). Litrejons no longer buy ranks directly; they buy Sietch points + fund respec.
+struct SietchNode { const char* name; uint8_t kind; int per_rank; uint8_t track; };
 inline constexpr SietchNode kSietchNodes[] = {
-    // --- track 0: SANDCRAFT ---
-    {"Blade Discipline", items::AK_INC_DMG,   5, 0, 3, 20},  // +5% Lethality / rank
-    {"Killer's Eye",     items::AK_CRIT,      3, 0, 3, 20},  // +3% Vital Strike chance / rank
-    {"Spice Sense",      items::AK_SPICE_FIND, 12, 0, 3, 15}, // +12% Spice Find / rank
-    {"Sure Strike",      items::AK_INC_TOHIT, 6, 0, 3, 15},  // +6% Precision / rank
-    // --- track 1: TRIBE'S BLESSING ---
-    {"Tribe's Vigor",    items::AK_INC_LIFE,  6, 1, 3, 20},  // +6% Life / rank
-    {"Stillsuit Weave",  items::AK_ARMOR,     4, 1, 3, 20},  // +4 armor / rank
-    {"Cistern Share",    items::AK_WATER,    40, 1, 3, 15},  // +40 max Water / rank
-    {"Prescient Calm",   items::AK_SHIELD,   15, 1, 3, 20},  // +15 Focus / rank
+    // --- track 0: SANDCRAFT (offense / utility) ---
+    {"Blade Discipline", items::AK_INC_DMG,    3, 0},  // +3% Lethality / rank
+    {"Killer's Eye",     items::AK_CRIT,       2, 0},  // +2% Vital Strike chance / rank
+    {"Vital Strikes",    items::AK_CRIT_MULT,  5, 0},  // +5% Vital Strike damage / rank
+    {"Sure Strike",      items::AK_INC_TOHIT,  4, 0},  // +4% Precision / rank
+    {"Spice Sense",      items::AK_SPICE_FIND, 10, 0}, // +10% Spice Find / rank
+    {"Fleetfoot",        items::AK_INC_DODGE,  3, 0},  // +3% Evasion / rank
+    // --- track 1: TRIBE'S BLESSING (defense / sustain) ---
+    {"Tribe's Vigor",    items::AK_INC_LIFE,   4, 1},  // +4% Life / rank
+    {"Scarred Hide",     items::AK_HP,        12, 1},  // +12 Life / rank
+    {"Stillsuit Weave",  items::AK_ARMOR,      3, 1},  // +3 armor / rank
+    {"Cistern Share",    items::AK_WATER,     30, 1},  // +30 max Water / rank
+    {"Prescient Calm",   items::AK_SHIELD,    10, 1},  // +10 Focus / rank
+    {"Deep Will",        items::AK_WILL,       6, 1},  // +6 Will / rank
+    {"Storm-ward",       items::AK_RES_STORM,  8, 1},  // +8 storm resist / rank
 };
 inline constexpr int kSietchNodeCount = int(sizeof kSietchNodes / sizeof *kSietchNodes);
 
@@ -1104,7 +1112,8 @@ struct Meta {
     uint8_t has_char = 0;          // 1 once a persistent character exists
     int32_t banked_spice = 0;      // safe wallet; run spice banks here on extraction
     int32_t litrejons = 0;         // C5 (DMEH): tribal water banked from the Deathstill; the sietch-tree currency
-    uint8_t sietch_rank[kSietchNodeCount] = {};  // C5b (DMEI): allocated ranks per sietch-tree node
+    uint16_t sietch_rank[kSietchNodeCount] = {};  // C5b/C8b (DMEI/DMEO): ranks per node (widened; unbounded)
+    uint16_t sietch_points_bought = 0;            // C8b (DMEO): Sietch points bought with Litrejons
     uint64_t passives = 0;                       // C4 (DMEJ): the character's allocated passive-tree nodes
     uint8_t skill_bind[2][6] = {{1, 1, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0}};  // C7b (DMEK): the skill bar
     uint16_t owned_abilities = 0;  // C7c/C8a (DMEL/DMEN): unlocked-ability bitmask
@@ -1174,6 +1183,7 @@ int guild_difficulty() {
     return d < 0 ? 0 : d > cap ? cap : d;
 }
 
+inline constexpr uint32_t kMetaVO = 0x4F454D44u;  // 'DMEO' (C8b: widened sietch_rank u16 + sietch_points_bought)
 inline constexpr uint32_t kMetaVN = 0x4E454D44u;  // 'DMEN' (C8a: class trees — skill_mods_alloc; C7d disc fields retired)
 inline constexpr uint32_t kMetaVM = 0x4D454D44u;  // 'DMEM' (C7d: + Disciplines, support slots + attachments)
 inline constexpr uint32_t kMetaVL = 0x4C454D44u;  // 'DMEL' (C7c: + owned_abilities, learned Teachings)
@@ -1257,15 +1267,35 @@ int sietch_affix_bonus(uint8_t kind) {
         if (kSietchNodes[i].kind == kind) p += g_meta.sietch_rank[i] * kSietchNodes[i].per_rank;
     return p;
 }
-int sietch_node_cost(int idx) {  // Litrejons for the NEXT rank of node idx (0 if maxed / invalid)
-    if (idx < 0 || idx >= kSietchNodeCount || g_meta.sietch_rank[idx] >= kSietchNodes[idx].max_rank) return 0;
-    return kSietchNodes[idx].cost_base * (g_meta.sietch_rank[idx] + 1);
+void tree_respec();  // fwd (defined with the C8a class-tree block)
+// C8b: level grants Sietch points (uncapped); Litrejons can BUY extra points; every rank costs 1 point.
+int sietch_points_earned() { return g.pl.st.level > 1 ? (g.pl.st.level - 1) * tune::kSietchPerLevel : 0; }
+int sietch_points_spent() {
+    int s = 0; for (int i = 0; i < kSietchNodeCount; ++i) s += g_meta.sietch_rank[i]; return s;
 }
-bool buy_sietch_node(int idx) {  // spend Litrejons to rank up a node; persists
-    const int cost = sietch_node_cost(idx);
-    if (cost <= 0 || g_meta.litrejons < cost) return false;
-    g_meta.litrejons -= cost;
+int sietch_points_available() {
+    const int a = sietch_points_earned() + g_meta.sietch_points_bought - sietch_points_spent();
+    return a < 0 ? 0 : a;
+}
+bool sietch_alloc(int idx) {  // spend one Sietch point to rank up a node (unbounded); persists
+    if (idx < 0 || idx >= kSietchNodeCount || sietch_points_available() <= 0) return false;
     ++g_meta.sietch_rank[idx];
+    meta_save();
+    return true;
+}
+int sietch_buy_point_cost() { return tune::kSietchPointBase * (g_meta.sietch_points_bought + 1); }
+bool buy_sietch_point() {  // convert banked Litrejons -> one Sietch point (escalating; the early rush)
+    const int cost = sietch_buy_point_cost();
+    if (g_meta.litrejons < cost) return false;
+    g_meta.litrejons -= cost;
+    ++g_meta.sietch_points_bought;
+    meta_save();
+    return true;
+}
+bool respec_class_points() {  // the sietch reconsiders your path: Litrejons refund all class points
+    if (g_meta.litrejons < tune::kRespecLitrejons) return false;
+    g_meta.litrejons -= tune::kRespecLitrejons;
+    tree_respec();
     meta_save();
     return true;
 }
@@ -1277,7 +1307,7 @@ void meta_load() {
     if (!f) return;
     uint32_t magic = 0;
     if (std::fread(&magic, 4, 1, f) == 1) {
-        if (magic >= kMetaV4 && magic <= kMetaVN && magic != kMetaV1) {  // native widened-Inst format (DME4..DMEN)
+        if (magic >= kMetaV4 && magic <= kMetaVO && magic != kMetaV1) {  // native widened-Inst format (DME4..DMEO)
             const bool cur = (magic >= kMetaVC);  // DMEC+ = new Inst layout; older = OldInst (convert)
             (void)!std::fread(&g_meta.runs, 4, 1, f);
             (void)!std::fread(&g_meta.endings_seen, 1, 1, f);
@@ -1349,7 +1379,10 @@ void meta_load() {
             if (magic >= kMetaVH) {  // C5: banked Litrejons (DMEG and earlier -> 0)
                 (void)!std::fread(&g_meta.litrejons, 4, 1, f);
             }
-            if (magic >= kMetaVI) {  // C5b: the sietch talent tree ranks (DMEH and earlier -> 0)
+            if (magic >= kMetaVI && magic <= kMetaVN) {  // pre-C8b: 8 nodes x uint8 — discard (a Sietch respec)
+                uint8_t old_ranks[8];
+                (void)!std::fread(old_ranks, sizeof old_ranks, 1, f);
+            } else if (magic >= kMetaVO) {  // C8b: widened uint16 ranks (current node count)
                 (void)!std::fread(g_meta.sietch_rank, sizeof g_meta.sietch_rank, 1, f);
             }
             if (magic >= kMetaVJ) {  // C4: the character's passive-tree allocation (DMEI and earlier -> 0)
@@ -1367,6 +1400,9 @@ void meta_load() {
             }
             if (magic >= kMetaVN) {  // C8a: per-skill allocated modifier-node bitmasks
                 (void)!std::fread(g_meta.skill_mods_alloc, sizeof g_meta.skill_mods_alloc, 1, f);
+            }
+            if (magic >= kMetaVO) {  // C8b: Sietch points bought with Litrejons
+                (void)!std::fread(&g_meta.sietch_points_bought, 2, 1, f);
             }
             // D3 migration: the old Maker Hide / Worm Tooth counters become currency (their new roles:
             // armour / weapon quality), banked to the crafting table. No-op on a DMEC+ file (already 0).
@@ -1406,7 +1442,7 @@ void meta_load() {
 void meta_save() {
     FILE* f = std::fopen("meta.dat", "wb");
     if (!f) return;
-    std::fwrite(&kMetaVN, 4, 1, f);  // C8a: DMEN (class-tree modifiers; earlier blobs ride along)
+    std::fwrite(&kMetaVO, 4, 1, f);  // C8b: DMEO (widened sietch_rank + sietch_points_bought)
     std::fwrite(&g_meta.runs, 4, 1, f);
     std::fwrite(&g_meta.endings_seen, 1, 1, f);
     std::fwrite(&g_meta.stash_tabs, 1, 1, f);                       // G3: owned tab count
@@ -1442,6 +1478,7 @@ void meta_save() {
     std::fwrite(g_meta.skill_bind, sizeof g_meta.skill_bind, 1, f);    // C7b: skill bar (DMEK)
     std::fwrite(&g_meta.owned_abilities, 2, 1, f);                     // C7c/C8a: unlocked abilities (DMEL/DMEN)
     std::fwrite(g_meta.skill_mods_alloc, sizeof g_meta.skill_mods_alloc, 1, f);  // C8a: class-tree modifiers (DMEN)
+    std::fwrite(&g_meta.sietch_points_bought, 2, 1, f);                          // C8b: bought Sietch points (DMEO)
     std::fclose(f);
 }
 
@@ -5840,7 +5877,7 @@ bool game_update(const InputState& in) {
     if (g.menu_open) {
         // 5 = character sheet, 6 = inventory, 7 = the vault
         int counts[17] = {0, 6, 3, 5, 4, 3 + kTalentCount + 1, 13, 13, 4, 5 + 1 + 1, 5 + 1 + 1, 1,
-                          kSietchNodeCount + 1, 1, 1, 12, 1};  // 12 sietch tree, 13 retired, 15 loadout, 16 skill tree
+                          kSietchNodeCount + 3, 1, 1, 12, 1};  // 12 sietch tree (+buy pt +respec +back), 15 loadout, 16 skill tree
         int n = counts[g.menu_open];
         if (g.menu_open == 11) {  // D3d bench: rows are owned currencies, or gear once a currency is picked
             uint8_t cb[items::CUR_COUNT]; int gi[12];
@@ -5941,14 +5978,21 @@ bool game_update(const InputState& in) {
                             g.bench_cur = 0; g.menu_sel = 0;
                         } else { g.bench_cur = 0; g.menu_sel = 0; }  // Back to the currency list
                     }
-                } else {  // 12: the Sietch talent tree — spend Litrejons to rank up a node
+                } else {  // 12: the Sietch tree — spend Sietch points (from leveling) to rank up a node
                     if (sel < kSietchNodeCount) {
-                        const int cost = sietch_node_cost(sel);
-                        if (cost <= 0) g.log.push("'%s is at its peak.'", kSietchNodes[sel].name);
-                        else if (buy_sietch_node(sel))
-                            g.log.push("The tribe drinks your water. %s deepens. -%d litrejons.",
-                                       kSietchNodes[sel].name, cost);
-                        else g.log.push("Not enough litrejons (%d needed). Reclaim more water in the field.", cost);
+                        if (sietch_alloc(sel))
+                            g.log.push("The water deepens you. %s +1 (rank %d).",
+                                       kSietchNodes[sel].name, int(g_meta.sietch_rank[sel]));
+                        else g.log.push("No Sietch points to spend. Level up, or buy a point with Litrejons.");
+                    } else if (sel == kSietchNodeCount) {  // buy a Sietch point with Litrejons (escalating)
+                        const int cost = sietch_buy_point_cost();
+                        if (buy_sietch_point()) g.log.push("The Deathstill yields a point of insight. -%d litrejons.", cost);
+                        else g.log.push("Not enough litrejons (%d needed).", cost);
+                    } else if (sel == kSietchNodeCount + 1) {  // respec class points (Litrejons)
+                        if (respec_class_points())
+                            g.log.push("The sietch reconsiders your path — class points refunded. -%d litrejons.",
+                                       tune::kRespecLitrejons);
+                        else g.log.push("The respec rite needs %d litrejons.", tune::kRespecLitrejons);
                     } else { g.menu_open = 1; g.menu_sel = 0; }  // Back to the Naib
                 }
             }
@@ -7417,24 +7461,24 @@ void pass_ui(RenderCtx& r) {
             std::snprintf(buf, sizeof buf, "Collect CHOAM dividend  (~%d sp)", choam_control());
             row(FAC_COUNT, buf, g.menu_sel == FAC_COUNT);
             row(FAC_COUNT + 1, "Back", g.menu_sel == FAC_COUNT + 1);
-        } else if (g.menu_open == 12) {  // C5b: the Sietch talent tree (spend Litrejons)
+        } else if (g.menu_open == 12) {  // C8b: the Sietch tree — the infinite, level-based stat progression
             draw_text_shadow(ctx, "THE SIETCH TREE", x0 + 24, y0 + 16, 230, 1);
-            std::snprintf(buf, sizeof buf, "litrejons %d   (tribal water reclaimed by the Deathstill)",
-                          int(g_meta.litrejons));
+            std::snprintf(buf, sizeof buf, "Sietch points %d free   (level %d)      litrejons %d",
+                          sietch_points_available(), int(g.pl.st.level), int(g_meta.litrejons));
             draw_text(ctx, buf, x0 + 24, y0 + 46, 14);
             for (int i = 0; i < kSietchNodeCount; ++i) {
-                const int rank = g_meta.sietch_rank[i], cost = sietch_node_cost(i);
+                const int rank = g_meta.sietch_rank[i];
                 const char* trk = kSietchNodes[i].track == 0 ? "Sandcraft" : "Blessing";
-                if (cost > 0)
-                    std::snprintf(buf, sizeof buf, "[%-9s] %-16s %d/%d  (+%d)  -  %d litrejons", trk,
-                                  kSietchNodes[i].name, rank, kSietchNodes[i].max_rank,
-                                  kSietchNodes[i].per_rank, cost);
-                else
-                    std::snprintf(buf, sizeof buf, "[%-9s] %-16s %d/%d  (+%d)  -  MAX", trk,
-                                  kSietchNodes[i].name, rank, kSietchNodes[i].max_rank, kSietchNodes[i].per_rank);
+                std::snprintf(buf, sizeof buf, "[%-9s] %-16s  rank %-4d (+%d %s / rank)", trk,
+                              kSietchNodes[i].name, rank, kSietchNodes[i].per_rank,
+                              items::stat_name(kSietchNodes[i].kind));
                 row(i, buf, g.menu_sel == i);
             }
-            row(kSietchNodeCount, "Back to the Naib", g.menu_sel == kSietchNodeCount);
+            std::snprintf(buf, sizeof buf, "Buy a Sietch point  (%d litrejons)", sietch_buy_point_cost());
+            row(kSietchNodeCount, buf, g.menu_sel == kSietchNodeCount);
+            std::snprintf(buf, sizeof buf, "Respec class points  (%d litrejons)", tune::kRespecLitrejons);
+            row(kSietchNodeCount + 1, buf, g.menu_sel == kSietchNodeCount + 1);
+            row(kSietchNodeCount + 2, "Back to the Naib", g.menu_sel == kSietchNodeCount + 2);
         } else {  // G4: the crafting bench — the pack grid (left) + the currency-tab slots (right)
             const int bx = fb::W / 2 - 620, by = 190;
             fill_rect(ctx, bx, by, 1240, 620, 2);
@@ -8477,12 +8521,15 @@ void game_debug_flask_gain(int n) { flask_gain(n); }
 int game_debug_litrejons() { return g_meta.litrejons; }        // banked tribal water (the sietch currency)
 int game_debug_reclaimed() { return g.pl.reclaimed; }          // this run's un-banked Deathstill stake
 void game_debug_grant_litrejons(int n) { g_meta.litrejons += n; meta_save(); }
-// --- C5b sietch-tree hooks ---
+// --- C5b/C8b sietch-tree hooks ---
 int game_debug_sietch_node_count() { return kSietchNodeCount; }
 int game_debug_sietch_rank(int idx) { return (idx >= 0 && idx < kSietchNodeCount) ? g_meta.sietch_rank[idx] : -1; }
-int game_debug_sietch_cost(int idx) { return sietch_node_cost(idx); }
-int game_debug_buy_sietch_node(int idx) { return buy_sietch_node(idx) ? 1 : 0; }
+int game_debug_sietch_alloc(int idx) { return sietch_alloc(idx) ? 1 : 0; }
+int game_debug_sietch_points() { return sietch_points_available(); }
+int game_debug_buy_sietch_point() { return buy_sietch_point() ? 1 : 0; }
+int game_debug_sietch_buy_point_cost() { return sietch_buy_point_cost(); }
 int game_debug_sietch_bonus(int kind) { return sietch_affix_bonus(uint8_t(kind)); }
+int game_debug_meta_sietch_rank(int idx) { return (idx >= 0 && idx < kSietchNodeCount) ? g_meta.sietch_rank[idx] : -1; }
 int game_debug_max_hp() { return player_max_hp(); }   // for verifying a tree node moves a derived stat
 // C4 passive-tree hooks RETIRED by C8b.
 void game_debug_set_level(int lvl) { g.pl.st.level = int16_t(lvl < 1 ? 1 : lvl > 9999 ? 9999 : lvl); }

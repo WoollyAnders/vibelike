@@ -2181,43 +2181,52 @@ int run_maulatest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cm
     return pass ? 0 : 1;
 }
 
-// C5b: the Sietch talent tree. Litrejons buy ranks of AffixKind bonuses that fold into every derived
-// stat (via affix_total) and persist across death. Node 4 = Tribe's Vigor (+6% Life / rank).
+// C8b: the Sietch tree is the infinite, LEVEL-based stat progression. Every level grants a Sietch point
+// (uncapped); each rank costs 1 point and is UNBOUNDED; Litrejons buy extra points (escalating). Bonuses
+// fold into affix_total and persist (DMEO). Node 6 = Tribe's Vigor (+4% Life/rank, AK_INC_LIFE);
+// node 0 = Blade Discipline (AK_INC_DMG).
 int run_sietchtreetest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
     std::remove("meta.dat");
     GameServices services{&mixer, &assets, &cmaps};
     game_init(5150, services);
+    game_debug_apply_base(0);
+    game_debug_set_level(10);   // 9 Sietch points (1/level after level 1)
 
-    // (E) broke: with no litrejons banked, a purchase refuses and nothing is spent
-    const bool broke = game_debug_buy_sietch_node(4) == 0 && game_debug_sietch_rank(4) == 0;
-    game_debug_grant_litrejons(200);
+    // (A) level grants points; nothing allocated yet
+    const bool fresh = game_debug_sietch_points() == 9 && game_debug_sietch_rank(6) == 0;
 
-    // (A) fresh: node 4 unranked, next rank costs the base (20)
-    const bool fresh = game_debug_sietch_rank(4) == 0 && game_debug_sietch_cost(4) == 20;
-
-    // (B) buying Tribe's Vigor grants +6% Life and moves player_max_hp
+    // (B) allocating Tribe's Vigor spends a point + grants +4% Life (moves player_max_hp)
     const int hp0 = game_debug_max_hp();
-    const bool buy1 = game_debug_buy_sietch_node(4) == 1 && game_debug_sietch_rank(4) == 1 &&
-                      game_debug_sietch_bonus(items::AK_INC_LIFE) == 6;
-    const bool hp_up = game_debug_max_hp() > hp0;
+    const bool buy1 = game_debug_sietch_alloc(6) == 1 && game_debug_sietch_rank(6) == 1 &&
+                      game_debug_sietch_points() == 8 && game_debug_sietch_bonus(items::AK_INC_LIFE) == 4;
+    const bool hpUp = game_debug_max_hp() > hp0;
 
-    // (C) cost escalates (base * (rank+1)); ranks stack
-    const bool esc = game_debug_sietch_cost(4) == 40;
-    game_debug_buy_sietch_node(4);
-    const bool stacked = game_debug_sietch_rank(4) == 2 && game_debug_sietch_bonus(items::AK_INC_LIFE) == 12;
+    // (C) UNBOUNDED — rank it well past the old cap of 3
+    for (int i = 0; i < 5; ++i) game_debug_sietch_alloc(6);   // -> rank 6
+    const bool unbounded = game_debug_sietch_rank(6) == 6 && game_debug_sietch_bonus(items::AK_INC_LIFE) == 24;
 
-    // (D) a node caps at max_rank; then further buys refuse
-    game_debug_buy_sietch_node(4);
-    const bool maxed = game_debug_sietch_rank(4) == 3 && game_debug_sietch_cost(4) == 0 &&
-                       game_debug_buy_sietch_node(4) == 0;
+    // (D) points are LIMITED by level — spend the rest, then allocation refuses
+    const int left = game_debug_sietch_points();              // 9 - 6 = 3
+    for (int i = 0; i < left; ++i) game_debug_sietch_alloc(0);
+    const bool dry = game_debug_sietch_points() == 0 && game_debug_sietch_alloc(0) == 0;
 
-    // (F) ranks persist across a meta reload
+    // (E) Litrejons buy extra Sietch points (escalating), re-enabling allocation
+    game_debug_grant_litrejons(1000);
+    const int cost = game_debug_sietch_buy_point_cost();       // base * 1 = 20
+    const bool buyPt = cost == 20 && game_debug_buy_sietch_point() == 1 &&
+                       game_debug_sietch_points() == 1 && game_debug_sietch_alloc(0) == 1;
+
+    // (F) NO LEVEL CAP — a very high level scales the point pool
+    game_debug_set_level(500);
+    const bool noCap = game_debug_sietch_points() > 400;
+
+    // (G) DMEO persistence: ranks survive a meta reload
     int mb = -1, ma = -1; game_debug_meta_reload_class(&mb, &ma);
-    const bool persisted = game_debug_sietch_rank(4) == 3 && game_debug_sietch_bonus(items::AK_INC_LIFE) == 18;
+    const bool persisted = game_debug_meta_sietch_rank(6) == 6 && game_debug_sietch_bonus(items::AK_INC_LIFE) == 24;
 
-    const bool pass = fresh && buy1 && hp_up && esc && stacked && maxed && broke && persisted;
-    std::printf("sietchtreetest %s (fresh %d buy %d hpUp %d esc %d stack %d max %d broke %d persist %d)\n",
-                pass ? "PASS" : "FAIL", fresh, buy1, hp_up, esc, stacked, maxed, broke, persisted);
+    const bool pass = fresh && buy1 && hpUp && unbounded && dry && buyPt && noCap && persisted;
+    std::printf("sietchtreetest %s (fresh %d buy %d hpUp %d unbounded %d dry %d buyPt %d noCap %d persist %d)\n",
+                pass ? "PASS" : "FAIL", fresh, buy1, hpUp, unbounded, dry, buyPt, noCap, persisted);
     std::remove("meta.dat");
     return pass ? 0 : 1;
 }

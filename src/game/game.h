@@ -229,12 +229,15 @@ int game_debug_meta_skill_bind(int bar, int slot);     // persisted skill bind (
 void game_debug_run_skill_slot(int slot, int ctrl, int dx, int dy);  // aim at player+(dx,dy) + run the slot
 // C4 passive-tree hooks RETIRED by C8b.
 void game_debug_set_level(int lvl);          // set the character level (grants class/Sietch points)
-// --- C5b sietch-tree hooks ---
+// --- C5b/C8b sietch-tree hooks ---
 int game_debug_sietch_node_count();          // number of sietch-tree nodes
 int game_debug_sietch_rank(int idx);         // allocated rank of node idx (-1 invalid)
-int game_debug_sietch_cost(int idx);         // Litrejons for the next rank of node idx (0 if maxed)
-int game_debug_buy_sietch_node(int idx);     // rank up node idx; 1 on success
+int game_debug_sietch_alloc(int idx);        // spend a Sietch point to rank up node idx; 1 on success
+int game_debug_sietch_points();              // free (unspent) Sietch points
+int game_debug_buy_sietch_point();           // buy one Sietch point with Litrejons; 1 on success
+int game_debug_sietch_buy_point_cost();      // Litrejons for the next bought point (escalating)
 int game_debug_sietch_bonus(int kind);       // the tree's AffixKind contribution
+int game_debug_meta_sietch_rank(int idx);    // persisted rank (DMEO round-trip)
 int game_debug_max_hp();                     // player_max_hp() (to verify a node moves a derived stat)
 void game_debug_revelation(int* stage, int* inv_count);  // B2b: Revelation stage + inv item count
 void game_debug_revelation_pick(int idx);  // B2b: choose row idx + confirm the Revelation
