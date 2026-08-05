@@ -221,6 +221,9 @@ void game_debug_fire_maula_at(int idx);      // fire at entity idx's live tile
 int game_debug_weapon_is_ranged();           // C6r: is the equipped weapon ranged?
 void game_debug_equip_ranged();              // C6r: equip a ranged weapon in the Weapon slot
 int game_debug_maula_can_hit(int dx, int dy);// C6r: would a shot at player+(dx,dy) hit a hostile?
+// --- C8c class gear restrictions ---
+int game_debug_class_allows_ranged();        // 1 if the player's class may wield ranged weapons
+int game_debug_try_equip_ranged();           // quickmove-equip a ranged weapon; 1 if it took (class allows)
 // --- C7b skill-bar hooks ---
 int game_debug_skill_bind(int bar, int slot);          // action bound at bar/slot (-1 invalid)
 void game_debug_set_skill_bind(int bar, int slot, int act);

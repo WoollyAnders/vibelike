@@ -2132,6 +2132,27 @@ int run_skilltree_test(audio::Mixer& mixer, const Assets& assets, const Colormap
     return pass ? 0 : 1;
 }
 
+// C8c: class gear restrictions. Ranged weapons (maula/dartgun/lasgun) gate by class — Wanderer wields
+// them; Knifehand & Oracle are melee-only. Enforced at the equip path (quickmove).
+int run_gearclasstest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    std::remove("meta.dat");
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(818, services);
+
+    game_debug_apply_base(0);   // Knifehand (blades)
+    const bool knifeNo = game_debug_class_allows_ranged() == 0 && game_debug_try_equip_ranged() == 0;
+    game_debug_apply_base(2);   // Oracle (melee mystic)
+    const bool oracleNo = game_debug_class_allows_ranged() == 0 && game_debug_try_equip_ranged() == 0;
+    game_debug_apply_base(1);   // Wanderer (ranged)
+    const bool wandererYes = game_debug_class_allows_ranged() == 1 && game_debug_try_equip_ranged() == 1;
+
+    const bool pass = knifeNo && oracleNo && wandererYes;
+    std::printf("gearclasstest %s (knifeNo %d oracleNo %d wandererYes %d)\n",
+                pass ? "PASS" : "FAIL", knifeNo, oracleNo, wandererYes);
+    std::remove("meta.dat");
+    return pass ? 0 : 1;
+}
+
 // C6: the maula pistol — a cursor-aimed ranged shot. Bresenham line-of-fire: it drops a foe at range,
 // a wall between blocks the dart, and every shot is loud.
 int run_maulatest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
@@ -2639,7 +2660,7 @@ int main(int argc, char** argv) {
          vendortest = false, patroltest = false, cavetest = false, trialtest = false,
          endgametest = false, striketest = false, pinnacletest = false, capstonetest = false,
          longridetest = false, choamtest = false, currencytest = false, currencymechtest = false,
-         currencydroptest = false, currencyuitest = false, essencetest = false, gridtest = false, currencytabtest = false, vaulttest = false, guitest = false, economytest = false, sietchtreetest = false, maulatest = false, skillbartest = false, skilltreetest = false, abilitytest = false,
+         currencydroptest = false, currencyuitest = false, essencetest = false, gridtest = false, currencytabtest = false, vaulttest = false, guitest = false, economytest = false, sietchtreetest = false, maulatest = false, skillbartest = false, skilltreetest = false, gearclasstest = false, abilitytest = false,
          flasktest = false, inputtest = false, menutest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
@@ -2687,6 +2708,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--maulatest") == 0) maulatest = true;
         if (SDL_strcmp(argv[i], "--skillbartest") == 0) skillbartest = true;
         if (SDL_strcmp(argv[i], "--skilltreetest") == 0) skilltreetest = true;
+        if (SDL_strcmp(argv[i], "--gearclasstest") == 0) gearclasstest = true;
         if (SDL_strcmp(argv[i], "--abilitytest") == 0) abilitytest = true;
         if (SDL_strcmp(argv[i], "--flasktest") == 0) flasktest = true;
         if (SDL_strcmp(argv[i], "--inputtest") == 0) inputtest = true;
@@ -2755,6 +2777,7 @@ int main(int argc, char** argv) {
     if (maulatest) return run_maulatest(mixer, assets, cmaps);
     if (skillbartest) return run_skillbartest(mixer, assets, cmaps);
     if (skilltreetest) return run_skilltree_test(mixer, assets, cmaps);
+    if (gearclasstest) return run_gearclasstest(mixer, assets, cmaps);
     if (abilitytest) return run_abilitytest(mixer, assets, cmaps);
     if (flasktest) return run_flasktest(mixer, assets, cmaps);
     if (inputtest) return run_inputtest(mixer, assets, cmaps);

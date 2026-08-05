@@ -2211,12 +2211,25 @@ int list_gear(int* out) {
         if (!g.pl.inv[i].empty() && !g.pl.inv[i].is_currency()) out[n++] = i;
     return n;
 }
+// C8c: class gear restrictions. A ranged weapon (maula / dartgun / lasgun) can only be wielded by a
+// class trained for it (Wanderer); Knifehand & Oracle are melee. Everything else is unrestricted. The
+// equipped weapon still defines the basic attack (C6r), so a class simply can't equip what it can't use.
+inline constexpr bool kClassAllowsRanged[3] = {false, true, false};  // Knifehand / Wanderer / Oracle
+bool class_can_equip(const items::Inst& it) {
+    if (!it.is_ranged_weapon()) return true;  // only ranged weapons are class-gated
+    const int c = int(g.pl.base_class);
+    return c >= 0 && c < 3 ? kClassAllowsRanged[c] : true;
+}
 // Ctrl-click quick-move from the pack (G4 drives this): currency -> the table's slots; gear -> equip,
 // swapping any current occupant back into the grid. Returns true if something moved.
 bool quickmove(int idx) {
     if (idx < 0 || idx >= tune::kInvCap || g.pl.inv[idx].empty()) return false;
     if (g.pl.inv[idx].is_currency()) return tab_deposit(idx);
     if (g.pl.inv[idx].unidentified()) return false;  // an unID item can't be equipped
+    if (!class_can_equip(g.pl.inv[idx])) {  // C8c: a melee class can't wield a ranged weapon
+        g.log.push("Your training won't wield that weapon.");
+        return false;
+    }
     const items::Inst prev = g.pl.equip[int(g.pl.inv[idx].d().slot)];
     g.pl.equip[int(g.pl.inv[idx].d().slot)] = g.pl.inv[idx];
     pack_place_at(idx, prev);  // the displaced item (may be empty) drops back into the grid, re-fitted
@@ -8591,6 +8604,19 @@ void game_debug_equip_ranged() {  // C6r: equip the first ranged weapon def in t
             g.pl.equip[int(items::Slot::Weapon)] = w;
             return;
         }
+}
+int game_debug_class_allows_ranged() {  // C8c: 1 if the player's class may wield ranged weapons
+    const int c = int(g.pl.base_class);
+    return (c >= 0 && c < 3 && kClassAllowsRanged[c]) ? 1 : 0;
+}
+int game_debug_try_equip_ranged() {  // C8c: place a ranged weapon in the pack, quickmove-equip it, report success
+    items::Inst w; w.rarity = items::R_COMMON;
+    for (int i = 0; i < items::kDefCount; ++i)
+        if (items::kDefs[i].slot == items::Slot::Weapon && items::kDefs[i].range > 0) { w.def = uint8_t(i); break; }
+    g.pl.equip[int(items::Slot::Weapon)] = items::Inst{};  // start bare-handed
+    g.pl.inv[0] = w; g.pl.inv_cell[0] = 0;
+    quickmove(0);
+    return weapon_is_ranged() ? 1 : 0;   // equipped only if the class allows it
 }
 int game_debug_maula_can_hit(int dx, int dy) {  // C6r: would a shot at player+(dx,dy) hit a hostile?
     const Entity& p = player_ent();
