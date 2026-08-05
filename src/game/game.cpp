@@ -183,6 +183,13 @@ struct Player {
     // Default: LMB+RMB = Basic Attack; ability slots empty until a Teaching is learned + bound.
     uint8_t skill_bind[2][6] = {{1, 1, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0}};
     uint16_t owned_abilities = 0;  // C7c: per-ability bitmask of learned Teachings (bit `ab` set = owned)
+    // C7d: PoE2 support links. `disc_owned` = physical Disciplines possessed (count per kind, index by
+    // Discipline enum). `skill_support[si][slot]` = the Discipline attached at a skill's slot (0 = empty);
+    // skills 0..8 are abilities (AB-1), 9 = melee Basic Attack, 10 = ranged Basic Attack.
+    // `ability_slots_bought[ab-1]` = the 3rd/4th/5th ability slots unlocked at the Sayyadina (0..3).
+    uint8_t disc_owned[16] = {};
+    uint8_t skill_support[11][5] = {};
+    uint8_t ability_slots_bought[9] = {};
     int flask_charges[tune::kFlaskSlots] = {tune::kFlaskMaxCharges, tune::kFlaskMaxCharges,
                                             tune::kFlaskMaxCharges};  // Life / Will / Utility belt
     int flask_quality = 0;  // D3: Distillate Microtubing raises it (0..20); scales flask effects
@@ -1136,6 +1143,9 @@ struct Meta {
     uint64_t passives = 0;                       // C4 (DMEJ): the character's allocated passive-tree nodes
     uint8_t skill_bind[2][6] = {{1, 1, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0}};  // C7b (DMEK): the skill bar
     uint16_t owned_abilities = 0;  // C7c (DMEL): learned-Teaching bitmask
+    uint8_t disc_owned[16] = {};              // C7d (DMEM): physical Disciplines possessed
+    uint8_t skill_support[11][5] = {};        // C7d: attached Discipline per skill/slot
+    uint8_t ability_slots_bought[9] = {};     // C7d: Sayyadina-bought extra ability slots
     CharStats st;                  // persistent level / attributes / talents / xp
     items::Inst equip[int(items::Slot::Count)];
     items::Inst inv[tune::kInvCap];              // G (DMEE): the persisted pack pool (8x12 grid)
@@ -1201,6 +1211,7 @@ int guild_difficulty() {
     return d < 0 ? 0 : d > cap ? cap : d;
 }
 
+inline constexpr uint32_t kMetaVM = 0x4D454D44u;  // 'DMEM' (C7d: + Disciplines, support slots + attachments)
 inline constexpr uint32_t kMetaVL = 0x4C454D44u;  // 'DMEL' (C7c: + owned_abilities, learned Teachings)
 inline constexpr uint32_t kMetaVK = 0x4B454D44u;  // 'DMEK' (C7b: + skill_bind, the 12-slot skill bar)
 inline constexpr uint32_t kMetaVJ = 0x4A454D44u;  // 'DMEJ' (C4: + passives, the passive-tree allocation mask)
@@ -1341,7 +1352,7 @@ void meta_load() {
     if (!f) return;
     uint32_t magic = 0;
     if (std::fread(&magic, 4, 1, f) == 1) {
-        if (magic >= kMetaV4 && magic <= kMetaVL && magic != kMetaV1) {  // native widened-Inst format (DME4..DMEL)
+        if (magic >= kMetaV4 && magic <= kMetaVM && magic != kMetaV1) {  // native widened-Inst format (DME4..DMEM)
             const bool cur = (magic >= kMetaVC);  // DMEC+ = new Inst layout; older = OldInst (convert)
             (void)!std::fread(&g_meta.runs, 4, 1, f);
             (void)!std::fread(&g_meta.endings_seen, 1, 1, f);
@@ -1425,6 +1436,11 @@ void meta_load() {
             if (magic >= kMetaVL) {  // C7c: learned Teachings (DMEK and earlier -> 0, the starter re-grants)
                 (void)!std::fread(&g_meta.owned_abilities, 2, 1, f);
             }
+            if (magic >= kMetaVM) {  // C7d: Disciplines owned + attachments + bought ability slots
+                (void)!std::fread(g_meta.disc_owned, sizeof g_meta.disc_owned, 1, f);
+                (void)!std::fread(g_meta.skill_support, sizeof g_meta.skill_support, 1, f);
+                (void)!std::fread(g_meta.ability_slots_bought, sizeof g_meta.ability_slots_bought, 1, f);
+            }
             // D3 migration: the old Maker Hide / Worm Tooth counters become currency (their new roles:
             // armour / weapon quality), banked to the crafting table. No-op on a DMEC+ file (already 0).
             if (g_meta.maker_hides > 0) { meta_grant_currency(items::CUR_ARMORQUAL, g_meta.maker_hides); g_meta.maker_hides = 0; }
@@ -1463,7 +1479,7 @@ void meta_load() {
 void meta_save() {
     FILE* f = std::fopen("meta.dat", "wb");
     if (!f) return;
-    std::fwrite(&kMetaVL, 4, 1, f);  // C7c: DMEL (+ owned_abilities; earlier blobs ride along)
+    std::fwrite(&kMetaVM, 4, 1, f);  // C7d: DMEM (+ Disciplines; earlier blobs ride along)
     std::fwrite(&g_meta.runs, 4, 1, f);
     std::fwrite(&g_meta.endings_seen, 1, 1, f);
     std::fwrite(&g_meta.stash_tabs, 1, 1, f);                       // G3: owned tab count
@@ -1498,6 +1514,9 @@ void meta_save() {
     std::fwrite(&g_meta.passives, 8, 1, f);                            // C4: passive-tree mask (DMEJ)
     std::fwrite(g_meta.skill_bind, sizeof g_meta.skill_bind, 1, f);    // C7b: skill bar (DMEK)
     std::fwrite(&g_meta.owned_abilities, 2, 1, f);                     // C7c: learned Teachings (DMEL)
+    std::fwrite(g_meta.disc_owned, sizeof g_meta.disc_owned, 1, f);              // C7d: Disciplines (DMEM)
+    std::fwrite(g_meta.skill_support, sizeof g_meta.skill_support, 1, f);        // C7d: per-skill attachments
+    std::fwrite(g_meta.ability_slots_bought, sizeof g_meta.ability_slots_bought, 1, f);  // C7d: bought slots
     std::fclose(f);
 }
 
@@ -1510,6 +1529,9 @@ void persist_character() {
     g_meta.passives = g.pl.passives;                // C4: the passive tree persists with the character
     std::memcpy(g_meta.skill_bind, g.pl.skill_bind, sizeof g_meta.skill_bind);  // C7b: skill bar persists
     g_meta.owned_abilities = g.pl.owned_abilities;  // C7c: learned Teachings persist
+    std::memcpy(g_meta.disc_owned, g.pl.disc_owned, sizeof g_meta.disc_owned);              // C7d: Disciplines persist
+    std::memcpy(g_meta.skill_support, g.pl.skill_support, sizeof g_meta.skill_support);     // C7d: attachments persist
+    std::memcpy(g_meta.ability_slots_bought, g.pl.ability_slots_bought, sizeof g_meta.ability_slots_bought);  // C7d: bought slots persist
     std::memcpy(g_meta.equip, g.pl.equip, sizeof g_meta.equip);
     std::memcpy(g_meta.inv, g.pl.inv, sizeof g_meta.inv);
     std::memcpy(g_meta.inv_cell, g.pl.inv_cell, sizeof g_meta.inv_cell);  // G: grid layout persists
@@ -2343,7 +2365,8 @@ void pickup_currency() {
     }
 }
 
-bool grant_random_teaching();  // C7c: fwd (defined with the ability block) — learn a random un-owned ability
+bool grant_random_teaching();     // C7c: fwd — learn a random un-owned ability
+bool grant_random_discipline();   // C7d: fwd — drop a random Discipline (physical instance)
 void maybe_drop_loot(EType t, int x, int y) {
     const Foe* f = foe_stats(t);
     if (!f) return;
@@ -2387,6 +2410,9 @@ void maybe_drop_loot(EType t, int x, int y) {
     // C7c: a rare Teaching — a new active ability, learned on the spot (deep content only). Drawn last.
     if (area_level() >= tune::kSpiceEssenceMinArea && g.rng.loot.below(tune::kTeachingDropDenom) == 0)
         grant_random_teaching();
+    // C7d: a Discipline (support) item — a physical instance for the skill panel (deep content).
+    if (area_level() >= tune::kSpiceEssenceMinArea && g.rng.loot.below(tune::kDisciplineDropDenom) == 0)
+        grant_random_discipline();
 }
 
 items::Inst loot_of(const Entity& e) {
@@ -3240,6 +3266,169 @@ bool ability_is_hostile(EType t) {
         default: return false;
     }
 }
+
+// ---- C7d: PoE2 support links (Disciplines) ---------------------------------------------------------
+// Physical Discipline items (owned counts) attach to a skill's slots and modify it at cast time.
+// Skills: 0..8 = abilities (AB-1), 9 = melee Basic Attack, 10 = ranged Basic Attack. Category-gated,
+// one-of-each per skill. Ability slots (3rd/4th/5th) bought at the Sayyadina; Basic-Attack slots come
+// from the equipped weapon's iLVL.
+enum DiscCat : uint8_t { DC_ANY = 0, DC_PROJ, DC_MELEE };
+enum Discipline : uint8_t {
+    DSC_NONE = 0,
+    DSC_PIERCE, DSC_VOLLEY, DSC_HEAVY,       // projectile
+    DSC_CLEAVE, DSC_SUNDER,                  // melee
+    DSC_HONED, DSC_SWIFT, DSC_SPARING, DSC_VENOM, DSC_WIDE,  // any
+    DSC_COUNT
+};
+struct DiscDef { const char* name; uint8_t cat; const char* effect; };
+inline constexpr DiscDef kDisc[DSC_COUNT] = {
+    {"-",             DC_ANY,   ""},
+    {"Pierce",        DC_PROJ,  "shots pass through every foe on the line"},
+    {"Volley",        DC_PROJ,  "+2 projectiles in a spread"},
+    {"Heavy Round",   DC_PROJ,  "+60% damage"},
+    {"Cleave",        DC_MELEE, "also strike the facing arc"},
+    {"Sunder",        DC_MELEE, "hits cause bleed"},
+    {"Honed",         DC_ANY,   "+25% skill damage"},
+    {"Swift",         DC_ANY,   "-25% cooldown"},
+    {"Water-Sparing", DC_ANY,   "-25% Will cost"},
+    {"Venom",         DC_ANY,   "hits add poison"},
+    {"Wide",          DC_ANY,   "+1 area radius"},
+};
+const char* discipline_name(int d) { return (d > 0 && d < DSC_COUNT) ? kDisc[d].name : "-"; }
+bool weapon_is_ranged();  // fwd (defined below)
+inline constexpr int kSkillCount = 11, kBasicMelee = 9, kBasicRanged = 10;
+int ability_category(int ab) { return ab == AB_THROW ? DC_PROJ : DC_ANY; }
+int skill_category(int si) {
+    if (si == kBasicRanged) return DC_PROJ;
+    if (si == kBasicMelee) return DC_MELEE;
+    return (si >= 0 && si < 9) ? ability_category(si + 1) : DC_ANY;
+}
+const char* skill_name(int si) {
+    if (si == kBasicMelee)  return "Basic Attack (melee)";
+    if (si == kBasicRanged) return "Basic Attack (ranged)";
+    return (si >= 0 && si < 9) ? ability_name(si + 1) : "-";
+}
+bool skill_active(int si) {  // shown/editable: abilities need their Teaching; basic attacks always
+    if (si == kBasicMelee || si == kBasicRanged) return true;
+    return si >= 0 && si < 9 && ability_owned(si + 1);
+}
+bool disc_fits_skill(int disc, int si) {
+    if (disc <= 0 || disc >= DSC_COUNT) return false;
+    const int dc = kDisc[disc].cat;
+    return dc == DC_ANY || dc == skill_category(si);
+}
+int weapon_ilvl_tier() {  // the equipped weapon's iLVL grants Basic-Attack support slots (0..3)
+    const items::Inst& w = g.pl.equip[int(items::Slot::Weapon)];
+    const int il = w.empty() ? 0 : w.ilvl;
+    return il >= 10 ? 3 : il >= 7 ? 2 : il >= 4 ? 1 : 0;
+}
+int skill_slot_count(int si) {
+    if (si == kBasicMelee || si == kBasicRanged) return 2 + weapon_ilvl_tier();
+    return (si >= 0 && si < 9) ? 2 + g.pl.ability_slots_bought[si] : 0;
+}
+int disc_attached_count(int disc) {
+    int n = 0;
+    for (int si = 0; si < kSkillCount; ++si)
+        for (int sl = 0; sl < 5; ++sl) if (g.pl.skill_support[si][sl] == disc) ++n;
+    return n;
+}
+int disc_available(int disc) {
+    return (disc > 0 && disc < DSC_COUNT) ? g.pl.disc_owned[disc] - disc_attached_count(disc) : 0;
+}
+bool skill_has_disc(int si, int disc) {
+    for (int sl = 0; sl < 5; ++sl) if (g.pl.skill_support[si][sl] == disc) return true;
+    return false;
+}
+bool attach_discipline(int si, int slot, int disc) {  // link a free copy into a compatible open slot
+    if (si < 0 || si >= kSkillCount || slot < 0 || slot >= skill_slot_count(si)) return false;
+    if (!skill_active(si)) return false;  // an ability must be learned (basic attacks are always active)
+    if (!disc_fits_skill(disc, si) || disc_available(disc) <= 0 || skill_has_disc(si, disc)) return false;
+    g.pl.skill_support[si][slot] = uint8_t(disc);
+    return true;
+}
+void detach_discipline(int si, int slot) {
+    if (si >= 0 && si < kSkillCount && slot >= 0 && slot < 5) g.pl.skill_support[si][slot] = 0;
+}
+void grant_discipline(int disc) {
+    if (disc > 0 && disc < DSC_COUNT && g.pl.disc_owned[disc] < 250) g.pl.disc_owned[disc]++;
+}
+bool grant_random_discipline() {  // a dropped Discipline (a random kind)
+    const int disc = 1 + int(g.rng.loot.below(DSC_COUNT - 1));
+    grant_discipline(disc);
+    g.log.push("A Discipline drops: %s - %s.", kDisc[disc].name, kDisc[disc].effect);
+    return true;
+}
+int ability_slot_cost(int ab) {  // spice for an ability's next support slot (3rd/4th/5th); 0 if maxed
+    const int bought = (ab >= 1 && ab <= 9) ? g.pl.ability_slots_bought[ab - 1] : 3;
+    return bought >= 3 ? 0 : (tune::kSupportSlotBase << bought);
+}
+bool buy_ability_slot(int ab) {
+    const int cost = ability_slot_cost(ab);
+    if (cost <= 0 || g.pl.spice < cost) return false;
+    g.pl.spice -= cost;
+    ++g.pl.ability_slots_bought[ab - 1];
+    return true;
+}
+// the aggregate cast-time modifiers a skill's attached Disciplines produce.
+struct SkillMods {
+    int dmg_pct = 0, will_pct = 0, cd_pct = 0, radius = 0, volley = 0;
+    bool pierce = false, heavy = false, cleave = false, sunder = false, venom = false;
+};
+SkillMods skill_mods(int si) {
+    SkillMods m;
+    if (si < 0 || si >= kSkillCount) return m;
+    for (int sl = 0; sl < skill_slot_count(si); ++sl) {
+        switch (g.pl.skill_support[si][sl]) {
+            case DSC_PIERCE:  m.pierce = true; break;
+            case DSC_VOLLEY:  m.volley += 2; break;
+            case DSC_HEAVY:   m.heavy = true; m.dmg_pct += 60; break;
+            case DSC_CLEAVE:  m.cleave = true; break;
+            case DSC_SUNDER:  m.sunder = true; break;
+            case DSC_HONED:   m.dmg_pct += 25; break;
+            case DSC_SWIFT:   m.cd_pct += 25; break;
+            case DSC_SPARING: m.will_pct += 25; break;
+            case DSC_VENOM:   m.venom = true; break;
+            case DSC_WIDE:    m.radius += 1; break;
+            default: break;
+        }
+    }
+    return m;
+}
+// C7d: the Disciplines (support links) screen (menu 16). Left column = the 11 skills, each with its
+// support-slot boxes + attached Disciplines; right column = the Discipline stash (owned/available).
+// Click a slot to select it (an occupied one detaches); click a Discipline to link it into the selected
+// slot; the per-ability [Buy slot] button (the Sayyadina's rite) unlocks the 3rd/4th/5th at spice.
+namespace discui {
+inline constexpr int SKX = 120, SKY = 210, ROW = 68;                 // skills column
+inline constexpr int NAMEW = 300, SLOTW = 94, SLOTH = 52, SLOTGAP = 8;
+inline constexpr int BUYW = 150;                                     // the per-row Buy button
+inline constexpr int DSCX = 1330, DSCY = 210, DROW = 62, DSCW = 470, DSCH = 52;  // discipline stash
+inline int slot_x(int slot) { return SKX + NAMEW + slot * (SLOTW + SLOTGAP); }
+inline int buy_x() { return slot_x(5) + 12; }
+inline int skill_at(int mx, int my) {
+    if (mx < SKX || mx > SKX + NAMEW) return -1;
+    for (int i = 0; i < kSkillCount; ++i) { const int y = SKY + i * ROW; if (my >= y && my < y + SLOTH) return i; }
+    return -1;
+}
+inline int slot_at(int mx, int my) {  // -> skill*8 + slot, or -1
+    for (int i = 0; i < kSkillCount; ++i) {
+        const int y = SKY + i * ROW;
+        if (my < y || my >= y + SLOTH) continue;
+        for (int s = 0; s < 5; ++s) { const int x = slot_x(s); if (mx >= x && mx < x + SLOTW) return i * 8 + s; }
+    }
+    return -1;
+}
+inline int buy_at(int mx, int my) {  // -> the ability index (0..8) whose Buy button was hit, or -1
+    if (mx < buy_x() || mx > buy_x() + BUYW) return -1;
+    for (int i = 0; i < 9; ++i) { const int y = SKY + i * ROW; if (my >= y && my < y + SLOTH) return i; }
+    return -1;
+}
+inline int disc_at(int mx, int my) {  // -> discipline id 1..DSC_COUNT-1, or -1
+    if (mx < DSCX || mx > DSCX + DSCW) return -1;
+    for (int d = 1; d < DSC_COUNT; ++d) { const int y = DSCY + (d - 1) * DROW; if (my >= y && my < y + DSCH) return d; }
+    return -1;
+}
+}  // namespace discui
 int ability_cost(int ab) {
     switch (ab) {
         case AB_SANDWALK: return tune::kWillBlink;
@@ -3341,50 +3530,63 @@ int ability_aoe(int tx, int ty, int rad, F fn) {
     return n;
 }
 // Demolition Charge: an explosive blast at the cursor.
-bool do_charge(int tx, int ty) {
+bool do_charge(int tx, int ty, const SkillMods& m) {
     if (tx < 0 || ty < 0) return false;
-    const int dmg = ability_power() + 6;
-    ability_aoe(tx, ty, 2, [&](Entity& e) { ability_hit(e, dmg); });
+    const int dmg = (ability_power() + 6) * (100 + m.dmg_pct) / 100;
+    ability_aoe(tx, ty, 2 + m.radius, [&](Entity& e) {
+        if (m.venom) poison_entity(e, 2 + player_lethality() / 8, 6);
+        ability_hit(e, dmg);
+    });
     g.noise.add(tx, ty, 30);
     g.impact_x = int16_t(tx); g.impact_y = int16_t(ty); g.impact_kind = 0;
     g.log.push("The charge blows sand and bone into the wind.");
     return true;
 }
 // Toxin Cloud: a lingering poison burst at the cursor.
-bool do_toxin(int tx, int ty) {
+bool do_toxin(int tx, int ty, const SkillMods& m) {
     if (tx < 0 || ty < 0) return false;
-    ability_aoe(tx, ty, 2, [&](Entity& e) { poison_entity(e, 2 + player_lethality() / 8, 6); });
+    const int dot = (2 + player_lethality() / 8) * (100 + m.dmg_pct) / 100;
+    ability_aoe(tx, ty, 2 + m.radius, [&](Entity& e) { poison_entity(e, dot, 6); });
     g.log.push("A vial bursts. The rot takes the air.");
     return true;
 }
 // Glowglobe Flare: blind the hostiles around you.
-bool do_flare() {
+bool do_flare(const SkillMods& m) {
     const Entity& p = player_ent();
-    ability_aoe(p.x, p.y, 3, [&](Entity& e) { blind_entity(e, 4); });
+    ability_aoe(p.x, p.y, 3 + m.radius, [&](Entity& e) { blind_entity(e, 4); });
     g.log.push("The glowglobe flares white. Eyes fail all around you.");
     return true;
 }
-// Crysknife Throw: hurl the blade in a line to the cursor; the first hostile takes a lethality-scaled hit.
-bool do_throw(int tx, int ty) {
+// Crysknife Throw: hurl the blade in a line to the cursor. Pierce hits all on the line; Volley adds
+// parallel throws; Heavy/Honed scale the damage; Venom poisons.
+bool do_throw(int tx, int ty, const SkillMods& m) {
     const Entity& p = player_ent();
     if (tx == p.x && ty == p.y) return false;
-    int x0 = p.x, y0 = p.y;
-    const int adx = tx > x0 ? tx - x0 : x0 - tx, ady = ty > y0 ? ty - y0 : y0 - ty;
-    const int sx = x0 < tx ? 1 : -1, sy = y0 < ty ? 1 : -1;
-    int err = adx - ady;
-    for (int step = 0; step < 8; ++step) {
-        const int e2 = 2 * err;
-        if (e2 > -ady) { err -= ady; x0 += sx; }
-        if (e2 < adx)  { err += adx; y0 += sy; }
-        if (!zone().walkable(x0, y0)) break;
-        if (Entity* e = hostile_at(x0, y0)) {
-            g.impact_x = int16_t(x0); g.impact_y = int16_t(y0); g.impact_kind = 0;
-            ability_hit(*e, ability_power() + 2);
-            g.log.push("The crysknife flies true.");
-            return true;
+    const int dmg = (ability_power() + 2) * (100 + m.dmg_pct) / 100;
+    bool any = false;
+    auto line = [&](int gx, int gy) {  // one thrown blade toward (gx,gy)
+        int x0 = p.x, y0 = p.y;
+        const int adx = gx > x0 ? gx - x0 : x0 - gx, ady = gy > y0 ? gy - y0 : y0 - gy;
+        const int sx = x0 < gx ? 1 : -1, sy = y0 < gy ? 1 : -1;
+        int err = adx - ady;
+        for (int step = 0; step < 8; ++step) {
+            const int e2 = 2 * err;
+            if (e2 > -ady) { err -= ady; x0 += sx; }
+            if (e2 < adx)  { err += adx; y0 += sy; }
+            if (!zone().walkable(x0, y0)) break;
+            if (Entity* e = hostile_at(x0, y0)) {
+                g.impact_x = int16_t(x0); g.impact_y = int16_t(y0); g.impact_kind = 0;
+                if (m.venom) poison_entity(*e, 2 + player_lethality() / 8, 5);
+                ability_hit(*e, dmg);
+                any = true;
+                if (!m.pierce) return;  // stop at the first foe unless Pierce
+            }
         }
-    }
-    return false;  // whiffed — no cost
+    };
+    line(tx, ty);
+    for (int v = 1; v <= m.volley; ++v) line(tx, ty + (v % 2 ? v : -v));  // Volley: parallel throws
+    if (any) g.log.push("The crysknife flies true.");
+    return any;  // whiffed -> no cost
 }
 // Fremen War-Cry: steel yourself — a Focus surge and a burst of free strides.
 bool do_warcry() {
@@ -3407,24 +3609,25 @@ bool do_draught() {
 bool cast_ability(int ab, int tx, int ty) {
     if (!ability_ready() || ab <= AB_NONE || ab >= AB_COUNT) return false;
     if (!ability_owned(ab)) return false;  // C7c: must have learned the Teaching
-    const int cost = ability_cost(ab);
+    const SkillMods m = skill_mods(ab - 1);            // C7d: this ability's attached Disciplines
+    const int cost = ability_cost(ab) * (100 - m.will_pct) / 100;  // Water-Sparing
     if (g.pl.will < cost) return false;
     bool ok = false;
     switch (ab) {
         case AB_SANDWALK: ok = do_sandwalk(tx, ty); break;
         case AB_HOOKPULL: ok = do_hookpull(); break;
         case AB_FEINT:    ok = do_feint(); break;
-        case AB_CHARGE:   ok = do_charge(tx, ty); break;
-        case AB_TOXIN:    ok = do_toxin(tx, ty); break;
-        case AB_FLARE:    ok = do_flare(); break;
-        case AB_THROW:    ok = do_throw(tx, ty); break;
+        case AB_CHARGE:   ok = do_charge(tx, ty, m); break;
+        case AB_TOXIN:    ok = do_toxin(tx, ty, m); break;
+        case AB_FLARE:    ok = do_flare(m); break;
+        case AB_THROW:    ok = do_throw(tx, ty, m); break;
         case AB_WARCRY:   ok = do_warcry(); break;
         case AB_DRAUGHT:  ok = do_draught(); break;
         default: break;
     }
     if (!ok) return false;
     g.pl.will -= cost;
-    g.pl.ability_cd = tune::kAbilityCdTurns;
+    g.pl.ability_cd = tune::kAbilityCdTurns * (100 - m.cd_pct) / 100;  // Swift
     return true;
 }
 // C7c: learn a Teaching (mark the ability owned).
@@ -4916,37 +5119,57 @@ bool maula_can_hit(int tx, int ty) {
     return maula_trace(tx, ty, hx, hy) != nullptr;
 }
 // C6/C6r: fire the ranged weapon toward (tx,ty). LOUD. Requires an equipped ranged weapon.
+// Apply one ranged hit to a foe: roll damage (scaled), on-hit sustain, optional venom, then death.
+void maula_strike(Entity& e, const SkillMods& m) {
+    Foe bf{};
+    const Foe* foe = e.type == EType::Boss ? (bf = boss_foe(e), &bf) : foe_stats(e.type);
+    bool crit = false;
+    int dealt = foe ? player_attack_roll(*foe, &crit) : g.pl.atk;  // lethality-scaled
+    g.impact_x = e.x; g.impact_y = e.y; g.impact_kind = e.type == EType::ShieldTrooper ? 1 : 0;
+    if (dealt == 0) return;  // a clean miss
+    dealt = dealt * (100 + m.dmg_pct) / 100;              // Heavy Round / Honed
+    e.hp -= int16_t(dealt);
+    if (int lch = affix_total(items::AK_LEECH); lch > 0) gain_hp(dealt * lch / 100);
+    if (int loh = affix_total(items::AK_LIFE_ON_HIT); loh > 0) gain_hp(loh);
+    if (int wsp = affix_total(items::AK_WILL_SIPHON); wsp > 0) gain_will(wsp);
+    if (m.venom) poison_entity(e, 2 + player_lethality() / 8, 5);  // Venom
+    if (e.hp <= 0) resolve_enemy_death(&e, foe);
+}
 void fire_maula(int tx, int ty) {
     if (g.pl.dead || g.pl.riding) return;
     Entity& p = player_ent();
     if (tx < 0 || ty < 0 || (tx == p.x && ty == p.y)) return;  // no valid aim
     if (!weapon_is_ranged()) { g.log.push("You have no ranged weapon to fire."); return; }
-    int hx, hy;
-    Entity* victim = maula_trace(tx, ty, hx, hy);
+    const SkillMods m = skill_mods(kBasicRanged);   // C7d: the ranged Basic Attack's Disciplines
+    const int rng = weapon_range() > 0 ? weapon_range() : tune::kMaulaRange;
     p.anim.facing = facing_from_tile_delta(tx - p.x, ty - p.y);
     p.anim.set(anim::State::Attack);
-    g.noise.add(p.x, p.y, tune::kMaulaNoise);   // the crack draws every ear on the sand
-    g.impact_x = int16_t(hx); g.impact_y = int16_t(hy);
+    g.noise.add(p.x, p.y, tune::kMaulaNoise);
     g.services.mixer->push({audio::Cmd::PlaySfx, 1, 180, 120});
-    if (!victim) {
-        g.log.push("The maula cracks. The dart spends itself on stone.");
-        consume_action();
-        return;
-    }
-    g.impact_kind = victim->type == EType::ShieldTrooper ? 1 : 0;
-    Foe boss_f{};
-    if (victim->type == EType::Boss) boss_f = boss_foe(*victim);
-    const Foe* foe = victim->type == EType::Boss ? &boss_f : foe_stats(victim->type);
-    bool crit = false;
-    const int dealt = foe ? player_attack_roll(*foe, &crit) : g.pl.atk;  // lethality-scaled
-    if (dealt == 0) { g.log.push("The dart glances off. A miss."); consume_action(); return; }
-    victim->hp -= int16_t(dealt);
-    if (int lch = affix_total(items::AK_LEECH); lch > 0) gain_hp(dealt * lch / 100);
-    if (int loh = affix_total(items::AK_LIFE_ON_HIT); loh > 0) gain_hp(loh);
-    if (int ws = affix_total(items::AK_WILL_SIPHON); ws > 0) gain_will(ws);
-    if (crit) g.log.push("CRIT - %d! The dart takes him clean.", dealt);
-    else g.log.push("The maula hits for %d.", dealt);
-    if (victim->hp <= 0) resolve_enemy_death(victim, foe);
+    bool anyHit = false;
+    auto shot = [&](int gx, int gy) {  // one dart toward (gx,gy); Pierce hits every foe on the line
+        int x0 = p.x, y0 = p.y;
+        const int adx = gx > x0 ? gx - x0 : x0 - gx, ady = gy > y0 ? gy - y0 : y0 - gy;
+        const int sx = x0 < gx ? 1 : -1, sy = y0 < gy ? 1 : -1;
+        int err = adx - ady, lastx = x0, lasty = y0;
+        for (int step = 0; step < rng; ++step) {
+            const int e2 = 2 * err;
+            if (e2 > -ady) { err -= ady; x0 += sx; }
+            if (e2 < adx)  { err += adx; y0 += sy; }
+            lastx = x0; lasty = y0;
+            if (!zone().walkable(x0, y0)) break;
+            if (Entity* e = hostile_at(x0, y0)) {
+                maula_strike(*e, m);
+                anyHit = true;
+                if (!m.pierce) return;
+            }
+            if (x0 == gx && y0 == gy) break;
+        }
+        if (!anyHit) { g.impact_x = int16_t(lastx); g.impact_y = int16_t(lasty); }
+    };
+    shot(tx, ty);
+    for (int v = 1; v <= m.volley; ++v) shot(tx, ty + (v % 2 ? v : -v));  // Volley: parallel darts
+    g.log.push(anyHit ? "The maula speaks." : "The maula cracks. The dart spends itself on stone.");
     consume_action();
 }
 
@@ -5072,6 +5295,8 @@ void try_move(int dx, int dy) {
         const Foe* foe = victim->type == EType::Boss ? &boss_f : foe_stats(victim->type);
         bool crit = false;
         int dealt = foe ? player_attack_roll(*foe, &crit) : g.pl.atk;
+        const SkillMods bm = skill_mods(kBasicMelee);   // C7d: the melee Basic Attack's Disciplines
+        if (dealt > 0) dealt = dealt * (100 + bm.dmg_pct) / 100;
         g.noise.add(nx, ny, victim->type == EType::Spotter ? 4 : 12);  // blades are quiet
         if (dealt == 0) {
             g.log.push("Your blade whispers past. A miss.");
@@ -5087,6 +5312,18 @@ void try_move(int dx, int dy) {
         // C3: AK_POISON (of Venom / Poison Damage) applies a Poison DoT — activates the D1 stat.
         if (int ap = affix_total(items::AK_POISON); ap > 0 && victim->hp > 0)
             poison_entity(*victim, 1 + ap / 20, 5);
+        // C7d melee Disciplines: Venom (poison), Sunder (bleed), Cleave (also strike the adjacent arc).
+        if (bm.venom && victim->hp > 0) poison_entity(*victim, 2 + player_lethality() / 8, 5);
+        if (bm.sunder && victim->hp > 0) bleed_entity(*victim, 2 + player_lethality() / 8, 5);
+        if (bm.cleave) {
+            const Entity& pl = player_ent();
+            for (int i = 1; i < kMaxEnts; ++i) {
+                Entity& e = g.ents[i];
+                if (&e == victim || e.hp <= 0 || e.zone != g.cur_zone || !ability_is_hostile(e.type)) continue;
+                const int ex = e.x - pl.x, ey = e.y - pl.y;
+                if (ex >= -1 && ex <= 1 && ey >= -1 && ey <= 1) ability_hit(e, dealt);
+            }
+        }
         // RT2: a heavy blow can Stun (damage vs the foe's max Life; Stun Buildup inflates it).
         if (victim->hp > 0 && foe) {
             if (int st = roll_stun_ticks(dealt, foe->hp, affix_total(items::AK_STUN_MULT), 0); st > 0) {
@@ -5319,6 +5556,9 @@ void game_init(uint64_t seed, const GameServices& services) {
         g.pl.passives = g_meta.passives;                  // C4: restore the passive tree
         std::memcpy(g.pl.skill_bind, g_meta.skill_bind, sizeof g.pl.skill_bind);  // C7b: restore the skill bar
         g.pl.owned_abilities = g_meta.owned_abilities;  // C7c: restore learned Teachings
+        std::memcpy(g.pl.disc_owned, g_meta.disc_owned, sizeof g.pl.disc_owned);              // C7d: restore Disciplines
+        std::memcpy(g.pl.skill_support, g_meta.skill_support, sizeof g.pl.skill_support);     // C7d: restore attachments
+        std::memcpy(g.pl.ability_slots_bought, g_meta.ability_slots_bought, sizeof g.pl.ability_slots_bought);  // C7d: restore bought slots
         std::memcpy(g.pl.equip, g_meta.equip, sizeof g.pl.equip);
         std::memcpy(g.pl.inv, g_meta.inv, sizeof g.pl.inv);
         std::memcpy(g.pl.inv_cell, g_meta.inv_cell, sizeof g.pl.inv_cell);  // G: restore the grid layout
@@ -5637,7 +5877,7 @@ int menu_row_under_mouse(const InputState& in) {
     if (g.menu_open >= 1 && g.menu_open <= 4) {           // vendor lists (R2: 2x)
         const int x0 = fb::W / 2 - 300, y0 = 280;
         if (mx < x0 + 16 || mx > x0 + 16 + 568) return -1;
-        const int counts[5] = {0, 6, 3, 5, 4};  // C5b: Naib gained the Sietch-tree row
+        const int counts[5] = {0, 6, 4, 5, 4};  // C5b: Naib gained the Sietch-tree row; C7d: Sayyadina gained Commune
         for (int i = 0; i < counts[g.menu_open]; ++i) {
             const int ry = y0 + 80 + i * 32 - 4;
             if (my >= ry && my < ry + 32) return i;
@@ -5724,8 +5964,8 @@ bool game_update(const InputState& in) {
     // vendor menus pause the world (browsing is free)
     if (g.menu_open) {
         // 5 = character sheet, 6 = inventory, 7 = the vault
-        int counts[16] = {0, 6, 3, 5, 4, 3 + kTalentCount + 1, 13, 13, 4, 5 + 1 + 1, 5 + 1 + 1, 1,
-                          kSietchNodeCount + 1, kPassiveNodeCount, 1, 12};  // 12 tree,13 tree,15 loadout
+        int counts[17] = {0, 6, 4, 5, 4, 3 + kTalentCount + 1, 13, 13, 4, 5 + 1 + 1, 5 + 1 + 1, 1,
+                          kSietchNodeCount + 1, kPassiveNodeCount, 1, 12, 1};  // 12/13 tree,15 loadout,16 disciplines; Sayyadina=4
         int n = counts[g.menu_open];
         if (g.menu_open == 11) {  // D3d bench: rows are owned currencies, or gear once a currency is picked
             uint8_t cb[items::CUR_COUNT]; int gi[12];
@@ -5751,6 +5991,47 @@ bool game_update(const InputState& in) {
             if (in.was_pressed(Key::Down)) g.menu_sel = (g.menu_sel + 1) % 12;
             if (in.was_pressed(Key::Left) || in.was_pressed(Key::Right)) g.menu_sel = (g.menu_sel + 6) % 12;
             if (in.was_pressed(Key::Confirm) || hit >= 0) skill_cycle(g.menu_sel / 6, g.menu_sel % 6);
+            // a click on the "DISCIPLINES »" button crosses over to the support-links screen
+            if (in.mouse_pressed[0] && in.mouse_x >= fb::W - 360 && in.mouse_x < fb::W - 360 + 320 &&
+                in.mouse_y >= 60 && in.mouse_y < 96) { g.menu_open = 16; g.menu_sel = kBasicMelee * 8; }
+            return true;
+        }
+        if (g.menu_open == 16) {  // C7d: the Disciplines (support links) screen
+            if (in.was_pressed(Key::Cancel) || in.was_pressed(Key::Loadout)) { g.menu_open = 0; return true; }
+            const int mx = in.mouse_x, my = in.mouse_y;
+            if (in.was_pressed(Key::Up))   g.menu_sel = ((g.menu_sel / 8 + kSkillCount - 1) % kSkillCount) * 8 + (g.menu_sel % 8);
+            if (in.was_pressed(Key::Down)) g.menu_sel = ((g.menu_sel / 8 + 1) % kSkillCount) * 8 + (g.menu_sel % 8);
+            if (in.was_pressed(Key::Left))  g.menu_sel = (g.menu_sel / 8) * 8 + (g.menu_sel % 8 + 4) % 5;
+            if (in.was_pressed(Key::Right)) g.menu_sel = (g.menu_sel / 8) * 8 + (g.menu_sel % 8 + 1) % 5;
+            if (in.mouse_pressed[0] && mx >= 0) {
+                // « SKILL BAR button returns to the loadout
+                if (mx >= 120 && mx < 120 + 260 && my >= 60 && my < 96) { g.menu_open = 15; g.menu_sel = 0; return true; }
+                const int sh = discui::slot_at(mx, my), dh = discui::disc_at(mx, my);
+                const int kh = discui::skill_at(mx, my), bh = discui::buy_at(mx, my);
+                if (sh >= 0) {
+                    const int si = sh / 8, slot = sh % 8;
+                    if (!skill_active(si)) g.log.push("That skill is not learned yet.");
+                    else if (slot >= skill_slot_count(si)) g.log.push("That support slot is locked - unlock it at the Sayyadina.");
+                    else if (g.pl.skill_support[si][slot]) {
+                        g.log.push("Unlinked %s from %s.", discipline_name(g.pl.skill_support[si][slot]), skill_name(si));
+                        detach_discipline(si, slot);
+                    } else g.menu_sel = si * 8 + slot;  // select an empty slot as the attach target
+                } else if (bh >= 0) {  // the Sayyadina's rite: buy this ability's next support slot
+                    const int cost = ability_slot_cost(bh + 1);
+                    if (cost <= 0) g.log.push("%s already holds all five supports.", skill_name(bh));
+                    else if (buy_ability_slot(bh + 1)) g.log.push("The Sayyadina opens a support slot on %s. -%d spice.", skill_name(bh), cost);
+                    else g.log.push("Not enough spice for that rite (%d needed).", cost);
+                } else if (kh >= 0) g.menu_sel = kh * 8 + (g.menu_sel % 8);
+                else if (dh > 0) {  // link the clicked Discipline into the selected slot
+                    const int si = g.menu_sel / 8, slot = g.menu_sel % 8;
+                    if (attach_discipline(si, slot, dh)) g.log.push("Linked %s to %s.", discipline_name(dh), skill_name(si));
+                    else if (!skill_active(si)) g.log.push("Learn that skill first.");
+                    else if (skill_has_disc(si, dh)) g.log.push("%s already carries %s.", skill_name(si), discipline_name(dh));
+                    else if (!disc_fits_skill(dh, si)) g.log.push("%s can't take %s.", skill_name(si), discipline_name(dh));
+                    else if (disc_available(dh) <= 0) g.log.push("No free %s to link.", discipline_name(dh));
+                    else g.log.push("No open slot there.");
+                }
+            }
             return true;
         }
         if (g.menu_open == 13) {  // C4: the passive skill tree (a node graph; click a node to allocate)
@@ -5981,7 +6262,11 @@ bool game_update(const InputState& in) {
                                                   : "'You are whole already.'");
                     }
                     break;
-                case 22: g.menu_open = 0; break;
+                case 22:  // C7d: Commune — open the Disciplines & support-links screen (the Sayyadina's rite)
+                    g.menu_open = 16; g.menu_sel = kBasicMelee * 8;
+                    g.log.push("'The links between skill and spirit... let me show you.'");
+                    break;
+                case 23: g.menu_open = 0; break;  // Sayyadina: leave
                 case 30:  // Smuggler stock
                     if (g.pl.spice >= 5) { g.pl.spice -= 5; ++g.pl.charges;
                         g.log.push("A demolition charge, no questions. -5 spice."); }
@@ -7020,6 +7305,67 @@ void draw_loadout(DrawCtx& ctx) {
             std::strncat(owned, ability_name(ab), sizeof owned - std::strlen(owned) - 1);
         }
     draw_text(ctx, owned, loadout::ox(), loadout::row_y(1) + loadout::BH + 30, 136);
+    // C7d: a button crossing over to the Disciplines (support links) screen
+    fill_rect(ctx, fb::W - 360, 60, 320, 36, 3);
+    fill_rect(ctx, fb::W - 360, 60, 320, 2, 228);
+    draw_text(ctx, "DISCIPLINES  (support links) >", fb::W - 360 + 14, 68, 245);
+}
+// C7d: the Disciplines (support-links) screen — the 11 skills, their support slots + attachments, and
+// the Discipline stash. Category-gated, one-of-each; ability slots 3-5 bought at the Sayyadina.
+void draw_disciplines(DrawCtx& ctx) {
+    using namespace discui;
+    fill_rect(ctx, 0, 0, fb::W, fb::H, 1);
+    draw_text_shadow(ctx, "DISCIPLINES - SUPPORT LINKS", fb::W / 2 - 15 * 8, 60, 230, 1);
+    // « back-to-loadout button
+    fill_rect(ctx, 120, 60, 260, 36, 3);
+    fill_rect(ctx, 120, 60, 260, 2, 228);
+    draw_text(ctx, "< SKILL BAR", 134, 68, 245);
+    char buf[96];
+    std::snprintf(buf, sizeof buf, "spice %d   Click a slot, then a Discipline to link it.  ESC closes.", g.pl.spice);
+    draw_text(ctx, buf, 120, 120, 14);
+    const int selsi = g.menu_sel / 8, selslot = g.menu_sel % 8;
+    for (int i = 0; i < kSkillCount; ++i) {
+        const int y = SKY + i * ROW;
+        const bool active = skill_active(i);
+        draw_text(ctx, skill_name(i), SKX, y + 6, uint8_t(i == selsi ? 245 : active ? 20 : 8));
+        const int slots = skill_slot_count(i), owned_slots = (i < 9) ? 5 : slots;
+        for (int s = 0; s < owned_slots; ++s) {
+            const int x = slot_x(s);
+            const bool open = s < slots, sel = active && i == selsi && s == selslot;
+            fill_rect(ctx, x, y, SLOTW, SLOTH, uint8_t(!open ? 1 : sel ? 4 : 2));
+            fill_rect(ctx, x, y, SLOTW, 2, uint8_t(open ? 228 : 8));
+            const uint8_t d = g.pl.skill_support[i][s];
+            if (!active) draw_text(ctx, "--", x + 8, y + 18, 8);
+            else if (!open) draw_text(ctx, "locked", x + 8, y + 18, 8);
+            else if (d) draw_text(ctx, discipline_name(d), x + 6, y + 18, 245);
+            else draw_text(ctx, "(open)", x + 8, y + 18, 12);
+        }
+        if (i < 9 && active) {  // the per-ability Buy button (the Sayyadina's rite)
+            const int cost = ability_slot_cost(i + 1), bx = buy_x();
+            if (cost > 0) {
+                fill_rect(ctx, bx, y, BUYW, SLOTH, uint8_t(g.pl.spice >= cost ? 3 : 2));
+                std::snprintf(buf, sizeof buf, "Buy slot %d", skill_slot_count(i) + 1);
+                draw_text(ctx, buf, bx + 8, y + 6, 231);
+                std::snprintf(buf, sizeof buf, "%d spice", cost);
+                draw_text(ctx, buf, bx + 8, y + 28, uint8_t(g.pl.spice >= cost ? 245 : 8));
+            } else {
+                draw_text(ctx, "5/5", bx + 8, y + 18, 136);
+            }
+        }
+    }
+    // the Discipline stash (right column): every kind, its category, effect, and available/owned count
+    draw_text(ctx, "THE DISCIPLINE STASH  (owned / free)", DSCX, DSCY - 30, 200);
+    static const char* kCatTag[] = {"any", "proj", "melee"};
+    for (int d = 1; d < DSC_COUNT; ++d) {
+        const int y = DSCY + (d - 1) * DROW;
+        const int avail = disc_available(d), own = g.pl.disc_owned[d];
+        const bool fits = disc_fits_skill(d, selsi) && skill_active(selsi);
+        fill_rect(ctx, DSCX, y, DSCW, DSCH, uint8_t(avail > 0 && fits ? 3 : 2));
+        fill_rect(ctx, DSCX, y, DSCW, 2, uint8_t(fits ? 228 : 8));
+        std::snprintf(buf, sizeof buf, "%s [%s]  x%d/%d", kDisc[d].name, kCatTag[kDisc[d].cat], avail, own);
+        draw_text(ctx, buf, DSCX + 8, y + 4, uint8_t(own > 0 ? 245 : 8));
+        draw_text(ctx, kDisc[d].effect, DSCX + 8, y + 26, uint8_t(own > 0 ? 14 : 8));
+    }
 }
 // C7b: the compact HUD skill bar — the primary bar's six slots (the Ctrl secondary shows on the loadout).
 void draw_skillbar_hud(DrawCtx& ctx) {
@@ -7238,6 +7584,7 @@ void pass_ui(RenderCtx& r) {
 
     if (g.menu_open == 13) draw_passive_tree(ctx);  // C4: the passive-tree screen
     if (g.menu_open == 15) draw_loadout(ctx);        // C7b: the skill-bar loadout screen
+    if (g.menu_open == 16) draw_disciplines(ctx);    // C7d: the Disciplines (support links) screen
 
     // Endgame hub menus (War Council / Jihad Table / Landsraad / Bench) — dynamic, keyboard-driven.
     if (g.menu_open >= 8 && g.menu_open <= 12) {
@@ -7454,7 +7801,8 @@ void pass_ui(RenderCtx& r) {
             {"Tribute 200 water  (+10 standing)", "Ask about the season",
              "A task for the tribe", "Ride out to the Ninth Rock (Guild tithe)",
              "Contribute to the tribe  (the Sietch tree)", "Leave"},
-            {"Offer 5 spice  (+12 standing)", "Healing trance  (6 spice)", "Leave", nullptr},
+            {"Offer 5 spice  (+12 standing)", "Healing trance  (6 spice)",
+             "Commune  (Disciplines & support rites)", "Leave"},
             {"Demolition charge  (5 spice)", "Two thumpers  (3 spice)",
              "Toxin vial  (2 spice)", "Glowglobe  (3 spice)", "Leave"},
             {"FARSIGHT - unfold the map  (2 spice)", "THREADWALK - two free strides  (3 spice)",
@@ -7642,6 +7990,9 @@ void game_serialize(SaveWriter& w) {
     w.u64(g.pl.passives);   // C4: the passive-tree allocation mask
     w.bytes(g.pl.skill_bind, sizeof g.pl.skill_bind);  // C7b: the skill bar
     w.u16(g.pl.owned_abilities);  // C7c: learned Teachings
+    w.bytes(g.pl.disc_owned, sizeof g.pl.disc_owned);              // C7d: Disciplines possessed
+    w.bytes(g.pl.skill_support, sizeof g.pl.skill_support);        // C7d: per-skill attachments
+    w.bytes(g.pl.ability_slots_bought, sizeof g.pl.ability_slots_bought);  // C7d: bought slots
     w.i32(g.pl.exposure);
     w.i32(g.pl.turn);
     w.bytes(&g.pl.st, sizeof g.pl.st);
@@ -7749,6 +8100,9 @@ bool game_deserialize(SaveReader& r) {
     pl.passives = r.u64();   // C4: the passive-tree allocation mask
     r.bytes(pl.skill_bind, sizeof pl.skill_bind);  // C7b: the skill bar
     pl.owned_abilities = r.u16();  // C7c: learned Teachings
+    r.bytes(pl.disc_owned, sizeof pl.disc_owned);              // C7d: Disciplines possessed
+    r.bytes(pl.skill_support, sizeof pl.skill_support);        // C7d: per-skill attachments
+    r.bytes(pl.ability_slots_bought, sizeof pl.ability_slots_bought);  // C7d: bought slots
     pl.exposure = r.i32();
     pl.turn = r.i32();
     r.bytes(&pl.st, sizeof pl.st);
@@ -8315,6 +8669,29 @@ void game_debug_grant_ability(int ab) { grant_ability(ab); }
 int game_debug_ability_owned(int ab) { return ability_owned(ab) ? 1 : 0; }
 int game_debug_meta_owned_abilities() { return g_meta.owned_abilities; }
 int game_debug_grant_random_teaching() { return grant_random_teaching() ? 1 : 0; }
+// --- C7d discipline (support-link) hooks ---
+void game_debug_grant_discipline(int d) { grant_discipline(d); }
+int game_debug_grant_random_discipline() { return grant_random_discipline() ? 1 : 0; }
+int game_debug_disc_owned(int d) { return (d > 0 && d < DSC_COUNT) ? g.pl.disc_owned[d] : -1; }
+int game_debug_disc_available(int d) { return disc_available(d); }
+int game_debug_disc_fits_skill(int d, int si) { return disc_fits_skill(d, si) ? 1 : 0; }
+int game_debug_attach_discipline(int si, int slot, int d) { return attach_discipline(si, slot, d) ? 1 : 0; }
+void game_debug_detach_discipline(int si, int slot) { detach_discipline(si, slot); }
+int game_debug_skill_support(int si, int slot) {
+    return (si >= 0 && si < kSkillCount && slot >= 0 && slot < 5) ? g.pl.skill_support[si][slot] : -1;
+}
+int game_debug_skill_slot_count(int si) { return skill_slot_count(si); }
+int game_debug_ability_slot_cost(int ab) { return ability_slot_cost(ab); }
+int game_debug_buy_ability_slot(int ab) { return buy_ability_slot(ab) ? 1 : 0; }
+int game_debug_weapon_ilvl_tier() { return weapon_ilvl_tier(); }
+void game_debug_set_weapon_ilvl(int il) { g.pl.equip[int(items::Slot::Weapon)].ilvl = uint8_t(il); }
+int game_debug_meta_disc_owned(int d) { return (d > 0 && d < DSC_COUNT) ? g_meta.disc_owned[d] : -1; }
+int game_debug_meta_skill_support(int si, int slot) {
+    return (si >= 0 && si < kSkillCount && slot >= 0 && slot < 5) ? g_meta.skill_support[si][slot] : -1;
+}
+int game_debug_meta_ability_slots_bought(int ab) {
+    return (ab >= 1 && ab <= 9) ? g_meta.ability_slots_bought[ab - 1] : -1;
+}
 // --- hub-menu hooks ---
 void game_debug_open_menu(int m, int sel) { g.menu_open = m; g.menu_sel = sel; }
 int game_debug_menu_open() { return g.menu_open; }

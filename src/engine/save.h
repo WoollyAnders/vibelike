@@ -7,7 +7,7 @@
 #include <vector>
 
 inline constexpr uint32_t kSaveMagic = 0x54535544;  // 'DUST'
-inline constexpr uint16_t kSaveVersion = 31;  // v31: C7c learned-ability Teachings (pl.owned_abilities)
+inline constexpr uint16_t kSaveVersion = 32;  // v32: C7d Disciplines (disc_owned + skill_support + ability_slots_bought)
 
 class SaveWriter {
 public:

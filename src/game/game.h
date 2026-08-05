@@ -190,6 +190,23 @@ void game_debug_grant_ability(int ab);       // learn a Teaching (mark ability o
 int game_debug_ability_owned(int ab);        // 1 if the ability is owned
 int game_debug_meta_owned_abilities();       // persisted owned-ability mask (DMEL round-trip)
 int game_debug_grant_random_teaching();      // drop-path: learn a random un-owned ability (1=learned)
+// --- C7d discipline (support-link) hooks ---
+void game_debug_grant_discipline(int d);           // grant one physical Discipline of kind d
+int game_debug_grant_random_discipline();          // drop-path: a random Discipline (1=dropped)
+int game_debug_disc_owned(int d);                  // count of Discipline d possessed
+int game_debug_disc_available(int d);              // unattached copies of Discipline d
+int game_debug_disc_fits_skill(int d, int si);     // 1 if Discipline d's category fits skill si
+int game_debug_attach_discipline(int si, int slot, int d);  // link d into skill si's slot (1=ok)
+void game_debug_detach_discipline(int si, int slot);        // unlink skill si's slot
+int game_debug_skill_support(int si, int slot);    // Discipline attached at skill si / slot (0 none)
+int game_debug_skill_slot_count(int si);           // support slots open on skill si (2..5)
+int game_debug_ability_slot_cost(int ab);          // spice for ability ab's next support slot (0 maxed)
+int game_debug_buy_ability_slot(int ab);           // buy ability ab's next slot (1=ok)
+int game_debug_weapon_ilvl_tier();                 // equipped-weapon iLVL tier (0..3) for basic-attack slots
+void game_debug_set_weapon_ilvl(int il);           // set the equipped weapon's ilvl (test setup)
+int game_debug_meta_disc_owned(int d);             // persisted Discipline count (DMEM round-trip)
+int game_debug_meta_skill_support(int si, int slot);   // persisted attachment (DMEM round-trip)
+int game_debug_meta_ability_slots_bought(int ab);      // persisted bought slots (DMEM round-trip)
 void game_debug_open_menu(int m, int sel);   // hub UIs: force a menu open at a row (8-11 endgame)
 int game_debug_menu_open();                  // hub UIs: current open menu id (0 = none)
 int game_debug_use_flask(int slot);          // flasks: 0 Life / 1 Will / 2 Utility (1 = drunk)

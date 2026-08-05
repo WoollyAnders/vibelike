@@ -139,6 +139,10 @@ inline constexpr int kPassivePerLevel = 1;    // passive points earned per chara
 // --- C7c: ability Teachings drop rarely in deep content (reuse kSpiceEssenceMinArea as the gate) ---
 inline constexpr int kTeachingDropDenom = 60; // ~1/N deep kills teach a new (un-owned) ability
 
+// --- C7d: support links (Disciplines) ---
+inline constexpr int kSupportSlotBase = 200;  // spice for a skill's 3rd support slot (Sayyadina); doubles each
+inline constexpr int kDisciplineDropDenom = 40;  // ~1/N deep kills drop a Discipline
+
 // --- C6: the maula pistol (cursor-aimed ranged attack) ---
 inline constexpr int kMaulaNoise = 22;        // the maula CRACKS — much louder than a blade (12)
 inline constexpr int kMaulaRange = 12;        // max tiles the dart travels
