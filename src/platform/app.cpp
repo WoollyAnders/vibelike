@@ -2080,98 +2080,54 @@ int run_skillbartest(audio::Mixer& mixer, const Assets& assets, const Colormaps&
 
 // C7c: abilities are learned from dropped Teachings, not the tree. A fresh character starts with one
 // class starter; more drop in deep content; owned abilities persist with the character (DMEL).
-int run_teachingtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+// C8a: class ability trees (Chronicon). Abilities + their modifiers are unlocked by spending a LIMITED
+// pool of class points in the player's class trees — no longer dropped as loot. Class-gated (an Oracle
+// ability is absent from Knifehand's trees), modifiers gated behind their ability + category; state
+// persists (DMEN). Abilities: FEINT 3 / HOOKPULL 2 / CHARGE 4 (Knifehand); SANDWALK 1 (Wanderer).
+// Modifiers (DSC): Pierce 1 / Honed 6 / Venom 9.
+int run_skilltree_test(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
     std::remove("meta.dat");
     GameServices services{&mixer, &assets, &cmaps};
     game_init(818, services);
-    game_debug_apply_base(0);  // Knifehand -> starter = Fedaykin Feint (id 3)
+    game_debug_apply_base(0);   // Knifehand -> starter Fedaykin Feint (ab 3)
+    game_debug_set_level(20);   // ~19 class points to spend
 
-    // (A) the class starter is owned; a different ability (Demolition Charge, 4) is not
-    const bool starter = game_debug_ability_owned(3) == 1;
-    const bool locked = game_debug_ability_owned(4) == 0;
+    // (A) class + node gating
+    const bool nodes = game_debug_node_exists(0, 3, 0) == 1 &&   // Knifehand has the FEINT unlock node
+                       game_debug_node_exists(0, 1, 0) == 0 &&   // SANDWALK (Wanderer) is not in its trees
+                       game_debug_node_exists(0, 4, 6) == 1;     // CHARGE's Honed modifier node exists
+    const bool starter = game_debug_ability_owned(3) == 1;      // the class starter is pre-owned
+    const bool wrongClass = game_debug_tree_alloc_ability(1) == 0;  // can't unlock a Wanderer ability
 
-    // (B) a dropped Teaching learns one new (previously un-owned) ability
-    int before = 0; for (int ab = 1; ab < 10; ++ab) before += game_debug_ability_owned(ab);
-    const bool learned = game_debug_grant_random_teaching() == 1;
-    int after = 0; for (int ab = 1; ab < 10; ++ab) after += game_debug_ability_owned(ab);
-    const bool grew = after == before + 1;
+    // (B) spend a point to unlock an ability, then a modifier gated behind it
+    const int p0 = game_debug_class_points();
+    const bool unlocked = game_debug_tree_alloc_ability(4) == 1 && game_debug_ability_owned(4) == 1;  // CHARGE
+    const bool spent1 = game_debug_class_points() == p0 - 1;
+    const bool modGated = game_debug_tree_alloc_mod(2, 6) == 0;  // HOOKPULL not owned -> can't modify it
+    const bool modOk = game_debug_tree_alloc_mod(4, 6) == 1 &&   // Honed shapes CHARGE (si = ab-1 = 3)
+                       game_debug_skill_has_mod(3, 6) == 1;
+    const bool badCat = game_debug_tree_alloc_mod(3, 1) == 0;    // FEINT can't take Pierce (no such node)
 
-    // (C) learned abilities persist across a meta reload (DMEL round-trip)
-    game_debug_grant_ability(4);  // learn Demolition Charge explicitly
+    // (C) class points are LIMITED — once dry, allocation refuses
+    game_debug_tree_respec();     // refund to just the starter
+    game_debug_set_level(2);      // exactly one class point
+    const bool oneLeft = game_debug_class_points() == 1;
+    const bool buy1 = game_debug_tree_alloc_ability(2) == 1;     // spend it on HOOKPULL
+    const bool dry = game_debug_class_points() == 0 && game_debug_tree_alloc_ability(4) == 0;
+
+    // (D) DMEN persistence: unlocked abilities + allocated modifiers survive a meta reload
+    game_debug_set_level(20);
+    game_debug_tree_alloc_ability(4);   // CHARGE (ab 4 -> si 3)
+    game_debug_tree_alloc_mod(4, 9);    // Venom shapes CHARGE
     game_debug_extract();
     int mb = -1, ma = -1; game_debug_meta_reload_class(&mb, &ma);
-    const bool persisted = (game_debug_meta_owned_abilities() & (1 << 4)) != 0;
+    const bool persisted = (game_debug_meta_owned_abilities() & (1 << 4)) != 0 &&
+                           (game_debug_meta_skill_mods_alloc(3) & (1 << 9)) != 0;
 
-    const bool pass = starter && locked && learned && grew && persisted;
-    std::printf("teachingtest %s (starter %d locked %d learned %d grew %d[%d->%d] persist %d)\n",
-                pass ? "PASS" : "FAIL", starter, locked, learned, grew, before, after, persisted);
-    std::remove("meta.dat");
-    return pass ? 0 : 1;
-}
-
-// C7d: PoE2 support links (Disciplines). Category-gated, one-of-each per skill, physical instances;
-// ability slots 3-5 bought at the Sayyadina (escalating spice), basic-attack slots from weapon iLVL.
-// Discipline ids: 1 Pierce(proj) 2 Volley(proj) 3 Heavy(proj) 4 Cleave(melee) 5 Sunder(melee)
-//                 6 Honed(any) 7 Swift 8 Sparing 9 Venom 10 Wide.
-// Skills: 0..8 abilities (AB-1; Crysknife Throw = ab 7 -> skill 6, a projectile), 9 melee, 10 ranged basic.
-int run_disciplinetest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
-    std::remove("meta.dat");
-    GameServices services{&mixer, &assets, &cmaps};
-    game_init(818, services);
-    game_debug_apply_base(0);  // Knifehand
-
-    // (A) category gating
-    const bool gate =
-        game_debug_disc_fits_skill(1, 10) == 1 &&  // Pierce (proj) fits the ranged basic
-        game_debug_disc_fits_skill(1, 9) == 0 &&   // Pierce rejects the melee basic
-        game_debug_disc_fits_skill(1, 6) == 1 &&   // Pierce fits Crysknife Throw (a projectile ability)
-        game_debug_disc_fits_skill(4, 9) == 1 &&   // Cleave (melee) fits the melee basic
-        game_debug_disc_fits_skill(4, 10) == 0 &&  // Cleave rejects the ranged basic
-        game_debug_disc_fits_skill(6, 9) == 1 &&   // Honed (any) fits both
-        game_debug_disc_fits_skill(6, 10) == 1;
-
-    // (B) physical instances + one-of-each per skill + availability accounting
-    game_debug_grant_discipline(6); game_debug_grant_discipline(6);  // 2 Honed
-    const bool own2 = game_debug_disc_owned(6) == 2 && game_debug_disc_available(6) == 2;
-    const bool a1 = game_debug_attach_discipline(9, 0, 6) == 1;       // Honed -> melee basic slot 0
-    const bool avail1 = game_debug_disc_available(6) == 1;
-    const bool oneEach = game_debug_attach_discipline(9, 1, 6) == 0;  // the same Honed twice on one skill: no
-    const bool a2 = game_debug_attach_discipline(10, 0, 6) == 1;      // a different skill (ranged basic): ok
-    const bool avail0 = game_debug_disc_available(6) == 0;
-    const bool noneFree = game_debug_attach_discipline(9, 1, 6) == 0; // no free copies remain
-    game_debug_detach_discipline(9, 0);
-    const bool detached = game_debug_skill_support(9, 0) == 0 && game_debug_disc_available(6) == 1;
-
-    // (C) ability support slots: start 2, buy 3/4/5 at escalating spice (200/400/800), then capped
-    const bool start2 = game_debug_skill_slot_count(0) == 2;
-    const bool c3 = game_debug_ability_slot_cost(1) == 200;   // ability id 1 == skill 0
-    game_debug_add_spice(200 + 400 + 800);
-    const bool buy3 = game_debug_buy_ability_slot(1) == 1 && game_debug_skill_slot_count(0) == 3;
-    const bool c4 = game_debug_ability_slot_cost(1) == 400;
-    const bool buy4 = game_debug_buy_ability_slot(1) == 1 && game_debug_skill_slot_count(0) == 4;
-    const bool buy5 = game_debug_buy_ability_slot(1) == 1 && game_debug_skill_slot_count(0) == 5;
-    const bool maxed = game_debug_ability_slot_cost(1) == 0 && game_debug_buy_ability_slot(1) == 0;
-    const bool escalate = start2 && c3 && buy3 && c4 && buy4 && buy5 && maxed;
-
-    // (D) basic-attack slots track the equipped weapon's iLVL (not the Sayyadina)
-    game_debug_set_weapon_ilvl(1);  const bool w0 = game_debug_skill_slot_count(9) == 2;  // tier 0
-    game_debug_set_weapon_ilvl(4);  const bool w1 = game_debug_skill_slot_count(9) == 3;  // tier 1
-    game_debug_set_weapon_ilvl(10); const bool w3 = game_debug_skill_slot_count(9) == 5;  // tier 3
-    const bool weaponSlots = w0 && w1 && w3;
-
-    // (E) DMEM persistence: owned Disciplines + attachments + bought slots survive a meta reload
-    game_debug_grant_discipline(9);  // own a Venom (unattached)
-    game_debug_extract();
-    int mb = -1, ma = -1; game_debug_meta_reload_class(&mb, &ma);
-    const bool persisted = game_debug_meta_disc_owned(9) == 1 &&        // Venom owned
-                           game_debug_meta_disc_owned(6) == 2 &&        // both Honed owned
-                           game_debug_meta_skill_support(10, 0) == 6 && // Honed still linked to ranged basic
-                           game_debug_meta_ability_slots_bought(1) == 3;
-
-    const bool pass = gate && own2 && a1 && avail1 && oneEach && a2 && avail0 && noneFree && detached &&
-                      escalate && weaponSlots && persisted;
-    std::printf("disciplinetest %s (gate %d own2 %d attach %d avail1 %d oneEach %d cross %d avail0 %d none %d detach %d escalate %d weapon %d persist %d)\n",
-                pass ? "PASS" : "FAIL", gate, own2, a1, avail1, oneEach, a2, avail0, noneFree, detached, escalate, weaponSlots, persisted);
+    const bool pass = nodes && starter && wrongClass && unlocked && spent1 && modGated && modOk &&
+                      badCat && oneLeft && buy1 && dry && persisted;
+    std::printf("skilltree_test %s (nodes %d starter %d wrongCls %d unlock %d spent %d modGate %d modOk %d badCat %d oneLeft %d buy %d dry %d persist %d)\n",
+                pass ? "PASS" : "FAIL", nodes, starter, wrongClass, unlocked, spent1, modGated, modOk, badCat, oneLeft, buy1, dry, persisted);
     std::remove("meta.dat");
     return pass ? 0 : 1;
 }
@@ -2719,7 +2675,7 @@ int main(int argc, char** argv) {
          vendortest = false, patroltest = false, cavetest = false, trialtest = false,
          endgametest = false, striketest = false, pinnacletest = false, capstonetest = false,
          longridetest = false, choamtest = false, currencytest = false, currencymechtest = false,
-         currencydroptest = false, currencyuitest = false, essencetest = false, gridtest = false, currencytabtest = false, vaulttest = false, guitest = false, economytest = false, sietchtreetest = false, passivetreetest = false, maulatest = false, skillbartest = false, teachingtest = false, disciplinetest = false, abilitytest = false,
+         currencydroptest = false, currencyuitest = false, essencetest = false, gridtest = false, currencytabtest = false, vaulttest = false, guitest = false, economytest = false, sietchtreetest = false, passivetreetest = false, maulatest = false, skillbartest = false, skilltreetest = false, abilitytest = false,
          flasktest = false, inputtest = false, menutest = false;
     for (int i = 1; i < argc; ++i) {
         if (SDL_strcmp(argv[i], "--dumpwav") == 0) return run_dumpwav(mixer);
@@ -2767,8 +2723,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--passivetreetest") == 0) passivetreetest = true;
         if (SDL_strcmp(argv[i], "--maulatest") == 0) maulatest = true;
         if (SDL_strcmp(argv[i], "--skillbartest") == 0) skillbartest = true;
-        if (SDL_strcmp(argv[i], "--teachingtest") == 0) teachingtest = true;
-        if (SDL_strcmp(argv[i], "--disciplinetest") == 0) disciplinetest = true;
+        if (SDL_strcmp(argv[i], "--skilltreetest") == 0) skilltreetest = true;
         if (SDL_strcmp(argv[i], "--abilitytest") == 0) abilitytest = true;
         if (SDL_strcmp(argv[i], "--flasktest") == 0) flasktest = true;
         if (SDL_strcmp(argv[i], "--inputtest") == 0) inputtest = true;
@@ -2837,8 +2792,7 @@ int main(int argc, char** argv) {
     if (passivetreetest) return run_passivetreetest(mixer, assets, cmaps);
     if (maulatest) return run_maulatest(mixer, assets, cmaps);
     if (skillbartest) return run_skillbartest(mixer, assets, cmaps);
-    if (teachingtest) return run_teachingtest(mixer, assets, cmaps);
-    if (disciplinetest) return run_disciplinetest(mixer, assets, cmaps);
+    if (skilltreetest) return run_skilltree_test(mixer, assets, cmaps);
     if (abilitytest) return run_abilitytest(mixer, assets, cmaps);
     if (flasktest) return run_flasktest(mixer, assets, cmaps);
     if (inputtest) return run_inputtest(mixer, assets, cmaps);

@@ -139,9 +139,14 @@ inline constexpr int kPassivePerLevel = 1;    // passive points earned per chara
 // --- C7c: ability Teachings drop rarely in deep content (reuse kSpiceEssenceMinArea as the gate) ---
 inline constexpr int kTeachingDropDenom = 60; // ~1/N deep kills teach a new (un-owned) ability
 
-// --- C7d: support links (Disciplines) ---
-inline constexpr int kSupportSlotBase = 200;  // spice for a skill's 3rd support slot (Sayyadina); doubles each
-inline constexpr int kDisciplineDropDenom = 40;  // ~1/N deep kills drop a Discipline
+// --- C7d: support links (Disciplines) — RETIRED by C8a (modifiers moved into the class trees) ---
+inline constexpr int kSupportSlotBase = 200;
+inline constexpr int kDisciplineDropDenom = 40;
+
+// --- C8a: class ability trees (Chronicon). Class points are the LIMITED pool: one per level only through
+// kClassLevelCap, so ability/modifier builds are real choices. (Sietch points are the infinite pool, C8b.)
+inline constexpr int kClassLevelCap = 40;        // last level that grants a class point
+inline constexpr int kClassPointsPerLevel = 1;   // class points earned per level (through the cap)
 
 // --- C6: the maula pistol (cursor-aimed ranged attack) ---
 inline constexpr int kMaulaNoise = 22;        // the maula CRACKS — much louder than a blade (12)

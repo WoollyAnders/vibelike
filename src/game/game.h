@@ -185,28 +185,22 @@ int game_debug_cast_ability(int ab, int tx, int ty);  // C7: cast ability `ab` a
 int game_debug_will();                       // C7: current Will
 void game_debug_set_will(int w);             // C7: set current Will (test setup)
 int game_debug_ability_cd();                 // C7: shared ability cooldown remaining (world turns)
-// --- C7c teaching hooks ---
-void game_debug_grant_ability(int ab);       // learn a Teaching (mark ability owned)
+// --- C7c ability hooks ---
+void game_debug_grant_ability(int ab);       // unlock an ability (mark owned)
 int game_debug_ability_owned(int ab);        // 1 if the ability is owned
-int game_debug_meta_owned_abilities();       // persisted owned-ability mask (DMEL round-trip)
-int game_debug_grant_random_teaching();      // drop-path: learn a random un-owned ability (1=learned)
-// --- C7d discipline (support-link) hooks ---
-void game_debug_grant_discipline(int d);           // grant one physical Discipline of kind d
-int game_debug_grant_random_discipline();          // drop-path: a random Discipline (1=dropped)
-int game_debug_disc_owned(int d);                  // count of Discipline d possessed
-int game_debug_disc_available(int d);              // unattached copies of Discipline d
-int game_debug_disc_fits_skill(int d, int si);     // 1 if Discipline d's category fits skill si
-int game_debug_attach_discipline(int si, int slot, int d);  // link d into skill si's slot (1=ok)
-void game_debug_detach_discipline(int si, int slot);        // unlink skill si's slot
-int game_debug_skill_support(int si, int slot);    // Discipline attached at skill si / slot (0 none)
-int game_debug_skill_slot_count(int si);           // support slots open on skill si (2..5)
-int game_debug_ability_slot_cost(int ab);          // spice for ability ab's next support slot (0 maxed)
-int game_debug_buy_ability_slot(int ab);           // buy ability ab's next slot (1=ok)
-int game_debug_weapon_ilvl_tier();                 // equipped-weapon iLVL tier (0..3) for basic-attack slots
-void game_debug_set_weapon_ilvl(int il);           // set the equipped weapon's ilvl (test setup)
-int game_debug_meta_disc_owned(int d);             // persisted Discipline count (DMEM round-trip)
-int game_debug_meta_skill_support(int si, int slot);   // persisted attachment (DMEM round-trip)
-int game_debug_meta_ability_slots_bought(int ab);      // persisted bought slots (DMEM round-trip)
+int game_debug_meta_owned_abilities();       // persisted owned-ability mask (DMEL/DMEN round-trip)
+// --- C8a class skill-tree hooks ---
+int game_debug_disc_fits_skill(int d, int si);     // 1 if modifier d's category fits skill si
+int game_debug_class_points();                     // free (unspent) class points
+int game_debug_class_points_earned();              // total class points earned (level, capped)
+int game_debug_tree_alloc_ability(int ab);         // spend a point to unlock ability ab (1=ok)
+int game_debug_tree_alloc_mod(int ab, int d);      // spend a point on ability ab's modifier d (1=ok)
+int game_debug_skill_mods_alloc(int si);           // allocated-modifier bitmask for skill si (-1 invalid)
+int game_debug_skill_has_mod(int si, int d);       // 1 if modifier d is allocated for skill si
+int game_debug_node_exists(int cls, int ab, int mod);  // 1 if a class-tree node (cls,ab,mod) exists
+int game_debug_skill_node_count();                 // number of class-tree nodes
+void game_debug_tree_respec();                     // refund all class points (keeps the starter)
+int game_debug_meta_skill_mods_alloc(int si);      // persisted modifier bitmask (DMEN round-trip)
 void game_debug_open_menu(int m, int sel);   // hub UIs: force a menu open at a row (8-11 endgame)
 int game_debug_menu_open();                  // hub UIs: current open menu id (0 = none)
 int game_debug_use_flask(int slot);          // flasks: 0 Life / 1 Will / 2 Utility (1 = drunk)
