@@ -2202,52 +2202,58 @@ int run_maulatest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cm
     return pass ? 0 : 1;
 }
 
-// C8b: the Sietch tree is the infinite, LEVEL-based stat progression. Every level grants a Sietch point
-// (uncapped); each rank costs 1 point and is UNBOUNDED; Litrejons buy extra points (escalating). Bonuses
-// fold into affix_total and persist (DMEO). Node 6 = Tribe's Vigor (+4% Life/rank, AK_INC_LIFE);
-// node 0 = Blade Discipline (AK_INC_DMG).
+// C8d: the Sietch build tree — a BOUNDED, single-allocate passive graph. Level grants Sietch points (one
+// per kSietchLevelsPerPoint=5, capped at kLevelCap=100); nodes are adjacency-gated from the hub; keystones
+// carry build-defining flags; respec costs Spice. Node 0 = hub (free); node 1 = Keen Edge (AK_INC_DMG 4);
+// node 9 = the Kull Wahad keystone (ks 1), reached via 1-2-4-5-7-8-9.
 int run_sietchtreetest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
     std::remove("meta.dat");
     GameServices services{&mixer, &assets, &cmaps};
     game_init(5150, services);
     game_debug_apply_base(0);
-    game_debug_set_level(10);   // 9 Sietch points (1/level after level 1)
+    game_debug_set_level(50);   // 50/5 = 10 Sietch points
 
-    // (A) level grants points; nothing allocated yet
-    const bool fresh = game_debug_sietch_points() == 9 && game_debug_sietch_rank(6) == 0;
+    // (A) the hub is auto-allocated (free); level grants points; the arms are unallocated
+    const bool fresh = game_debug_sietch_has(0) == 1 && game_debug_sietch_has(1) == 0 &&
+                       game_debug_sietch_points() == 10;
 
-    // (B) allocating Tribe's Vigor spends a point + grants +4% Life (moves player_max_hp)
-    const int hp0 = game_debug_max_hp();
-    const bool buy1 = game_debug_sietch_alloc(6) == 1 && game_debug_sietch_rank(6) == 1 &&
-                      game_debug_sietch_points() == 8 && game_debug_sietch_bonus(items::AK_INC_LIFE) == 4;
-    const bool hpUp = game_debug_max_hp() > hp0;
+    // (B) adjacency gating: node 1 (touching the hub) is allocatable; node 2 (a hop further) and the
+    //     Kull Wahad keystone (9) are not yet reachable
+    const bool gate = game_debug_sietch_allocatable(1) == 1 &&
+                      game_debug_sietch_allocatable(2) == 0 && game_debug_sietch_allocatable(9) == 0;
 
-    // (C) UNBOUNDED — rank it well past the old cap of 3
-    for (int i = 0; i < 5; ++i) game_debug_sietch_alloc(6);   // -> rank 6
-    const bool unbounded = game_debug_sietch_rank(6) == 6 && game_debug_sietch_bonus(items::AK_INC_LIFE) == 24;
+    // (C) allocating node 1 spends a point, moves the stat, and opens node 2
+    const bool alloc1 = game_debug_sietch_alloc(1) == 1 && game_debug_sietch_has(1) == 1 &&
+                        game_debug_sietch_points() == 9 && game_debug_sietch_bonus(items::AK_INC_DMG) == 4 &&
+                        game_debug_sietch_allocatable(2) == 1;
 
-    // (D) points are LIMITED by level — spend the rest, then allocation refuses
-    const int left = game_debug_sietch_points();              // 9 - 6 = 3
-    for (int i = 0; i < left; ++i) game_debug_sietch_alloc(0);
-    const bool dry = game_debug_sietch_points() == 0 && game_debug_sietch_alloc(0) == 0;
+    // (D) walk the arm to the keystone; it flips its build-defining flag (Kull Wahad = ks 1)
+    const int steps[] = {2, 4, 5, 7, 8, 9};
+    bool walked = true;
+    for (int s : steps) walked = walked && game_debug_sietch_alloc(s) == 1;
+    const bool keystone = walked && game_debug_keystone_on(1) == 1;
 
-    // (E) Litrejons buy extra Sietch points (escalating), re-enabling allocation
-    game_debug_grant_litrejons(1000);
-    const int cost = game_debug_sietch_buy_point_cost();       // base * 1 = 20
-    const bool buyPt = cost == 20 && game_debug_buy_sietch_point() == 1 &&
-                       game_debug_sietch_points() == 1 && game_debug_sietch_alloc(0) == 1;
+    // (E) BOUNDED — even at the level cap the point budget can't fill the tree
+    game_debug_add_spice(1000);
+    game_debug_respec_sietch();       // clear back to the hub
+    game_debug_set_level(999999);     // clamps to the level cap
+    const bool bounded = game_debug_sietch_points() == 20 &&                                 // 100/5, clamped
+                         game_debug_sietch_points() < game_debug_sietch_node_count() - 1;     // < allocatable nodes
 
-    // (F) NO LEVEL CAP — a very high level scales the point pool
-    game_debug_set_level(500);
-    const bool noCap = game_debug_sietch_points() > 400;
+    // (F) respec (Spice) clears the tree but keeps the hub
+    game_debug_sietch_alloc(1); game_debug_sietch_alloc(2);
+    game_debug_add_spice(1000);
+    const bool respec = game_debug_respec_sietch() == 1 && game_debug_sietch_has(1) == 0 &&
+                        game_debug_sietch_has(0) == 1 && game_debug_keystone_on(1) == 0;
 
-    // (G) DMEO persistence: ranks survive a meta reload
+    // (G) DMEP persistence: allocation survives a meta reload
+    game_debug_sietch_alloc(1);
     int mb = -1, ma = -1; game_debug_meta_reload_class(&mb, &ma);
-    const bool persisted = game_debug_meta_sietch_rank(6) == 6 && game_debug_sietch_bonus(items::AK_INC_LIFE) == 24;
+    const bool persisted = game_debug_meta_sietch_rank(1) == 1;
 
-    const bool pass = fresh && buy1 && hpUp && unbounded && dry && buyPt && noCap && persisted;
-    std::printf("sietchtreetest %s (fresh %d buy %d hpUp %d unbounded %d dry %d buyPt %d noCap %d persist %d)\n",
-                pass ? "PASS" : "FAIL", fresh, buy1, hpUp, unbounded, dry, buyPt, noCap, persisted);
+    const bool pass = fresh && gate && alloc1 && keystone && bounded && respec && persisted;
+    std::printf("sietchtreetest %s (fresh %d gate %d alloc %d keystone %d bounded %d respec %d persist %d)\n",
+                pass ? "PASS" : "FAIL", fresh, gate, alloc1, keystone, bounded, respec, persisted);
     std::remove("meta.dat");
     return pass ? 0 : 1;
 }

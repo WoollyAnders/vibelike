@@ -148,11 +148,12 @@ inline constexpr int kDisciplineDropDenom = 40;
 inline constexpr int kClassLevelCap = 40;        // last level that grants a class point
 inline constexpr int kClassPointsPerLevel = 1;   // class points earned per level (through the cap)
 
-// --- C8b: the infinite Sietch stat tree. Level grants Sietch points forever (no cap); Litrejons buy
-// extra points (escalating) as an early accelerator + fund a class-point respec.
-inline constexpr int kSietchPerLevel = 1;        // Sietch points earned per level (uncapped)
-inline constexpr int kSietchPointBase = 20;      // Litrejons for the 1st bought point; x(n+1) each after
-inline constexpr int kRespecLitrejons = 100;     // Litrejons to refund all class points at the sietch
+// --- C8d: the BOUNDED Sietch build tree. Hard level cap; Sietch points accrue slower than levels so a
+// modest tree can't be filled (you commit to ~2 directions). Respec paid in Spice (the one currency).
+inline constexpr int kLevelCap = 100;            // hard character level ceiling (C8d)
+inline constexpr int kSietchLevelsPerPoint = 5;  // one Sietch point per N levels (~20 points at L100)
+inline constexpr int kSietchRespecSpice = 200;   // spice to refund the whole Sietch tree
+inline constexpr int kClassRespecSpice = 200;    // spice to refund all class-tree points
 
 // --- C6: the maula pistol (cursor-aimed ranged attack) ---
 inline constexpr int kMaulaNoise = 22;        // the maula CRACKS — much louder than a blade (12)

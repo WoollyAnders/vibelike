@@ -483,9 +483,12 @@ int foe_hp(EType t) {
 
 Entity& player_ent() { return g.ents[0]; }
 
-int sietch_affix_bonus(uint8_t kind);   // C5b: fwd — the sietch tree contributes to every derived stat
+// C8d: Sietch-tree keystones — build-defining passive rules, bespoke flags folded into the derived stats.
+enum Keystone { KS_NONE = 0, KS_KULL_WAHAD, KS_SIETCH_BORN, KS_DESERT_POWER, KS_WATER_OF_LIFE };
+int sietch_affix_bonus(uint8_t kind);   // C5b/C8d: fwd — the Sietch tree contributes to every derived stat
+bool keystone_on(int ks);               // C8d: fwd — a keystone node of this id is allocated
 int affix_total(uint8_t kind) {
-    int p = sietch_affix_bonus(kind);  // C8b: the Sietch tree is the only stat tree now (C4 retired)
+    int p = sietch_affix_bonus(kind);  // C8b/C8d: the Sietch tree is the sole stat tree (C4 retired)
     for (const items::Inst& it : g.pl.equip) p += it.affix_power(kind);
     return p;
 }
@@ -501,7 +504,9 @@ int with_inc(int base, uint8_t inc_kind) { return base * (100 + affix_total(inc_
 // Awareness -> Focus+Will. Each = flat (attr + AK_* adds), then ×(increased %).
 int player_max_hp() {  // Life — flat per-level (class-agnostic) + Conditioning + gear
     const int base = 10 + eff_cond() * 2 + (g.pl.st.level - 1) * tune::kLifePerLevel + affix_total(items::AK_HP);
-    return with_inc(base, items::AK_INC_LIFE);
+    int hp = with_inc(base, items::AK_INC_LIFE);
+    if (keystone_on(KS_DESERT_POWER)) hp = hp * 70 / 100;  // Desert Power: -30% Life (the glass sandrider)
+    return hp;
 }
 int player_lethality() {  // melee damage bonus
     return with_inc(eff_cond() / 4 + affix_total(items::AK_DMG), items::AK_INC_DMG);
@@ -511,7 +516,9 @@ int player_max_shield() {  // Focus: only Awareness INVESTED above baseline (+ge
     return with_inc(focus + affix_total(items::AK_SHIELD), items::AK_INC_FOCUS);
 }
 int player_max_will() {  // Will — flat per-level (class-agnostic) + Awareness + gear
-    return 10 + eff_awar() * 2 + (g.pl.st.level - 1) * tune::kWillPerLevel + affix_total(items::AK_WILL);
+    int will = 10 + eff_awar() * 2 + (g.pl.st.level - 1) * tune::kWillPerLevel + affix_total(items::AK_WILL);
+    if (keystone_on(KS_WATER_OF_LIFE)) will *= 2;  // Water of Life: double the Will pool (abilities cost 2x)
+    return will;
 }
 int player_max_water() { return tune::kWaterMax + affix_total(items::AK_WATER); }
 int player_armor() {
@@ -520,13 +527,16 @@ int player_armor() {
 // B2a: thirst multiplier (x/4) from summed stillsuit reclamation (AK_RECLAIM).
 // 4 = no reclaim ... 1 = a full, sealed stillsuit.
 int player_suit_mul4() {
+    if (keystone_on(KS_SIETCH_BORN)) return 0;  // Sietch-Born: perfect water discipline — no thirst drain
     int cut = affix_total(items::AK_RECLAIM) / 2;
     if (cut > 3) cut = 3;
     return 4 - cut;
 }
 int player_dodge() {  // Flow: Versatility -> evasion
     const int base = eff_vers() / 2 + affix_total(items::AK_DODGE) + 4 * g.pl.st.talents[8];
-    return with_inc(base, items::AK_INC_DODGE);
+    int d = with_inc(base, items::AK_INC_DODGE);
+    if (keystone_on(KS_DESERT_POWER)) d += 40;  // Desert Power: +40 Evasion
+    return d;
 }
 
 // Player melee swing vs a foe. Returns damage dealt (0 = miss); fills crit.
@@ -534,7 +544,8 @@ int player_attack_roll(const Foe& f, bool* crit_out) {
     int acc = with_inc(55 + eff_vers() * 2 + affix_total(items::AK_TOHIT), items::AK_INC_TOHIT);  // Precision
     if (g.pl.ail_blind_turns > 0) acc -= tune::kBlindAcc;  // C3: Blinded — the player misses more
     const int tohit = acc - f.ac_dodge;
-    const int chance = tohit < 15 ? 15 : tohit > 95 ? 95 : tohit;
+    const bool kull = keystone_on(KS_KULL_WAHAD);  // Kull Wahad: never miss, never crit
+    const int chance = kull ? 100 : (tohit < 15 ? 15 : tohit > 95 ? 95 : tohit);
     if (int(g.rng.combat.below(100)) >= chance) return 0;
     const items::Inst& w = g.pl.equip[int(items::Slot::Weapon)];
     const int wq = w.empty() ? 0 : w.quality;  // D3: weapon quality (Worm Tooth) scales base damage
@@ -542,7 +553,7 @@ int player_attack_roll(const Foe& f, bool* crit_out) {
     const int wmax = (w.empty() ? 2 : w.d().b) * (100 + wq) / 100;
     int dmg = g.rng.combat.range(wmin, wmax) + player_lethality() + 2 * g.pl.st.talents[0];  // Lethality
     if (g.pl.sandwalk) dmg += 3 * g.pl.st.talents[1];
-    const int critc = affix_total(items::AK_CRIT) + 4 * g.pl.st.talents[2];  // crit from GEAR (+talent), not attributes
+    const int critc = kull ? 0 : affix_total(items::AK_CRIT) + 4 * g.pl.st.talents[2];  // Kull Wahad: never crit
     const bool crit = int(g.rng.combat.below(100)) < critc;
     if (crit) dmg = dmg * (200 + affix_total(items::AK_CRIT_MULT)) / 100;  // Vital Strike Damage (base x2)
     if (crit_out) *crit_out = crit;
@@ -1070,28 +1081,87 @@ void refresh_fov_and_paths() {
 // SANDCRAFT (the warrior's edge) and TRIBE'S BLESSING (the tribe's sustain). Each node grants ranks of
 // an AffixKind bonus folded into affix_total(), so every derived stat picks it up; ranks persist across
 // death (meta). Cost per rank = cost_base * (rank+1) Litrejons.
-// C8b: the Sietch tree is the infinite, level-based generic-stat progression (it absorbed the retired
-// C4 stat kinds). Every node ranks UNBOUNDED — one Sietch point per rank — so uncapped leveling feeds it
-// forever (Dune "paragon"). Litrejons no longer buy ranks directly; they buy Sietch points + fund respec.
-struct SietchNode { const char* name; uint8_t kind; int per_rank; uint8_t track; };
+// C8d: the Sietch tree is the character's build-defining PASSIVE tree — "guide the tribe in a direction."
+// A bounded, single-allocate node graph: a central hub with four directional arms (Warpath / Stewards /
+// Sandriders / Mystics), each a chain of small stat nodes through a NOTABLE to a KEYSTONE at its tip.
+// Allocated with level-granted Sietch points (which accrue slower than levels, capped at kLevelCap), so
+// the budget can't fill the tree — you commit to ~2 directions. Adjacency-gated from the hub; each node's
+// `value` of its AffixKind folds into affix_total() (single-allocate, not ranked). Keystones carry a `ks`
+// id whose bespoke rule lives in the derived-stat fns via keystone_on().
+struct SietchNode { const char* name; uint8_t x, y, kind; int16_t value; uint8_t tier; uint8_t ks; };
 inline constexpr SietchNode kSietchNodes[] = {
-    // --- track 0: SANDCRAFT (offense / utility) ---
-    {"Blade Discipline", items::AK_INC_DMG,    3, 0},  // +3% Lethality / rank
-    {"Killer's Eye",     items::AK_CRIT,       2, 0},  // +2% Vital Strike chance / rank
-    {"Vital Strikes",    items::AK_CRIT_MULT,  5, 0},  // +5% Vital Strike damage / rank
-    {"Sure Strike",      items::AK_INC_TOHIT,  4, 0},  // +4% Precision / rank
-    {"Spice Sense",      items::AK_SPICE_FIND, 10, 0}, // +10% Spice Find / rank
-    {"Fleetfoot",        items::AK_INC_DODGE,  3, 0},  // +3% Evasion / rank
-    // --- track 1: TRIBE'S BLESSING (defense / sustain) ---
-    {"Tribe's Vigor",    items::AK_INC_LIFE,   4, 1},  // +4% Life / rank
-    {"Scarred Hide",     items::AK_HP,        12, 1},  // +12 Life / rank
-    {"Stillsuit Weave",  items::AK_ARMOR,      3, 1},  // +3 armor / rank
-    {"Cistern Share",    items::AK_WATER,     30, 1},  // +30 max Water / rank
-    {"Prescient Calm",   items::AK_SHIELD,    10, 1},  // +10 Focus / rank
-    {"Deep Will",        items::AK_WILL,       6, 1},  // +6 Will / rank
-    {"Storm-ward",       items::AK_RES_STORM,  8, 1},  // +8 storm resist / rank
+    {"Sietch Heart",   8,  8, items::AK_ADD_ALL,   0, 0, KS_NONE},  // 0  the hub (always allocated, free)
+    // --- Warpath (up): Lethality / Crit ---
+    {"Keen Edge",      8,  7, items::AK_INC_DMG,    4, 0, KS_NONE},  // 1
+    {"Bloodlust",      8,  6, items::AK_CRIT,       3, 0, KS_NONE},  // 2
+    {"Fedaykin Fury",  7,  5, items::AK_INC_DMG,   12, 1, KS_NONE},  // 3  notable
+    {"Reaver's Eye",   9,  5, items::AK_CRIT_MULT,  8, 0, KS_NONE},  // 4
+    {"War Cadence",    8,  4, items::AK_INC_DMG,    5, 0, KS_NONE},  // 5
+    {"Killer Instinct",7,  3, items::AK_CRIT,       4, 0, KS_NONE},  // 6
+    {"Deathblow",      9,  3, items::AK_CRIT_MULT, 10, 0, KS_NONE},  // 7
+    {"Blooded",        8,  2, items::AK_INC_DMG,    6, 0, KS_NONE},  // 8
+    {"Kull Wahad",     8,  1, items::AK_ADD_ALL,    0, 2, KS_KULL_WAHAD},  // 9  keystone
+    // --- Stewards (right): Life / Armor / Water ---
+    {"Tribe's Vigor", 10,  8, items::AK_INC_LIFE,   4, 0, KS_NONE},  // 10
+    {"Scarred Hide",  11,  8, items::AK_HP,        12, 0, KS_NONE},  // 11
+    {"Stillsuit Weave",12, 7, items::AK_ARMOR,      4, 0, KS_NONE},  // 12
+    {"Deep Cisterns", 12,  9, items::AK_HP,        22, 1, KS_NONE},  // 13 notable
+    {"Cistern Share", 13,  8, items::AK_WATER,     30, 0, KS_NONE},  // 14
+    {"Water Discipline",14,7, items::AK_INC_LIFE,   5, 0, KS_NONE},  // 15
+    {"Plated Weave",  14,  9, items::AK_ARMOR,      5, 0, KS_NONE},  // 16
+    {"Iron Hide",     15,  8, items::AK_HP,        15, 0, KS_NONE},  // 17
+    {"Sietch-Born",   16,  8, items::AK_ADD_ALL,    0, 2, KS_SIETCH_BORN},  // 18 keystone
+    // --- Sandriders (down): Evasion / Precision ---
+    {"Fleetfoot",      8,  9, items::AK_INC_DODGE,  4, 0, KS_NONE},  // 19
+    {"Sure Strike",    8, 10, items::AK_INC_TOHIT,  4, 0, KS_NONE},  // 20
+    {"Ghoststep",      7, 11, items::AK_INC_DODGE, 12, 1, KS_NONE},  // 21 notable
+    {"Keen Aim",       9, 11, items::AK_INC_TOHIT,  6, 0, KS_NONE},  // 22
+    {"Sand Sense",     8, 12, items::AK_INC_DODGE,  5, 0, KS_NONE},  // 23
+    {"Marksman",       7, 13, items::AK_INC_TOHIT,  5, 0, KS_NONE},  // 24
+    {"Windstep",       9, 13, items::AK_INC_DODGE,  6, 0, KS_NONE},  // 25
+    {"Duststride",     8, 14, items::AK_INC_DODGE,  6, 0, KS_NONE},  // 26
+    {"Desert Power",   8, 15, items::AK_ADD_ALL,    0, 2, KS_DESERT_POWER},  // 27 keystone
+    // --- Mystics (left): Will / Focus / Spice ---
+    {"Deep Will",      7,  8, items::AK_WILL,       6, 0, KS_NONE},  // 28
+    {"Inner Calm",     6,  8, items::AK_SHIELD,    10, 0, KS_NONE},  // 29
+    {"Spice Sense",    5,  7, items::AK_SPICE_FIND,10, 0, KS_NONE},  // 30
+    {"Prescient Calm", 5,  9, items::AK_SHIELD,    16, 1, KS_NONE},  // 31 notable
+    {"Cistern of Will",4,  8, items::AK_WILL,       8, 0, KS_NONE},  // 32
+    {"Serene Mind",    3,  7, items::AK_SHIELD,    12, 0, KS_NONE},  // 33
+    {"Font of Will",   3,  9, items::AK_WILL,       8, 0, KS_NONE},  // 34
+    {"Spicewalker",    2,  8, items::AK_SPICE_FIND,12, 0, KS_NONE},  // 35
+    {"Water of Life",  1,  8, items::AK_ADD_ALL,    0, 2, KS_WATER_OF_LIFE},  // 36 keystone
 };
 inline constexpr int kSietchNodeCount = int(sizeof kSietchNodes / sizeof *kSietchNodes);
+inline constexpr int kSietchHub = 0;  // the always-allocated root
+inline constexpr uint8_t kSietchEdges[][2] = {
+    {0,1},{1,2},{2,3},{2,4},{3,5},{4,5},{5,6},{5,7},{6,8},{7,8},{8,9},          // Warpath
+    {0,10},{10,11},{11,12},{11,13},{12,14},{13,14},{14,15},{14,16},{15,17},{16,17},{17,18},  // Stewards
+    {0,19},{19,20},{20,21},{20,22},{21,23},{22,23},{23,24},{23,25},{24,26},{25,26},{26,27},   // Sandriders
+    {0,28},{28,29},{29,30},{29,31},{30,32},{31,32},{32,33},{32,34},{33,35},{34,35},{35,36},   // Mystics
+};
+inline constexpr int kSietchEdgeCount = int(sizeof kSietchEdges / sizeof *kSietchEdges);
+
+// C8d: the Sietch-tree screen (menu 12) — node-graph geometry shared by its input + render. The hub grid
+// coord (8,8) maps to screen centre; each grid step is SCALE px.
+namespace sietchui {
+inline constexpr int SCALE = 52, R = 18;
+inline int cx() { return fb::W / 2; }
+inline int cy() { return fb::H / 2 + 20; }
+inline void node_screen(int i, int& sx, int& sy) {
+    sx = cx() + (int(kSietchNodes[i].x) - 8) * SCALE;
+    sy = cy() + (int(kSietchNodes[i].y) - 8) * SCALE;
+}
+inline int node_at(int mx, int my) {  // the node whose disc contains (mx,my), or -1
+    if (mx < 0) return -1;
+    for (int i = 0; i < kSietchNodeCount; ++i) {
+        int sx, sy; node_screen(i, sx, sy);
+        const int dx = mx - sx, dy = my - sy;
+        if (dx * dx + dy * dy <= (R + 6) * (R + 6)) return i;
+    }
+    return -1;
+}
+}  // namespace sietchui
 
 // C4 passive tree RETIRED by C8b — the Sietch tree (above) is the sole stat tree. The `passives` mask
 // remains a vestigial (unused) save field so the run-save / meta layout is unchanged.
@@ -1112,8 +1182,7 @@ struct Meta {
     uint8_t has_char = 0;          // 1 once a persistent character exists
     int32_t banked_spice = 0;      // safe wallet; run spice banks here on extraction
     int32_t litrejons = 0;         // C5 (DMEH): tribal water banked from the Deathstill; the sietch-tree currency
-    uint16_t sietch_rank[kSietchNodeCount] = {};  // C5b/C8b (DMEI/DMEO): ranks per node (widened; unbounded)
-    uint16_t sietch_points_bought = 0;            // C8b (DMEO): Sietch points bought with Litrejons
+    uint16_t sietch_rank[kSietchNodeCount] = {};  // C5b/C8d (DMEI/DMEP): per-node allocation (0/1, single-allocate)
     uint64_t passives = 0;                       // C4 (DMEJ): the character's allocated passive-tree nodes
     uint8_t skill_bind[2][6] = {{1, 1, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0}};  // C7b (DMEK): the skill bar
     uint16_t owned_abilities = 0;  // C7c/C8a (DMEL/DMEN): unlocked-ability bitmask
@@ -1183,6 +1252,7 @@ int guild_difficulty() {
     return d < 0 ? 0 : d > cap ? cap : d;
 }
 
+inline constexpr uint32_t kMetaVP = 0x50454D44u;  // 'DMEP' (C8d: Sietch build tree — single-allocate graph, ~37 nodes)
 inline constexpr uint32_t kMetaVO = 0x4F454D44u;  // 'DMEO' (C8b: widened sietch_rank u16 + sietch_points_bought)
 inline constexpr uint32_t kMetaVN = 0x4E454D44u;  // 'DMEN' (C8a: class trees — skill_mods_alloc; C7d disc fields retired)
 inline constexpr uint32_t kMetaVM = 0x4D454D44u;  // 'DMEM' (C7d: + Disciplines, support slots + attachments)
@@ -1259,55 +1329,73 @@ void meta_grant_currency(uint8_t kind, int amount) {
     g_meta.cur_tab[kind] = uint16_t(g_meta.cur_tab[kind] + amount);
 }
 
-void meta_save();  // fwd (defined below) — buy_sietch_node banks the purchase immediately
-// C5b: the sietch tree's total contribution of AffixKind `kind` (summed over allocated node ranks).
-int sietch_affix_bonus(uint8_t kind) {
+void meta_save();  // fwd (defined below) — sietch allocation banks immediately
+void tree_respec();  // fwd (defined with the C8a class-tree block)
+// C8d: the Sietch build tree — a single-allocate, adjacency-gated passive graph.
+bool sietch_has(int n) { return n >= 0 && n < kSietchNodeCount && g_meta.sietch_rank[n] != 0; }
+void sietch_ensure_hub() { g_meta.sietch_rank[kSietchHub] = 1; }  // the root is always allocated (free)
+int sietch_affix_bonus(uint8_t kind) {  // sum each allocated node's value of this AffixKind
     int p = 0;
     for (int i = 0; i < kSietchNodeCount; ++i)
-        if (kSietchNodes[i].kind == kind) p += g_meta.sietch_rank[i] * kSietchNodes[i].per_rank;
+        if (sietch_has(i) && kSietchNodes[i].kind == kind) p += kSietchNodes[i].value;
     return p;
 }
-void tree_respec();  // fwd (defined with the C8a class-tree block)
-// C8b: level grants Sietch points (uncapped); Litrejons can BUY extra points; every rank costs 1 point.
-int sietch_points_earned() { return g.pl.st.level > 1 ? (g.pl.st.level - 1) * tune::kSietchPerLevel : 0; }
-int sietch_points_spent() {
-    int s = 0; for (int i = 0; i < kSietchNodeCount; ++i) s += g_meta.sietch_rank[i]; return s;
+bool keystone_on(int ks) {  // C8d: a keystone node carrying this id is allocated
+    if (ks == KS_NONE) return false;
+    for (int i = 0; i < kSietchNodeCount; ++i)
+        if (kSietchNodes[i].ks == ks && sietch_has(i)) return true;
+    return false;
 }
-int sietch_points_available() {
-    const int a = sietch_points_earned() + g_meta.sietch_points_bought - sietch_points_spent();
-    return a < 0 ? 0 : a;
+// Sietch points accrue slower than levels (one per kSietchLevelsPerPoint), capped at the level cap.
+int sietch_points_earned() {
+    int L = g.pl.st.level; if (L > tune::kLevelCap) L = tune::kLevelCap;
+    return L / tune::kSietchLevelsPerPoint;
 }
-bool sietch_alloc(int idx) {  // spend one Sietch point to rank up a node (unbounded); persists
-    if (idx < 0 || idx >= kSietchNodeCount || sietch_points_available() <= 0) return false;
-    ++g_meta.sietch_rank[idx];
+int sietch_points_spent() {  // every allocated node except the free hub costs one point
+    int s = 0; for (int i = 0; i < kSietchNodeCount; ++i) if (i != kSietchHub && sietch_has(i)) ++s;
+    return s;
+}
+int sietch_points_available() { const int a = sietch_points_earned() - sietch_points_spent(); return a < 0 ? 0 : a; }
+bool sietch_adjacent_to_allocated(int n) {  // n sits on an edge with an already-allocated node
+    for (int e = 0; e < kSietchEdgeCount; ++e) {
+        const int a = kSietchEdges[e][0], b = kSietchEdges[e][1];
+        if (a == n && sietch_has(b)) return true;
+        if (b == n && sietch_has(a)) return true;
+    }
+    return false;
+}
+bool sietch_allocatable(int n) {  // unallocated, reachable from your allocated frontier, and a point free
+    return n >= 0 && n < kSietchNodeCount && !sietch_has(n) &&
+           sietch_points_available() > 0 && sietch_adjacent_to_allocated(n);
+}
+bool sietch_alloc(int n) {  // single-allocate a node; persists
+    if (!sietch_allocatable(n)) return false;
+    g_meta.sietch_rank[n] = 1;
     meta_save();
     return true;
 }
-int sietch_buy_point_cost() { return tune::kSietchPointBase * (g_meta.sietch_points_bought + 1); }
-bool buy_sietch_point() {  // convert banked Litrejons -> one Sietch point (escalating; the early rush)
-    const int cost = sietch_buy_point_cost();
-    if (g_meta.litrejons < cost) return false;
-    g_meta.litrejons -= cost;
-    ++g_meta.sietch_points_bought;
+bool respec_sietch() {  // Spice refunds the whole Sietch tree (re-guide the tribe), keeping the hub
+    if (g.pl.spice < tune::kSietchRespecSpice) return false;
+    g.pl.spice -= tune::kSietchRespecSpice;
+    for (int i = 0; i < kSietchNodeCount; ++i) g_meta.sietch_rank[i] = 0;
+    sietch_ensure_hub();
     meta_save();
     return true;
 }
-bool respec_class_points() {  // the sietch reconsiders your path: Litrejons refund all class points
-    if (g_meta.litrejons < tune::kRespecLitrejons) return false;
-    g_meta.litrejons -= tune::kRespecLitrejons;
+bool respec_class_points() {  // Spice refunds all class-tree points
+    if (g.pl.spice < tune::kClassRespecSpice) return false;
+    g.pl.spice -= tune::kClassRespecSpice;
     tree_respec();
-    meta_save();
     return true;
 }
 
-// C4 passive-tree functions RETIRED by C8b (the Sietch tree is the sole stat tree).
 
 void meta_load() {
     FILE* f = std::fopen("meta.dat", "rb");
     if (!f) return;
     uint32_t magic = 0;
     if (std::fread(&magic, 4, 1, f) == 1) {
-        if (magic >= kMetaV4 && magic <= kMetaVO && magic != kMetaV1) {  // native widened-Inst format (DME4..DMEO)
+        if (magic >= kMetaV4 && magic <= kMetaVP && magic != kMetaV1) {  // native widened-Inst format (DME4..DMEP)
             const bool cur = (magic >= kMetaVC);  // DMEC+ = new Inst layout; older = OldInst (convert)
             (void)!std::fread(&g_meta.runs, 4, 1, f);
             (void)!std::fread(&g_meta.endings_seen, 1, 1, f);
@@ -1382,7 +1470,10 @@ void meta_load() {
             if (magic >= kMetaVI && magic <= kMetaVN) {  // pre-C8b: 8 nodes x uint8 — discard (a Sietch respec)
                 uint8_t old_ranks[8];
                 (void)!std::fread(old_ranks, sizeof old_ranks, 1, f);
-            } else if (magic >= kMetaVO) {  // C8b: widened uint16 ranks (current node count)
+            } else if (magic == kMetaVO) {  // C8b: the old 13-node uint16 ranks — discard (tree reshaped in C8d)
+                uint16_t old_ranks[13];
+                (void)!std::fread(old_ranks, sizeof old_ranks, 1, f);
+            } else if (magic >= kMetaVP) {  // C8d: the single-allocate node graph (current count)
                 (void)!std::fread(g_meta.sietch_rank, sizeof g_meta.sietch_rank, 1, f);
             }
             if (magic >= kMetaVJ) {  // C4: the character's passive-tree allocation (DMEI and earlier -> 0)
@@ -1401,8 +1492,9 @@ void meta_load() {
             if (magic >= kMetaVN) {  // C8a: per-skill allocated modifier-node bitmasks
                 (void)!std::fread(g_meta.skill_mods_alloc, sizeof g_meta.skill_mods_alloc, 1, f);
             }
-            if (magic >= kMetaVO) {  // C8b: Sietch points bought with Litrejons
-                (void)!std::fread(&g_meta.sietch_points_bought, 2, 1, f);
+            if (magic == kMetaVO) {  // C8b (retired): the bought-Sietch-points counter — discard
+                uint16_t scratch;
+                (void)!std::fread(&scratch, 2, 1, f);
             }
             // D3 migration: the old Maker Hide / Worm Tooth counters become currency (their new roles:
             // armour / weapon quality), banked to the crafting table. No-op on a DMEC+ file (already 0).
@@ -1442,7 +1534,7 @@ void meta_load() {
 void meta_save() {
     FILE* f = std::fopen("meta.dat", "wb");
     if (!f) return;
-    std::fwrite(&kMetaVO, 4, 1, f);  // C8b: DMEO (widened sietch_rank + sietch_points_bought)
+    std::fwrite(&kMetaVP, 4, 1, f);  // C8d: DMEP (Sietch build tree — single-allocate node graph)
     std::fwrite(&g_meta.runs, 4, 1, f);
     std::fwrite(&g_meta.endings_seen, 1, 1, f);
     std::fwrite(&g_meta.stash_tabs, 1, 1, f);                       // G3: owned tab count
@@ -1473,12 +1565,11 @@ void meta_save() {
     std::fwrite(&g_meta.spice_essence, 1, 1, f);    // D3e: the Awakening resource (DMED)
     std::fwrite(g_meta.cur_tab, sizeof g_meta.cur_tab, 1, f);  // G2: crafting-table currency (DMEF)
     std::fwrite(&g_meta.litrejons, 4, 1, f);                   // C5: banked Litrejons (DMEH)
-    std::fwrite(g_meta.sietch_rank, sizeof g_meta.sietch_rank, 1, f);  // C5b: sietch tree ranks (DMEI)
+    std::fwrite(g_meta.sietch_rank, sizeof g_meta.sietch_rank, 1, f);  // C5b/C8d: Sietch tree allocation (DMEI/DMEP)
     std::fwrite(&g_meta.passives, 8, 1, f);                            // C4: passive-tree mask (DMEJ)
     std::fwrite(g_meta.skill_bind, sizeof g_meta.skill_bind, 1, f);    // C7b: skill bar (DMEK)
     std::fwrite(&g_meta.owned_abilities, 2, 1, f);                     // C7c/C8a: unlocked abilities (DMEL/DMEN)
     std::fwrite(g_meta.skill_mods_alloc, sizeof g_meta.skill_mods_alloc, 1, f);  // C8a: class-tree modifiers (DMEN)
-    std::fwrite(&g_meta.sietch_points_bought, 2, 1, f);                          // C8b: bought Sietch points (DMEO)
     std::fclose(f);
 }
 
@@ -1555,7 +1646,7 @@ void grant_xp(int amount) {
     if (g.pl.st.level >= 30) return;
     amount = amount * (100 + affix_total(items::AK_XP)) / 100;  // D1: Experience Gain
     g.pl.st.xp += amount;
-    while (g.pl.st.xp >= xp_to_level(g.pl.st.level)) {
+    while (g.pl.st.level < tune::kLevelCap && g.pl.st.xp >= xp_to_level(g.pl.st.level)) {  // C8d: hard level cap
         g.pl.st.xp -= xp_to_level(g.pl.st.level);
         ++g.pl.st.level;
         g.pl.st.statpts += 2;
@@ -3550,7 +3641,8 @@ bool cast_ability(int ab, int tx, int ty) {
     if (!ability_ready() || ab <= AB_NONE || ab >= AB_COUNT) return false;
     if (!ability_owned(ab)) return false;  // C7c: must have learned the Teaching
     const SkillMods m = skill_mods(ab - 1);            // C7d: this ability's attached Disciplines
-    const int cost = ability_cost(ab) * (100 - m.will_pct) / 100;  // Water-Sparing
+    int cost = ability_cost(ab) * (100 - m.will_pct) / 100;  // Water-Sparing
+    if (keystone_on(KS_WATER_OF_LIFE)) cost *= 2;             // Water of Life: abilities cost double Will
     if (g.pl.will < cost) return false;
     bool ok = false;
     switch (ab) {
@@ -5505,6 +5597,7 @@ void game_init(uint64_t seed, const GameServices& services) {
         if (!g.choosing) apply_base_class(g.pl, BaseClass::Knifehand);
     }
     grant_class_starter();   // C7c: guarantee the class's starter ability (fresh + pre-DMEL saves)
+    sietch_ensure_hub();     // C8d: the Sietch tree's hub is always allocated (the tree's root)
     g.pl.hp = player_max_hp();
     g.pl.shield = player_max_shield();  // C2: begin a run with a full Focus shield
     g.pl.will = player_max_will();
@@ -5874,6 +5967,7 @@ bool game_update(const InputState& in) {
         if (in.was_pressed(Key::Confirm)) {
             apply_base_class(g.pl, BaseClass(g.choose_idx));
             grant_class_starter();   // C7c: this class's starter ability
+            sietch_ensure_hub();     // C8d: allocate the Sietch tree's hub
             g.choosing = false;
             g.log.push("You are %s. The Tanzerouft waits.", kBaseClasses[g.choose_idx].name);
             flash(10, 10, 10);
@@ -5927,6 +6021,11 @@ bool game_update(const InputState& in) {
             if (in.mouse_pressed[0] && mx >= 0) {
                 // « SKILL BAR button returns to the loadout
                 if (mx >= 120 && mx < 120 + 260 && my >= 60 && my < 96) { g.menu_open = 15; g.menu_sel = 0; return true; }
+                if (mx >= 120 && mx < 120 + 320 && my >= fb::H - 72 && my < fb::H - 40) {  // RESPEC button (spice)
+                    if (respec_class_points()) g.log.push("You unlearn your class path. -%d spice.", tune::kClassRespecSpice);
+                    else g.log.push("A class respec needs %d spice.", tune::kClassRespecSpice);
+                    return true;
+                }
                 const int ni = treeui::node_at(mx, my);
                 if (ni >= 0) {
                     const SkillNode& n = kSkillNodes[ni];
@@ -5945,7 +6044,26 @@ bool game_update(const InputState& in) {
             }
             return true;
         }
-        if (g.menu_open >= 8 && g.menu_open <= 12) {  // endgame hub menus + the sietch tree (keyboard)
+        if (g.menu_open == 12) {  // C8d: the Sietch build tree — a passive node graph (click to allocate)
+            if (in.was_pressed(Key::Cancel)) { g.menu_open = 1; g.menu_sel = 0; return true; }  // back to the Naib
+            const int mx = in.mouse_x, my = in.mouse_y;
+            if (in.mouse_pressed[0] && mx >= 0) {
+                if (mx >= 120 && mx < 120 + 320 && my >= fb::H - 72 && my < fb::H - 40) {  // RESPEC button
+                    if (respec_sietch()) g.log.push("The tribe re-guides its path. -%d spice.", tune::kSietchRespecSpice);
+                    else g.log.push("Re-guiding the tribe needs %d spice.", tune::kSietchRespecSpice);
+                    return true;
+                }
+                const int ni = sietchui::node_at(mx, my);
+                if (ni >= 0) {
+                    if (sietch_has(ni)) { /* already allocated */ }
+                    else if (sietch_alloc(ni)) g.log.push("The tribe turns toward %s.", kSietchNodes[ni].name);
+                    else if (sietch_points_available() <= 0) g.log.push("No Sietch points to spend — level up.");
+                    else g.log.push("%s is out of reach (not connected to your path).", kSietchNodes[ni].name);
+                }
+            }
+            return true;
+        }
+        if (g.menu_open >= 8 && g.menu_open <= 11) {  // endgame hub menus (keyboard)
             if (in.was_pressed(Key::Up)) g.menu_sel = (g.menu_sel + n - 1) % n;
             if (in.was_pressed(Key::Down)) g.menu_sel = (g.menu_sel + 1) % n;
             if (in.was_pressed(Key::Cancel)) { g.menu_open = 0; g.bench_cur = 0; return true; }
@@ -5991,22 +6109,6 @@ bool game_update(const InputState& in) {
                             g.bench_cur = 0; g.menu_sel = 0;
                         } else { g.bench_cur = 0; g.menu_sel = 0; }  // Back to the currency list
                     }
-                } else {  // 12: the Sietch tree — spend Sietch points (from leveling) to rank up a node
-                    if (sel < kSietchNodeCount) {
-                        if (sietch_alloc(sel))
-                            g.log.push("The water deepens you. %s +1 (rank %d).",
-                                       kSietchNodes[sel].name, int(g_meta.sietch_rank[sel]));
-                        else g.log.push("No Sietch points to spend. Level up, or buy a point with Litrejons.");
-                    } else if (sel == kSietchNodeCount) {  // buy a Sietch point with Litrejons (escalating)
-                        const int cost = sietch_buy_point_cost();
-                        if (buy_sietch_point()) g.log.push("The Deathstill yields a point of insight. -%d litrejons.", cost);
-                        else g.log.push("Not enough litrejons (%d needed).", cost);
-                    } else if (sel == kSietchNodeCount + 1) {  // respec class points (Litrejons)
-                        if (respec_class_points())
-                            g.log.push("The sietch reconsiders your path — class points refunded. -%d litrejons.",
-                                       tune::kRespecLitrejons);
-                        else g.log.push("The respec rite needs %d litrejons.", tune::kRespecLitrejons);
-                    } else { g.menu_open = 1; g.menu_sel = 0; }  // Back to the Naib
                 }
             }
             return true;
@@ -7204,6 +7306,73 @@ void draw_skilltree(DrawCtx& ctx) {
             draw_text(ctx, kDisc[n.mod].effect, x + 8, y + 34, uint8_t(owned ? 136 : gate_ok ? 14 : 8));
         }
     }
+    char rb[64];  // RESPEC button (spice)
+    fill_rect(ctx, 120, fb::H - 72, 320, 32, uint8_t(g.pl.spice >= tune::kClassRespecSpice ? 3 : 2));
+    fill_rect(ctx, 120, fb::H - 72, 320, 2, 228);
+    std::snprintf(rb, sizeof rb, "RESPEC CLASS  (%d spice)", tune::kClassRespecSpice);
+    draw_text(ctx, rb, 134, fb::H - 64, uint8_t(g.pl.spice >= tune::kClassRespecSpice ? 245 : 8));
+}
+// C8d: a thin line (Bresenham, 3x3 dots) — the Sietch-tree edges. No engine primitive.
+void draw_line(DrawCtx& ctx, int x0, int y0, int x1, int y1, uint8_t col) {
+    int dx = x1 > x0 ? x1 - x0 : x0 - x1, dy = y1 > y0 ? y0 - y1 : y1 - y0;  // dy negative
+    int sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1, err = dx + dy;
+    for (int guard = 0; guard < 4000; ++guard) {
+        fill_rect(ctx, x0 - 1, y0 - 1, 3, 3, col);
+        if (x0 == x1 && y0 == y1) break;
+        const int e2 = 2 * err;
+        if (e2 >= dy) { err += dy; x0 += sx; }
+        if (e2 <= dx) { err += dx; y0 += sy; }
+    }
+}
+const char* keystone_desc(int ks) {
+    switch (ks) {
+        case KS_KULL_WAHAD:    return "Kull Wahad: your attacks never miss - and never crit.";
+        case KS_SIETCH_BORN:   return "Sietch-Born: perfect water discipline - you suffer no thirst.";
+        case KS_DESERT_POWER:  return "Desert Power: +40 Evasion, but -30% maximum Life.";
+        case KS_WATER_OF_LIFE: return "Water of Life: double your Will pool, but abilities cost double Will.";
+        default: return "";
+    }
+}
+// C8d: the Sietch build tree — the node graph (edges + discs by tier, coloured allocated/allocatable/locked).
+void draw_sietch_tree(DrawCtx& ctx) {
+    using namespace sietchui;
+    fill_rect(ctx, 0, 0, fb::W, fb::H, 1);
+    draw_text_shadow(ctx, "THE SIETCH - GUIDE THE TRIBE", fb::W / 2 - 14 * 8, 40, 230, 1);
+    char buf[128];
+    std::snprintf(buf, sizeof buf, "Sietch points: %d free   (level %d / %d)   -   click a lit node; ESC to the Naib",
+                  sietch_points_available(), int(g.pl.st.level), tune::kLevelCap);
+    draw_text(ctx, buf, fb::W / 2 - 360, 78, 14);
+    for (int e = 0; e < kSietchEdgeCount; ++e) {  // edges under the nodes
+        int ax, ay, bx, by;
+        node_screen(kSietchEdges[e][0], ax, ay);
+        node_screen(kSietchEdges[e][1], bx, by);
+        const bool lit = sietch_has(kSietchEdges[e][0]) && sietch_has(kSietchEdges[e][1]);
+        draw_line(ctx, ax, ay, bx, by, uint8_t(lit ? 231 : 3));
+    }
+    const int hov = node_at(g.ui_mx, g.ui_my);
+    for (int i = 0; i < kSietchNodeCount; ++i) {
+        int sx, sy; node_screen(i, sx, sy);
+        const bool alloc = sietch_has(i), can = sietch_allocatable(i);
+        const int tier = kSietchNodes[i].tier;
+        const int r = tier == 2 ? R + 8 : tier == 1 ? R + 3 : R;  // keystone big, notable mid, small
+        const uint8_t col = alloc ? 245 : can ? 231 : 8;          // gold / lit / dim
+        fill_rect(ctx, sx - r, sy - r, 2 * r, 2 * r, uint8_t(i == hov ? 4 : 2));
+        fill_rect(ctx, sx - r + 2, sy - r + 2, 2 * r - 4, 2 * r - 4, col);
+        char lbl[12]; std::snprintf(lbl, sizeof lbl, "%.9s", kSietchNodes[i].name);
+        draw_text(ctx, lbl, sx - r, sy + r + 2, uint8_t(alloc ? 245 : can ? 200 : 14));
+    }
+    if (hov >= 0) {  // detail for the hovered node
+        const SietchNode& nd = kSietchNodes[hov];
+        if (nd.tier == 2) std::snprintf(buf, sizeof buf, "%s", keystone_desc(nd.ks));
+        else if (nd.value > 0) std::snprintf(buf, sizeof buf, "%s   +%d %s%s", nd.name, int(nd.value),
+                                             items::stat_name(nd.kind), nd.tier == 1 ? "   (notable)" : "");
+        else std::snprintf(buf, sizeof buf, "%s   (the sietch heart)", nd.name);
+        draw_text_shadow(ctx, buf, fb::W / 2 - 300, fb::H - 108, 231, 1);
+    }
+    fill_rect(ctx, 120, fb::H - 72, 320, 32, uint8_t(g.pl.spice >= tune::kSietchRespecSpice ? 3 : 2));  // RESPEC
+    fill_rect(ctx, 120, fb::H - 72, 320, 2, 228);
+    std::snprintf(buf, sizeof buf, "RE-GUIDE THE TRIBE  (respec, %d spice)", tune::kSietchRespecSpice);
+    draw_text(ctx, buf, 134, fb::H - 64, uint8_t(g.pl.spice >= tune::kSietchRespecSpice ? 245 : 8));
 }
 // C7b: the compact HUD skill bar — the primary bar's six slots (the Ctrl secondary shows on the loadout).
 void draw_skillbar_hud(DrawCtx& ctx) {
@@ -7422,11 +7591,12 @@ void pass_ui(RenderCtx& r) {
 
     if (g.menu_open == 15) draw_loadout(ctx);        // C7b: the skill-bar loadout screen
     if (g.menu_open == 16) draw_skilltree(ctx);      // C8a: the class skill-tree screen
+    if (g.menu_open == 12) draw_sietch_tree(ctx);    // C8d: the Sietch build tree (node graph)
 
     // Endgame hub menus (War Council / Jihad Table / Landsraad / Bench) — dynamic, keyboard-driven.
-    if (g.menu_open >= 8 && g.menu_open <= 12) {
+    if (g.menu_open >= 8 && g.menu_open <= 11) {
         const int x0 = fb::W / 2 - 340, y0 = 200;
-        if (g.menu_open <= 10 || g.menu_open == 12) {  // 8-10 + 12 keyboard lists; 11 is a grid screen (G4)
+        if (g.menu_open <= 10) {  // 8-10 keyboard lists; 11 is a grid screen (G4)
         fill_rect(ctx, x0, y0, 680, 460, 2);
         fill_rect(ctx, x0, y0, 680, 2, 228);
         fill_rect(ctx, x0, y0 + 458, 680, 2, 228);
@@ -7474,24 +7644,6 @@ void pass_ui(RenderCtx& r) {
             std::snprintf(buf, sizeof buf, "Collect CHOAM dividend  (~%d sp)", choam_control());
             row(FAC_COUNT, buf, g.menu_sel == FAC_COUNT);
             row(FAC_COUNT + 1, "Back", g.menu_sel == FAC_COUNT + 1);
-        } else if (g.menu_open == 12) {  // C8b: the Sietch tree — the infinite, level-based stat progression
-            draw_text_shadow(ctx, "THE SIETCH TREE", x0 + 24, y0 + 16, 230, 1);
-            std::snprintf(buf, sizeof buf, "Sietch points %d free   (level %d)      litrejons %d",
-                          sietch_points_available(), int(g.pl.st.level), int(g_meta.litrejons));
-            draw_text(ctx, buf, x0 + 24, y0 + 46, 14);
-            for (int i = 0; i < kSietchNodeCount; ++i) {
-                const int rank = g_meta.sietch_rank[i];
-                const char* trk = kSietchNodes[i].track == 0 ? "Sandcraft" : "Blessing";
-                std::snprintf(buf, sizeof buf, "[%-9s] %-16s  rank %-4d (+%d %s / rank)", trk,
-                              kSietchNodes[i].name, rank, kSietchNodes[i].per_rank,
-                              items::stat_name(kSietchNodes[i].kind));
-                row(i, buf, g.menu_sel == i);
-            }
-            std::snprintf(buf, sizeof buf, "Buy a Sietch point  (%d litrejons)", sietch_buy_point_cost());
-            row(kSietchNodeCount, buf, g.menu_sel == kSietchNodeCount);
-            std::snprintf(buf, sizeof buf, "Respec class points  (%d litrejons)", tune::kRespecLitrejons);
-            row(kSietchNodeCount + 1, buf, g.menu_sel == kSietchNodeCount + 1);
-            row(kSietchNodeCount + 2, "Back to the Naib", g.menu_sel == kSietchNodeCount + 2);
         } else {  // G4: the crafting bench — the pack grid (left) + the currency-tab slots (right)
             const int bx = fb::W / 2 - 620, by = 190;
             fill_rect(ctx, bx, by, 1240, 620, 2);
@@ -8536,16 +8688,17 @@ int game_debug_reclaimed() { return g.pl.reclaimed; }          // this run's un-
 void game_debug_grant_litrejons(int n) { g_meta.litrejons += n; meta_save(); }
 // --- C5b/C8b sietch-tree hooks ---
 int game_debug_sietch_node_count() { return kSietchNodeCount; }
-int game_debug_sietch_rank(int idx) { return (idx >= 0 && idx < kSietchNodeCount) ? g_meta.sietch_rank[idx] : -1; }
+int game_debug_sietch_has(int idx) { return sietch_has(idx) ? 1 : 0; }
+int game_debug_sietch_allocatable(int idx) { return sietch_allocatable(idx) ? 1 : 0; }
 int game_debug_sietch_alloc(int idx) { return sietch_alloc(idx) ? 1 : 0; }
 int game_debug_sietch_points() { return sietch_points_available(); }
-int game_debug_buy_sietch_point() { return buy_sietch_point() ? 1 : 0; }
-int game_debug_sietch_buy_point_cost() { return sietch_buy_point_cost(); }
 int game_debug_sietch_bonus(int kind) { return sietch_affix_bonus(uint8_t(kind)); }
+int game_debug_keystone_on(int ks) { return keystone_on(ks) ? 1 : 0; }
+int game_debug_respec_sietch() { return respec_sietch() ? 1 : 0; }
 int game_debug_meta_sietch_rank(int idx) { return (idx >= 0 && idx < kSietchNodeCount) ? g_meta.sietch_rank[idx] : -1; }
 int game_debug_max_hp() { return player_max_hp(); }   // for verifying a tree node moves a derived stat
 // C4 passive-tree hooks RETIRED by C8b.
-void game_debug_set_level(int lvl) { g.pl.st.level = int16_t(lvl < 1 ? 1 : lvl > 9999 ? 9999 : lvl); }
+void game_debug_set_level(int lvl) { g.pl.st.level = int16_t(lvl < 1 ? 1 : lvl > tune::kLevelCap ? tune::kLevelCap : lvl); }
 int game_debug_deathstill(int water) {  // place a corpse worth `water` on the player + harvest it
     const Entity& p = player_ent();
     for (int i = 1; i < kMaxEnts; ++i)
@@ -8721,7 +8874,7 @@ void game_debug_stun_player(int ticks) { stun_player(ticks); }  // RT2: force a 
 int game_debug_player_stun_turns() { return g.pl.ail_stun_turns; }
 int game_debug_player_ready() { return player_ready() ? 1 : 0; }  // RT2: is the player able to act?
 // C3: base class / ascendancy hooks (classtest).
-void game_debug_apply_base(int bc) { apply_base_class(g.pl, BaseClass(bc)); grant_class_starter(); }
+void game_debug_apply_base(int bc) { apply_base_class(g.pl, BaseClass(bc)); grant_class_starter(); sietch_ensure_hub(); }
 void game_debug_class(int* base, int* asc) {
     if (base) *base = int(g.pl.base_class);
     if (asc) *asc = int(g.pl.ascendancy);
