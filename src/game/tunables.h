@@ -155,6 +155,15 @@ inline constexpr int kSietchLevelsPerPoint = 5;  // one Sietch point per N level
 inline constexpr int kSietchRespecSpice = 200;   // spice to refund the whole Sietch tree
 inline constexpr int kClassRespecSpice = 200;    // spice to refund all class-tree points
 
+// --- C9: the Green Paradise Atlas. Banked water (Litrejons) greens Arrakis; the cost escalates per node
+// so it's a long grind. Peril nodes raise mob HP (deadlier-but-richer), mirroring the Guild-tithe dial.
+inline constexpr int kParadiseCostBase = 40;     // Litrejons per node x (nodes already greened)
+inline constexpr int kParadisePerilHpPct = 8;    // +% mob HP per Peril level greened
+inline constexpr int kDominionStrikeCut = 6;     // -spice on a strike commission per Dominion level
+inline constexpr int kDominionCourtCut = 4;      // -spice to court a House per Dominion level
+inline constexpr int kDominionDividend = 1;      // +CHOAM dividend multiplier per Dominion level
+inline constexpr int kEcologyWormCalm = 6;       // +worm stir/hunt threshold per Ecology level (softer worm)
+
 // --- C6: the maula pistol (cursor-aimed ranged attack) ---
 inline constexpr int kMaulaNoise = 22;        // the maula CRACKS — much louder than a blade (12)
 inline constexpr int kMaulaRange = 12;        // max tiles the dart travels

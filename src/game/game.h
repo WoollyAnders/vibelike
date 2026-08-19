@@ -243,6 +243,21 @@ int game_debug_keystone_on(int ks);          // 1 if a keystone of id ks is allo
 int game_debug_respec_sietch();              // spice-refund the Sietch tree; 1 on success
 int game_debug_meta_sietch_rank(int idx);    // persisted allocation (DMEP round-trip)
 int game_debug_max_hp();                     // player_max_hp() (to verify a node moves a derived stat)
+// --- C9 Green Paradise Atlas hooks ---
+int game_debug_paradise_node_count();        // number of Atlas nodes
+void game_debug_paradise_ensure_hub();       // bootstrap the hub (done on War Council entry in-game)
+int game_debug_paradise_has(int n);          // 1 if node n is greened
+int game_debug_paradise_allocatable(int n);  // 1 if node n can be greened now (endgame + adjacency + water)
+int game_debug_paradise_alloc(int n);        // green node n (spends Litrejons); 1 on success
+int game_debug_paradise_node_cost();         // Litrejons for the next node
+int game_debug_paradise_bounty();            // Bounty aggregate (loot rarity %)
+int game_debug_paradise_peril();             // Peril aggregate (danger levels)
+int game_debug_paradise_dominion();          // Dominion aggregate (Jihad levels)
+int game_debug_paradise_ecology();           // Ecology aggregate (desert-taming levels)
+int game_debug_paradise_unlocked(int u);     // 1 if unlock u (e.g. PU_LONGRIDE=1) is greened
+int game_debug_meta_paradise_has(int n);     // persisted greened bit (DMEQ round-trip)
+int game_debug_run_difficulty();             // run_difficulty() (Peril raises it)
+int game_debug_strike_cost(int tier);        // strike_cost(tier) (Dominion lowers it)
 void game_debug_revelation(int* stage, int* inv_count);  // B2b: Revelation stage + inv item count
 void game_debug_revelation_pick(int idx);  // B2b: choose row idx + confirm the Revelation
 int game_debug_cur_node();  // B1.3: current graph node index

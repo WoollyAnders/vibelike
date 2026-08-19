@@ -390,11 +390,21 @@ void apply_deltas(map::Zone& z, uint8_t zone_id);
 void end_season(uint8_t ending);
 void spawn_zone_wildlife(map::Zone& z, uint8_t zone_id);
 bool endgame_open();  // fwd: the Jihad (endgame) is open once the Baron has fallen
+// C9: Green Paradise branch aggregators (fwd) — 0 unless the endgame is open + nodes greened. Fold into
+// the world/endgame seams so an un-greened meta is a determinism no-op (the guild_difficulty idiom).
+int paradise_bounty();    // % loot-rarity bounty
+int paradise_peril();     // danger levels: +HP% + run difficulty
+int paradise_dominion();  // Jihad levels: cheaper strikes, faster pressure, fatter dividends
+int paradise_ecology();   // desert-taming levels: softer worm, less exposure
 
 worm::Tuning worm_tuning() {
     worm::Tuning t;
     t.active = g.cur_zone != map::kZoneSietch;
     if (g.cur_zone == map::kZoneDeepPan) { t.stir_threshold = 25; t.hunt_threshold = 50; }
+    if (int eco = paradise_ecology()) {  // C9: a greened desert quiets the makers (harder to rouse)
+        t.stir_threshold += eco * tune::kEcologyWormCalm;
+        t.hunt_threshold += eco * tune::kEcologyWormCalm;
+    }
     return t;
 }
 
@@ -478,6 +488,7 @@ int foe_hp(EType t) {
     if (awk < 1) awk = 1;
     int hp = f->hp + f->hp * (awk - 1) / 4;  // +25% of base per Awaken level of depth
     hp += hp * guild_difficulty() * tune::kGuildHpPerDebt / 100;  // B6: unpaid tithe -> tougher mobs
+    hp += hp * paradise_peril() * tune::kParadisePerilHpPct / 100;  // C9: a greener Arrakis is more contested
     return hp;
 }
 
@@ -1163,6 +1174,76 @@ inline int node_at(int mx, int my) {  // the node whose disc contains (mx,my), o
 }
 }  // namespace sietchui
 
+// C9: the Green Paradise Atlas tree (menu 17) — Kynes' dream. An endgame, account-scoped meta tree fuelled
+// by banked water (Litrejons): allocating a node terraforms Arrakis and permanently reshapes the endgame.
+// Four branches from a hub: Bounty (richer loot), Peril (deadlier + richer), Dominion (a swifter Jihad),
+// Ecology (the desert tamed + unlocks). Single-allocate, adjacency-gated from the hub, but fully
+// completable — the only gate is Litrejons. Node effects are aggregated per branch and folded into the
+// existing world/endgame seams (the guild_difficulty idiom), so a fresh (un-greened) meta is a no-op.
+enum ParadiseBranch : uint8_t { PB_BOUNTY = 0, PB_PERIL, PB_DOMINION, PB_ECOLOGY };
+enum ParadiseKind : uint8_t { PK_STAT = 0, PK_UNLOCK };
+enum ParadiseUnlock : uint8_t { PU_NONE = 0, PU_LONGRIDE };  // kind==PK_UNLOCK carries one of these in `value`
+struct ParadiseNode { const char* name; uint8_t x, y, branch, kind; int16_t value; };
+inline constexpr ParadiseNode kParadiseNodes[] = {
+    {"Kynes' Dream",     8, 8, PB_BOUNTY,   PK_STAT,   0},  // 0  the hub (auto-allocated when the endgame opens)
+    // --- Bounty (up): a greener land yields more ---  value = % loot-rarity bounty
+    {"Fertile Sands",    8, 7, PB_BOUNTY,   PK_STAT,  12},  // 1
+    {"Palm Groves",      7, 6, PB_BOUNTY,   PK_STAT,  12},  // 2
+    {"Spice Bloom",      9, 6, PB_BOUNTY,   PK_STAT,  16},  // 3
+    {"Windtrap Yield",   8, 5, PB_BOUNTY,   PK_STAT,  14},  // 4
+    {"Qanat Network",    7, 4, PB_BOUNTY,   PK_STAT,  16},  // 5
+    {"The First Harvest",8, 3, PB_BOUNTY,   PK_STAT,  24},  // 6
+    // --- Peril (right): a greener Arrakis is more contested ---  value = peril levels
+    {"Contested Ground",10, 8, PB_PERIL,    PK_STAT,   1},  // 7
+    {"Bolder Raiders",  11, 8, PB_PERIL,    PK_STAT,   1},  // 8
+    {"Hardened Foes",   12, 7, PB_PERIL,    PK_STAT,   1},  // 9
+    {"War Over Water",  12, 9, PB_PERIL,    PK_STAT,   1},  // 10
+    {"Legion Response", 13, 8, PB_PERIL,    PK_STAT,   1},  // 11
+    {"The Emperor Notices",14,8,PB_PERIL,   PK_STAT,   2},  // 12
+    // --- Dominion (down): the Jihad quickens ---  value = dominion levels
+    {"Whispered Word",   8, 9, PB_DOMINION, PK_STAT,   1},  // 13
+    {"Fedaykin Cells",   7,10, PB_DOMINION, PK_STAT,   1},  // 14
+    {"Water Tribute",    9,10, PB_DOMINION, PK_STAT,   1},  // 15
+    {"Sietch Network",   8,11, PB_DOMINION, PK_STAT,   1},  // 16
+    {"CHOAM Leverage",   8,12, PB_DOMINION, PK_STAT,   1},  // 17
+    {"The Fremen Tide",  8,13, PB_DOMINION, PK_STAT,   2},  // 18
+    // --- Ecology (left): the desert tamed ---  value = ecology levels (last node = the Long Ride unlock)
+    {"Cooler Nights",    7, 8, PB_ECOLOGY,  PK_STAT,   1},  // 19
+    {"Dew Gatherers",    6, 8, PB_ECOLOGY,  PK_STAT,   1},  // 20
+    {"Planted Verges",   5, 7, PB_ECOLOGY,  PK_STAT,   1},  // 21
+    {"Calmed Deeps",     5, 9, PB_ECOLOGY,  PK_STAT,   2},  // 22
+    {"Open Cisterns",    4, 8, PB_ECOLOGY,  PK_STAT,   2},  // 23
+    {"Sandrider Roads",  3, 8, PB_ECOLOGY,  PK_UNLOCK, PU_LONGRIDE},  // 24  opens the Long Ride
+};
+inline constexpr int kParadiseNodeCount = int(sizeof kParadiseNodes / sizeof *kParadiseNodes);
+inline constexpr int kParadiseHub = 0;
+inline constexpr uint8_t kParadiseEdges[][2] = {
+    {0,1},{1,2},{1,3},{2,4},{3,4},{4,5},{5,6},          // Bounty
+    {0,7},{7,8},{8,9},{8,10},{9,11},{10,11},{11,12},    // Peril
+    {0,13},{13,14},{13,15},{14,16},{15,16},{16,17},{17,18},  // Dominion
+    {0,19},{19,20},{20,21},{20,22},{21,23},{22,23},{23,24},  // Ecology
+};
+inline constexpr int kParadiseEdgeCount = int(sizeof kParadiseEdges / sizeof *kParadiseEdges);
+// menu-17 node-graph geometry (mirrors sietchui; hub grid (8,8) -> screen centre).
+namespace paradiseui {
+inline constexpr int SCALE = 60, R = 18;
+inline int cx() { return fb::W / 2; }
+inline int cy() { return fb::H / 2 + 20; }
+inline void node_screen(int i, int& sx, int& sy) {
+    sx = cx() + (int(kParadiseNodes[i].x) - 8) * SCALE;
+    sy = cy() + (int(kParadiseNodes[i].y) - 8) * SCALE;
+}
+inline int node_at(int mx, int my) {
+    if (mx < 0) return -1;
+    for (int i = 0; i < kParadiseNodeCount; ++i) {
+        int sx, sy; node_screen(i, sx, sy);
+        const int dx = mx - sx, dy = my - sy;
+        if (dx * dx + dy * dy <= (R + 6) * (R + 6)) return i;
+    }
+    return -1;
+}
+}  // namespace paradiseui
+
 // C4 passive tree RETIRED by C8b — the Sietch tree (above) is the sole stat tree. The `passives` mask
 // remains a vestigial (unused) save field so the run-save / meta layout is unchanged.
 
@@ -1183,6 +1264,7 @@ struct Meta {
     int32_t banked_spice = 0;      // safe wallet; run spice banks here on extraction
     int32_t litrejons = 0;         // C5 (DMEH): tribal water banked from the Deathstill; the sietch-tree currency
     uint16_t sietch_rank[kSietchNodeCount] = {};  // C5b/C8d (DMEI/DMEP): per-node allocation (0/1, single-allocate)
+    uint64_t paradise = 0;                        // C9 (DMEQ): Green Paradise Atlas — per-node allocation bitmask
     uint64_t passives = 0;                       // C4 (DMEJ): the character's allocated passive-tree nodes
     uint8_t skill_bind[2][6] = {{1, 1, 0, 0, 0, 0}, {0, 0, 0, 0, 0, 0}};  // C7b (DMEK): the skill bar
     uint16_t owned_abilities = 0;  // C7c/C8a (DMEL/DMEN): unlocked-ability bitmask
@@ -1252,6 +1334,7 @@ int guild_difficulty() {
     return d < 0 ? 0 : d > cap ? cap : d;
 }
 
+inline constexpr uint32_t kMetaVQ = 0x51454D44u;  // 'DMEQ' (C9: + paradise, the Green Paradise Atlas bitmask)
 inline constexpr uint32_t kMetaVP = 0x50454D44u;  // 'DMEP' (C8d: Sietch build tree — single-allocate graph, ~37 nodes)
 inline constexpr uint32_t kMetaVO = 0x4F454D44u;  // 'DMEO' (C8b: widened sietch_rank u16 + sietch_points_bought)
 inline constexpr uint32_t kMetaVN = 0x4E454D44u;  // 'DMEN' (C8a: class trees — skill_mods_alloc; C7d disc fields retired)
@@ -1389,13 +1472,58 @@ bool respec_class_points() {  // Spice refunds all class-tree points
     return true;
 }
 
+// C9: the Green Paradise Atlas — allocation, cost, and per-branch aggregators (all no-op until the endgame
+// is open + nodes are greened, keeping fresh-meta runs determinism-identical).
+bool paradise_has(int n) { return n >= 0 && n < kParadiseNodeCount && (g_meta.paradise & (1ull << n)); }
+void paradise_ensure_hub() { if (endgame_open()) g_meta.paradise |= (1ull << kParadiseHub); }  // bootstrap the root
+int paradise_branch_sum(int branch) {
+    if (!endgame_open()) return 0;
+    int s = 0;
+    for (int i = 0; i < kParadiseNodeCount; ++i)
+        if (paradise_has(i) && kParadiseNodes[i].branch == branch && kParadiseNodes[i].kind == PK_STAT)
+            s += kParadiseNodes[i].value;
+    return s;
+}
+int paradise_bounty()   { return paradise_branch_sum(PB_BOUNTY); }
+int paradise_peril()    { return paradise_branch_sum(PB_PERIL); }
+int paradise_dominion() { return paradise_branch_sum(PB_DOMINION); }
+int paradise_ecology()  { return paradise_branch_sum(PB_ECOLOGY); }
+bool paradise_unlocked(int unlock) {  // an allocated PK_UNLOCK node carrying this id
+    if (!endgame_open()) return false;
+    for (int i = 0; i < kParadiseNodeCount; ++i)
+        if (paradise_has(i) && kParadiseNodes[i].kind == PK_UNLOCK && kParadiseNodes[i].value == unlock)
+            return true;
+    return false;
+}
+int paradise_node_cost() {  // Litrejons for the next node — escalates with how much is already greened
+    return tune::kParadiseCostBase * __builtin_popcountll(g_meta.paradise);  // hub counts as 1 -> first real node = base
+}
+bool paradise_adjacent(int n) {
+    for (int e = 0; e < kParadiseEdgeCount; ++e) {
+        const int a = kParadiseEdges[e][0], b = kParadiseEdges[e][1];
+        if (a == n && paradise_has(b)) return true;
+        if (b == n && paradise_has(a)) return true;
+    }
+    return false;
+}
+bool paradise_allocatable(int n) {
+    return endgame_open() && n >= 0 && n < kParadiseNodeCount && !paradise_has(n) &&
+           paradise_adjacent(n) && g_meta.litrejons >= paradise_node_cost();
+}
+bool paradise_alloc(int n) {  // spend banked Litrejons to green a node; persists
+    if (!paradise_allocatable(n)) return false;
+    g_meta.litrejons -= paradise_node_cost();
+    g_meta.paradise |= (1ull << n);
+    meta_save();
+    return true;
+}
 
 void meta_load() {
     FILE* f = std::fopen("meta.dat", "rb");
     if (!f) return;
     uint32_t magic = 0;
     if (std::fread(&magic, 4, 1, f) == 1) {
-        if (magic >= kMetaV4 && magic <= kMetaVP && magic != kMetaV1) {  // native widened-Inst format (DME4..DMEP)
+        if (magic >= kMetaV4 && magic <= kMetaVQ && magic != kMetaV1) {  // native widened-Inst format (DME4..DMEQ)
             const bool cur = (magic >= kMetaVC);  // DMEC+ = new Inst layout; older = OldInst (convert)
             (void)!std::fread(&g_meta.runs, 4, 1, f);
             (void)!std::fread(&g_meta.endings_seen, 1, 1, f);
@@ -1496,6 +1624,9 @@ void meta_load() {
                 uint16_t scratch;
                 (void)!std::fread(&scratch, 2, 1, f);
             }
+            if (magic >= kMetaVQ) {  // C9: the Green Paradise Atlas allocation bitmask
+                (void)!std::fread(&g_meta.paradise, 8, 1, f);
+            }
             // D3 migration: the old Maker Hide / Worm Tooth counters become currency (their new roles:
             // armour / weapon quality), banked to the crafting table. No-op on a DMEC+ file (already 0).
             if (g_meta.maker_hides > 0) { meta_grant_currency(items::CUR_ARMORQUAL, g_meta.maker_hides); g_meta.maker_hides = 0; }
@@ -1534,7 +1665,7 @@ void meta_load() {
 void meta_save() {
     FILE* f = std::fopen("meta.dat", "wb");
     if (!f) return;
-    std::fwrite(&kMetaVP, 4, 1, f);  // C8d: DMEP (Sietch build tree — single-allocate node graph)
+    std::fwrite(&kMetaVQ, 4, 1, f);  // C9: DMEQ (+ the Green Paradise Atlas bitmask)
     std::fwrite(&g_meta.runs, 4, 1, f);
     std::fwrite(&g_meta.endings_seen, 1, 1, f);
     std::fwrite(&g_meta.stash_tabs, 1, 1, f);                       // G3: owned tab count
@@ -1570,6 +1701,7 @@ void meta_save() {
     std::fwrite(g_meta.skill_bind, sizeof g_meta.skill_bind, 1, f);    // C7b: skill bar (DMEK)
     std::fwrite(&g_meta.owned_abilities, 2, 1, f);                     // C7c/C8a: unlocked abilities (DMEL/DMEN)
     std::fwrite(g_meta.skill_mods_alloc, sizeof g_meta.skill_mods_alloc, 1, f);  // C8a: class-tree modifiers (DMEN)
+    std::fwrite(&g_meta.paradise, 8, 1, f);                                      // C9: Green Paradise Atlas (DMEQ)
     std::fclose(f);
 }
 
@@ -1663,7 +1795,7 @@ void grant_xp(int amount) {
 
 // Y2: run difficulty — each denied harvester and every tier of alert deepens
 // the loot tables. Risk feeds reward.
-int run_difficulty() { return g.season.denied + g.season.alert / 25 + guild_difficulty(); }  // B6: unpaid tithe -> richer loot
+int run_difficulty() { return g.season.denied + g.season.alert / 25 + guild_difficulty() + paradise_peril(); }  // B6/C9: risk -> richer loot
 
 // B7: signal the Spacing Guild from the sietch hub to pay the tithe down on demand (the reliable
 // counterpart to bumping the wandering field Envoy). Costs spice; returns false if you can't afford it.
@@ -2420,7 +2552,8 @@ void maybe_drop_loot(EType t, int x, int y) {  // C8a: abilities/modifiers no lo
     const int chance = (t == EType::Boss ? 100 : 40) + 8 * g.pl.st.talents[5];
     if (int(g.rng.loot.below(100)) < chance) {  // the gear drop (unchanged draw order)
         const int diff = run_difficulty();
-        items::Inst it = roll_item(f->level + diff / 2, diff * 6 + (t == EType::Boss ? 60 : 0));
+        items::Inst it = roll_item(f->level + diff / 2,
+                                   diff * 6 + (t == EType::Boss ? 60 : 0) + paradise_bounty());  // C9: greener = richer
         if (t == EType::Boss) it.ilvl = uint8_t(it.ilvl < 10 ? it.ilvl + 1 : 10);
         // D3c: deep gear can drop unidentified (draw gated by area, so shallow runs are unperturbed)
         if (area_level() >= tune::kUnidMinArea && it.rarity != items::R_COMMON &&
@@ -2596,7 +2729,7 @@ bool endgame_open() { return g_meta.chosen_path != 0; }
 // that faction's homeworld pinnacle opens. Pressure is persistent (meta), capped, per-faction.
 void press_faction(int f, int tier) {
     if (f < 0 || f >= FAC_COUNT || tier < 1) return;
-    int p = g_meta.jihad_pressure[f] + tier * tune::kStrikePressPerTier;
+    int p = g_meta.jihad_pressure[f] + (tier + paradise_dominion()) * tune::kStrikePressPerTier;  // C9: Dominion
     if (p > tune::kPinnaclePressure) p = tune::kPinnaclePressure;
     g_meta.jihad_pressure[f] = uint8_t(p);
     if (p >= tune::kPinnaclePressure && !(g_meta.pinnacle_cleared & (1 << f)))
@@ -2604,8 +2737,12 @@ void press_faction(int f, int tier) {
     meta_save();
 }
 
-// The spice cost to commission a strike at `tier` (higher tier = harder + richer).
-int strike_cost(int tier) { return tier * tune::kStrikeSpiceBase; }
+// The spice cost to commission a strike at `tier` (higher tier = harder + richer). C9: Dominion discounts it.
+int strike_cost(int tier) {
+    int c = tier * tune::kStrikeSpiceBase - paradise_dominion() * tune::kDominionStrikeCut;
+    const int floor = tune::kStrikeSpiceBase / 2;
+    return c < floor ? floor : c;
+}
 
 // A faction's homeworld pinnacle is available once the Jihad is open, its pressure is full, and it
 // has not already fallen.
@@ -2983,8 +3120,10 @@ int opposing_houses() {
 bool court_house(int f) {
     if (!endgame_open() || f < 0 || f >= FAC_COUNT) return false;
     if (house_stance(f) != HOUSE_NEUTRAL) return false;  // opponents can't be bought; allies already in
-    if (g.pl.spice < tune::kCourtCost) return false;
-    g.pl.spice -= tune::kCourtCost;
+    int cost = tune::kCourtCost - paradise_dominion() * tune::kDominionCourtCut;  // C9: Dominion eases diplomacy
+    if (cost < tune::kCourtCost / 2) cost = tune::kCourtCost / 2;
+    if (g.pl.spice < cost) return false;
+    g.pl.spice -= cost;
     g_meta.house_allied |= uint8_t(1 << f);
     g.log.push("%s joins your bloc in the Landsraad. CHOAM control: %d%%.",
                faction_name(f), choam_control());
@@ -2995,7 +3134,7 @@ bool court_house(int f) {
 // Collect the CHOAM dividend — the economic boon of your bloc, scaled by control. Returns the spice.
 int collect_dividend() {
     if (!endgame_open()) return 0;
-    const int div = choam_control() * tune::kDividendPerControl;
+    const int div = choam_control() * (tune::kDividendPerControl + paradise_dominion() * tune::kDominionDividend);  // C9
     g.pl.spice += div;
     g.log.push("The CHOAM dividend pays out: %d spice from your directorships.", div);
     return div;
@@ -5983,8 +6122,8 @@ bool game_update(const InputState& in) {
     // vendor menus pause the world (browsing is free)
     if (g.menu_open) {
         // 5 = character sheet, 6 = inventory, 7 = the vault
-        int counts[17] = {0, 6, 3, 5, 4, 3 + kTalentCount + 1, 13, 13, 4, 5 + 1 + 1, 5 + 1 + 1, 1,
-                          kSietchNodeCount + 3, 1, 1, 12, 1};  // 12 sietch tree (+buy pt +respec +back), 15 loadout, 16 skill tree
+        int counts[18] = {0, 6, 3, 5, 4, 3 + kTalentCount + 1, 13, 13, 6, 5 + 1 + 1, 5 + 1 + 1, 1,
+                          kSietchNodeCount + 3, 1, 1, 12, 1, 1};  // 8 War Council(+GreenParadise+LongRide), 12/16 trees, 17 atlas
         int n = counts[g.menu_open];
         if (g.menu_open == 11) {  // D3d bench: rows are owned currencies, or gear once a currency is picked
             uint8_t cb[items::CUR_COUNT]; int gi[12];
@@ -6063,6 +6202,21 @@ bool game_update(const InputState& in) {
             }
             return true;
         }
+        if (g.menu_open == 17) {  // C9: the Green Paradise Atlas — spend banked water to green a node
+            if (in.was_pressed(Key::Cancel)) { g.menu_open = 8; g.menu_sel = 0; return true; }  // back to the War Council
+            const int mx = in.mouse_x, my = in.mouse_y;
+            if (in.mouse_pressed[0] && mx >= 0) {
+                const int ni = paradiseui::node_at(mx, my);
+                if (ni >= 0) {
+                    const int cost = paradise_node_cost();
+                    if (paradise_has(ni)) { /* already greened */ }
+                    else if (paradise_alloc(ni)) g.log.push("Arrakis greens: %s. -%d litrejons.", kParadiseNodes[ni].name, cost);
+                    else if (!paradise_adjacent(ni)) g.log.push("%s is not yet reachable.", kParadiseNodes[ni].name);
+                    else g.log.push("Not enough water: %s needs %d litrejons.", kParadiseNodes[ni].name, cost);
+                }
+            }
+            return true;
+        }
         if (g.menu_open >= 8 && g.menu_open <= 11) {  // endgame hub menus (keyboard)
             if (in.was_pressed(Key::Up)) g.menu_sel = (g.menu_sel + n - 1) % n;
             if (in.was_pressed(Key::Down)) g.menu_sel = (g.menu_sel + 1) % n;
@@ -6074,7 +6228,13 @@ bool game_update(const InputState& in) {
             if (in.was_pressed(Key::Confirm) || mclick) {
                 const int sel = g.menu_sel;
                 if (g.menu_open == 8) {  // the War Council hub
-                    if (sel <= 2) { g.menu_open = 9 + sel; g.menu_sel = 0; g.bench_cur = 0; }
+                    if (sel <= 2) { g.menu_open = 9 + sel; g.menu_sel = 0; g.bench_cur = 0; }  // 0 Jihad / 1 Landsraad / 2 Bench
+                    else if (sel == 3) { paradise_ensure_hub(); g.menu_open = 17; g.menu_sel = 0; }  // C9: the Green Paradise
+                    else if (sel == 4) {  // C9: the Long Ride — unlocked by greening the Sandrider Roads
+                        if (!paradise_unlocked(PU_LONGRIDE)) g.log.push("Green the Sandrider Roads first (the Green Paradise).");
+                        else if (ride_begin()) g.menu_open = 0;
+                        else g.log.push("You cannot ride out just now.");
+                    }
                     else g.menu_open = 0;
                 } else if (g.menu_open == 9) {  // the Jihad Table
                     if (sel < FAC_COUNT) {
@@ -7374,6 +7534,47 @@ void draw_sietch_tree(DrawCtx& ctx) {
     std::snprintf(buf, sizeof buf, "RE-GUIDE THE TRIBE  (respec, %d spice)", tune::kSietchRespecSpice);
     draw_text(ctx, buf, 134, fb::H - 64, uint8_t(g.pl.spice >= tune::kSietchRespecSpice ? 245 : 8));
 }
+// C9: the Green Paradise Atlas — the terraform node graph. Branch-tinted discs; greened / greenable / far.
+void draw_paradise_tree(DrawCtx& ctx) {
+    using namespace paradiseui;
+    fill_rect(ctx, 0, 0, fb::W, fb::H, 1);
+    draw_text_shadow(ctx, "THE GREEN PARADISE - TERRAFORM ARRAKIS", fb::W / 2 - 19 * 8, 40, 230, 1);
+    char buf[160];
+    int greened = 0; for (int i = 0; i < kParadiseNodeCount; ++i) if (paradise_has(i)) ++greened;
+    std::snprintf(buf, sizeof buf,
+                  "litrejons %d   next node %d   terraformed %d/%d   -   Bounty | Peril | Dominion | Ecology   ESC to the War Council",
+                  int(g_meta.litrejons), paradise_node_cost(), greened, kParadiseNodeCount);
+    draw_text(ctx, buf, fb::W / 2 - 470, 78, 14);
+    for (int e = 0; e < kParadiseEdgeCount; ++e) {
+        int ax, ay, bx, by;
+        node_screen(kParadiseEdges[e][0], ax, ay);
+        node_screen(kParadiseEdges[e][1], bx, by);
+        const bool lit = paradise_has(kParadiseEdges[e][0]) && paradise_has(kParadiseEdges[e][1]);
+        draw_line(ctx, ax, ay, bx, by, uint8_t(lit ? 231 : 3));
+    }
+    // per-branch tint (index into the palette): Bounty gold, Peril red, Dominion blue, Ecology green
+    static const uint8_t kBranchCol[4] = {245, 200, 228, 136};
+    const int hov = node_at(g.ui_mx, g.ui_my);
+    for (int i = 0; i < kParadiseNodeCount; ++i) {
+        int sx, sy; node_screen(i, sx, sy);
+        const bool alloc = paradise_has(i), can = paradise_allocatable(i);
+        const bool unlock = kParadiseNodes[i].kind == PK_UNLOCK;
+        const int r = i == kParadiseHub ? R + 6 : unlock ? R + 4 : R;
+        const uint8_t col = alloc ? kBranchCol[kParadiseNodes[i].branch] : can ? 231 : 8;
+        fill_rect(ctx, sx - r, sy - r, 2 * r, 2 * r, uint8_t(i == hov ? 4 : 2));
+        fill_rect(ctx, sx - r + 2, sy - r + 2, 2 * r - 4, 2 * r - 4, col);
+        char lbl[12]; std::snprintf(lbl, sizeof lbl, "%.9s", kParadiseNodes[i].name);
+        draw_text(ctx, lbl, sx - r, sy + r + 2, uint8_t(alloc ? 245 : can ? 200 : 14));
+    }
+    if (hov >= 0) {
+        const ParadiseNode& nd = kParadiseNodes[hov];
+        static const char* kBranchName[4] = {"Bounty", "Peril", "Dominion", "Ecology"};
+        if (nd.kind == PK_UNLOCK) std::snprintf(buf, sizeof buf, "%s  [Ecology]  -  unlocks the Long Ride from the War Council", nd.name);
+        else if (hov == kParadiseHub) std::snprintf(buf, sizeof buf, "%s  -  the dream begins here", nd.name);
+        else std::snprintf(buf, sizeof buf, "%s  [%s]  +%d", nd.name, kBranchName[nd.branch], int(nd.value));
+        draw_text_shadow(ctx, buf, fb::W / 2 - 320, fb::H - 96, 231, 1);
+    }
+}
 // C7b: the compact HUD skill bar — the primary bar's six slots (the Ctrl secondary shows on the loadout).
 void draw_skillbar_hud(DrawCtx& ctx) {
     static const char* keys[6] = {"LMB", "RMB", "MMB", "Q", "E", "R"};
@@ -7592,6 +7793,7 @@ void pass_ui(RenderCtx& r) {
     if (g.menu_open == 15) draw_loadout(ctx);        // C7b: the skill-bar loadout screen
     if (g.menu_open == 16) draw_skilltree(ctx);      // C8a: the class skill-tree screen
     if (g.menu_open == 12) draw_sietch_tree(ctx);    // C8d: the Sietch build tree (node graph)
+    if (g.menu_open == 17) draw_paradise_tree(ctx);  // C9: the Green Paradise Atlas (node graph)
 
     // Endgame hub menus (War Council / Jihad Table / Landsraad / Bench) — dynamic, keyboard-driven.
     if (g.menu_open >= 8 && g.menu_open <= 11) {
@@ -7611,10 +7813,15 @@ void pass_ui(RenderCtx& r) {
         if (g.menu_open == 8) {
             draw_text_shadow(ctx, "THE WAR COUNCIL", x0 + 24, y0 + 16, 230, 1);
             draw_text(ctx, "Enact the Jihad. Muad'Dib's legions await your word.", x0 + 24, y0 + 46, 14);
-            const char* rows[4] = {"The Jihad Table  (strikes & pinnacles)",
+            const bool ride = paradise_unlocked(PU_LONGRIDE);
+            const char* rows[6] = {"The Jihad Table  (strikes & pinnacles)",
                                    "The Landsraad  (CHOAM politics)",
-                                   "The Crafting Bench", "Leave"};
-            for (int i = 0; i < 4; ++i) row(i, rows[i], g.menu_sel == i);
+                                   "The Crafting Bench",
+                                   "The Green Paradise  (terraform Arrakis)",
+                                   ride ? "Ride the Deep Desert  (the Long Ride)"
+                                        : "The Long Ride  (locked - green the Sandrider Roads)",
+                                   "Leave"};
+            for (int i = 0; i < 6; ++i) row(i, rows[i], g.menu_sel == i);
         } else if (g.menu_open == 9) {
             draw_text_shadow(ctx, "THE JIHAD TABLE", x0 + 24, y0 + 16, 230, 1);
             std::snprintf(buf, sizeof buf, "spice %d   commission tier %d  (<-/-> change)   shards %d/5",
@@ -8697,6 +8904,21 @@ int game_debug_keystone_on(int ks) { return keystone_on(ks) ? 1 : 0; }
 int game_debug_respec_sietch() { return respec_sietch() ? 1 : 0; }
 int game_debug_meta_sietch_rank(int idx) { return (idx >= 0 && idx < kSietchNodeCount) ? g_meta.sietch_rank[idx] : -1; }
 int game_debug_max_hp() { return player_max_hp(); }   // for verifying a tree node moves a derived stat
+// --- C9 Green Paradise Atlas hooks ---
+int game_debug_paradise_node_count() { return kParadiseNodeCount; }
+void game_debug_paradise_ensure_hub() { paradise_ensure_hub(); }
+int game_debug_paradise_has(int n) { return paradise_has(n) ? 1 : 0; }
+int game_debug_paradise_allocatable(int n) { return paradise_allocatable(n) ? 1 : 0; }
+int game_debug_paradise_alloc(int n) { return paradise_alloc(n) ? 1 : 0; }
+int game_debug_paradise_node_cost() { return paradise_node_cost(); }
+int game_debug_paradise_bounty() { return paradise_bounty(); }
+int game_debug_paradise_peril() { return paradise_peril(); }
+int game_debug_paradise_dominion() { return paradise_dominion(); }
+int game_debug_paradise_ecology() { return paradise_ecology(); }
+int game_debug_paradise_unlocked(int u) { return paradise_unlocked(u) ? 1 : 0; }
+int game_debug_meta_paradise_has(int n) { return (n >= 0 && n < 64 && (g_meta.paradise & (1ull << n))) ? 1 : 0; }
+int game_debug_run_difficulty() { return run_difficulty(); }
+int game_debug_strike_cost(int tier) { return strike_cost(tier); }
 // C4 passive-tree hooks RETIRED by C8b.
 void game_debug_set_level(int lvl) { g.pl.st.level = int16_t(lvl < 1 ? 1 : lvl > tune::kLevelCap ? tune::kLevelCap : lvl); }
 int game_debug_deathstill(int water) {  // place a corpse worth `water` on the player + harvest it

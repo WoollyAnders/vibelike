@@ -1789,6 +1789,58 @@ int run_choamtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cm
     return pass ? 0 : 1;
 }
 
+// C9: the Green Paradise Atlas — an endgame, account-scoped, Litrejon-fuelled terraform tree that
+// reshapes the world. Node 0 = hub; Bounty node 1 (loot), far node 6 (unreachable), Peril node 7,
+// Dominion node 13, Ecology arm 19-20-22-23-24 (node 24 unlocks the Long Ride). Off the determinism hash.
+int run_paradisetest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    std::remove("meta.dat");
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(909, services);
+    game_debug_apply_base(0);
+
+    // (A) locked before the endgame opens
+    const bool locked = game_debug_paradise_allocatable(1) == 0 && game_debug_paradise_peril() == 0;
+
+    game_debug_open_chosen_path();      // the Baron falls -> the endgame (and the Atlas) opens
+    game_debug_paradise_ensure_hub();   // bootstrap the hub (the War Council entry does this in-game)
+    game_debug_grant_litrejons(100000);
+
+    // (B) adjacency + Litrejon spend: node 1 touches the hub; the far bounty node 6 is unreachable
+    const bool gate = game_debug_paradise_allocatable(1) == 1 && game_debug_paradise_allocatable(6) == 0;
+    const int cost = game_debug_paradise_node_cost();
+    const int lit0 = game_debug_litrejons();
+    const bool alloc1 = game_debug_paradise_alloc(1) == 1 && game_debug_paradise_has(1) == 1 &&
+                        game_debug_litrejons() == lit0 - cost;
+
+    // (C) Bounty raises the loot-rarity aggregate
+    const bool bounty = game_debug_paradise_bounty() > 0;
+
+    // (D) Peril raises run difficulty (and, via foe_hp, mob toughness)
+    const int rd0 = game_debug_run_difficulty();
+    const bool peril = game_debug_paradise_alloc(7) == 1 && game_debug_paradise_peril() > 0 &&
+                       game_debug_run_difficulty() > rd0;
+
+    // (E) Dominion lowers the strike cost
+    const int sc0 = game_debug_strike_cost(3);
+    const bool dominion = game_debug_paradise_alloc(13) == 1 && game_debug_strike_cost(3) < sc0;
+
+    // (F) Ecology arm to the Long Ride unlock (node 24)
+    const int eco_path[] = {19, 20, 22, 23, 24};
+    bool walked = true;
+    for (int s : eco_path) walked = walked && game_debug_paradise_alloc(s) == 1;
+    const bool ecology = walked && game_debug_paradise_ecology() > 0 && game_debug_paradise_unlocked(1) == 1;
+
+    // (G) DMEQ persistence: greened nodes survive a meta reload
+    int mb = -1, ma = -1; game_debug_meta_reload_class(&mb, &ma);
+    const bool persisted = game_debug_meta_paradise_has(1) == 1 && game_debug_meta_paradise_has(24) == 1;
+
+    const bool pass = locked && gate && alloc1 && bounty && peril && dominion && ecology && persisted;
+    std::printf("paradisetest %s (locked %d gate %d alloc %d bounty %d peril %d dominion %d ecology %d persist %d)\n",
+                pass ? "PASS" : "FAIL", locked, gate, alloc1, bounty, peril, dominion, ecology, persisted);
+    std::remove("meta.dat");
+    return pass ? 0 : 1;
+}
+
 // D3a: the currency framework + the "simple" PoE orbs (those that reuse the affix engine). Each orb
 // is a stacking currency the bench applies to a gear item. Currency kinds are items::CUR_* (in items.h).
 int run_currencytest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
@@ -2665,7 +2717,7 @@ int main(int argc, char** argv) {
          rttest = false, stuntest = false, classtest = false, guildtest = false,
          vendortest = false, patroltest = false, cavetest = false, trialtest = false,
          endgametest = false, striketest = false, pinnacletest = false, capstonetest = false,
-         longridetest = false, choamtest = false, currencytest = false, currencymechtest = false,
+         longridetest = false, choamtest = false, paradisetest = false, currencytest = false, currencymechtest = false,
          currencydroptest = false, currencyuitest = false, essencetest = false, gridtest = false, currencytabtest = false, vaulttest = false, guitest = false, economytest = false, sietchtreetest = false, maulatest = false, skillbartest = false, skilltreetest = false, gearclasstest = false, abilitytest = false,
          flasktest = false, inputtest = false, menutest = false;
     for (int i = 1; i < argc; ++i) {
@@ -2700,6 +2752,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--capstonetest") == 0) capstonetest = true;
         if (SDL_strcmp(argv[i], "--longridetest") == 0) longridetest = true;
         if (SDL_strcmp(argv[i], "--choamtest") == 0) choamtest = true;
+        if (SDL_strcmp(argv[i], "--paradisetest") == 0) paradisetest = true;
         if (SDL_strcmp(argv[i], "--currencytest") == 0) currencytest = true;
         if (SDL_strcmp(argv[i], "--currencymechtest") == 0) currencymechtest = true;
         if (SDL_strcmp(argv[i], "--currencydroptest") == 0) currencydroptest = true;
@@ -2769,6 +2822,7 @@ int main(int argc, char** argv) {
     if (capstonetest) return run_capstonetest(mixer, assets, cmaps);
     if (longridetest) return run_longridetest(mixer, assets, cmaps);
     if (choamtest) return run_choamtest(mixer, assets, cmaps);
+    if (paradisetest) return run_paradisetest(mixer, assets, cmaps);
     if (currencytest) return run_currencytest(mixer, assets, cmaps);
     if (currencymechtest) return run_currencymechtest(mixer, assets, cmaps);
     if (currencydroptest) return run_currencydroptest(mixer, assets, cmaps);
