@@ -177,6 +177,7 @@ inline constexpr int kDefCount = int(sizeof(kDefs) / sizeof(kDefs[0]));
 
 // ---- D1 tiered affix families -------------------------------------------------------------
 inline constexpr int kMaxTier = 5, kMaxPrefix = 3, kMaxSuffix = 3, kMaxAffix = kMaxPrefix + kMaxSuffix;
+inline constexpr int kMaxSockets = 3;  // D5: max stat-gem sockets on a piece of gear
 // Global tier gates + spawn-weight curve: T1 rolls at Awaken 1+, T5 at 9+; higher tiers are rarer.
 inline constexpr uint8_t kTierMinIlvl[kMaxTier] = {1, 3, 5, 7, 9};
 inline constexpr uint16_t kTierWeight[kMaxTier] = {100, 70, 45, 25, 10};
@@ -368,6 +369,28 @@ inline constexpr CurrencyDef kCurrency[CUR_COUNT] = {
 };
 inline const char* currency_name(uint8_t c) { return c > 0 && c < CUR_COUNT ? kCurrency[c].name : "?"; }
 
+// D5: stat-gems (the Dune equivalent of D4/PoE2 gems — Ixian cores + cut spice-gems). A gem drops as a
+// loose 1x1 item; socketed into gear at the bench it grants a flat AffixKind bonus (folded into
+// affix_power, so affix_total picks it up). Pure stats — skills live in the class trees. index 0 = none.
+enum GemKind : uint8_t {
+    GEM_NONE = 0,
+    GEM_SAPHO, GEM_IXCORE, GEM_BLOODOPAL, GEM_SUNSTONE, GEM_WATERPEARL,
+    GEM_STORMGLASS, GEM_SPICERUBY, GEM_SANDEMERALD, GEM_COUNT
+};
+struct GemDef { const char* name; uint8_t kind; int16_t value; uint8_t min_alvl; const char* effect; };
+inline constexpr GemDef kGems[GEM_COUNT] = {
+    {"", 0, 0, 0, ""},
+    {"Cut Sapho",    AK_INC_DMG,     8, 3, "+8% Lethality"},
+    {"Ixian Core",   AK_INC_TOHIT,   8, 3, "+8% Precision"},
+    {"Blood Opal",   AK_CRIT,        5, 4, "+5% Vital Strike chance"},
+    {"Sun-Stone",    AK_INC_LIFE,    8, 4, "+8% Life"},
+    {"Water Pearl",  AK_HP,         18, 4, "+18 Life"},
+    {"Storm Glass",  AK_RES_STORM,  15, 5, "+15 Storm Resistance"},
+    {"Spice Ruby",   AK_SPICE_FIND, 20, 5, "+20% Spice Find"},
+    {"Sand Emerald", AK_INC_DODGE,   8, 5, "+8% Flow (evasion)"},
+};
+inline const char* gem_name(uint8_t g) { return g > 0 && g < GEM_COUNT ? kGems[g].name : "?"; }
+
 // D1/D3 item instance. rarity 0 common / 1 magic / 2 rare. A currency stack sets `currency` (a
 // Currency kind) + `stack`, leaving `def` = 0xFF; gear leaves `currency` = 0.
 struct Inst {
@@ -384,12 +407,16 @@ struct Inst {
     uint8_t istate = 0;              // D3: bit0 unidentified, bit1 corrupted, bit2 mirrored
     RolledAffix pre[kMaxPrefix];
     RolledAffix suf[kMaxSuffix];
+    uint8_t gem = 0;                     // D5: a loose stat-gem (GemKind); 0 = not a gem (this is gear/currency)
+    uint8_t sockets = 0;                 // D5: socket count on this gear (0..kMaxSockets)
+    uint8_t socketed[kMaxSockets] = {};  // D5: the gem in each socket (GemKind; 0 = empty)
 
     bool is_currency() const { return currency != 0; }
-    bool empty() const { return def == 0xFF && currency == 0; }
+    bool is_gem() const { return gem != 0; }  // D5: a loose (unsocketed) stat-gem item
+    bool empty() const { return def == 0xFF && currency == 0 && gem == 0; }
     const Def& d() const { return kDefs[def]; }
-    // G: this item's grid footprint (currency + empty = 1x1; gear by its slot).
-    GridSize size() const { return (is_currency() || empty()) ? GridSize{1, 1} : slot_size(d().slot); }
+    // G: this item's grid footprint (currency / gem / empty = 1x1; gear by its slot).
+    GridSize size() const { return (is_currency() || is_gem() || empty()) ? GridSize{1, 1} : slot_size(d().slot); }
     // C6r: a ranged weapon (its shot travels d().range tiles). Melee weapons + non-weapons are false.
     bool is_ranged_weapon() const {
         return !empty() && !is_currency() && d().slot == Slot::Weapon && d().range > 0;
@@ -403,7 +430,7 @@ struct Inst {
 
     // implicit (Def a/b for non-weapon) + every rolled affix of this kind.
     int affix_power(uint8_t kind) const {
-        if (empty() || is_currency()) return 0;
+        if (empty() || is_currency() || is_gem()) return 0;
         int p = 0;
         if (d().slot != Slot::Weapon && d().a == kind) {  // implicit (D3: Blessed % + quality boost the local mod)
             int imp = d().b * (enchant == 0 ? 100 : enchant) / 100;
@@ -412,6 +439,8 @@ struct Inst {
         }
         for (int i = 0; i < nprefix; ++i) if (pre[i].kind == kind) p += pre[i].value;
         for (int i = 0; i < nsuffix; ++i) if (suf[i].kind == kind) p += suf[i].value;
+        for (int i = 0; i < sockets && i < kMaxSockets; ++i)  // D5: socketed stat-gems
+            if (socketed[i] && kGems[socketed[i]].kind == kind) p += kGems[socketed[i]].value;
         return p;
     }
 
@@ -421,6 +450,7 @@ struct Inst {
             else std::snprintf(out, size_t(n), "%s", currency_name(currency));
             return;
         }
+        if (is_gem()) { std::snprintf(out, size_t(n), "%s", gem_name(gem)); return; }  // D5
         if (empty()) { std::snprintf(out, size_t(n), "-"); return; }
         if (unidentified()) { std::snprintf(out, size_t(n), "Unidentified %s", d().name); return; }
         if (rarity == R_RARE) {
@@ -442,6 +472,10 @@ struct Inst {
                           unsigned(stack), kCurrency[currency].effect);
             return 2;
         }
+        if (is_gem()) {  // D5: a loose stat-gem — name + what it grants when socketed
+            std::snprintf(out, size_t(cap), "%s (gem)\n%s\n", gem_name(gem), kGems[gem].effect);
+            return 2;
+        }
         if (empty()) { if (cap) out[0] = 0; return 0; }
         if (unidentified()) { std::snprintf(out, size_t(cap), "Unidentified %s\n", d().name); return 1; }
         int off = 0, lines = 0;
@@ -456,6 +490,11 @@ struct Inst {
             add("+%d %s (T%d)\n", pre[i].value, stat_name(pre[i].kind), pre[i].tier);
         for (int i = 0; i < nsuffix; ++i)
             add("+%d %s (T%d)\n", suf[i].value, stat_name(suf[i].kind), suf[i].tier);
+        for (int i = 0; i < sockets && i < kMaxSockets && off < cap; ++i) {  // D5: socket lines
+            off += std::snprintf(out + off, size_t(cap - off), "socket: %s\n",
+                                 socketed[i] ? gem_name(socketed[i]) : "(empty)");
+            ++lines;
+        }
         return lines;
     }
 };

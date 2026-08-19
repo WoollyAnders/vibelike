@@ -124,6 +124,11 @@ inline constexpr int kDropMinArea = 2;         // no currency/unID drops in the 
 inline constexpr int kUnidMinArea = 4;         // gear can drop unidentified only at this area level up
 inline constexpr int kUnidChanceDenom = 3;     // ~1/N eligible gear drops are unidentified
 
+// --- D5: gear sockets + stat-gems ---
+inline constexpr int kSocketMinArea = 3;       // gear rolls stat-gem sockets only at this area level up
+inline constexpr int kGemMinArea = 4;          // loose stat-gems drop only this deep and beyond
+inline constexpr int kGemDropDenom = 30;       // ~1/N kills (area >= kGemMinArea) drop a loose gem
+
 // --- D3e: Spice Essence, the Awakening resource (a rare deep-desert find, NOT a bench currency) ---
 inline constexpr int kSpiceEssenceMinArea = 7;   // Spice Essence drops only this deep and beyond
 inline constexpr int kSpiceEssenceDenom  = 40;   // ~1/N kills at that depth yield a Spice Essence

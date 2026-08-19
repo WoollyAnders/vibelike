@@ -7,7 +7,7 @@
 #include <vector>
 
 inline constexpr uint32_t kSaveMagic = 0x54535544;  // 'DUST'
-inline constexpr uint16_t kSaveVersion = 33;  // v33: C8a class ability trees (owned_abilities + skill_mods_alloc bitmask)
+inline constexpr uint16_t kSaveVersion = 34;  // v34: D5 widened Inst (gear sockets + stat-gems)
 
 class SaveWriter {
 public:

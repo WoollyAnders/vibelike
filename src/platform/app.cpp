@@ -1841,6 +1841,45 @@ int run_paradisetest(audio::Mixer& mixer, const Assets& assets, const Colormaps&
     return pass ? 0 : 1;
 }
 
+// D5: gear sockets + stat-gems. Gear rolls empty sockets; a loose gem socketed at the bench grants its
+// flat AffixKind bonus (via affix_power -> affix_total); unsocket returns the gem; state persists (DMER).
+// GEM_SAPHO = 1 (Cut Sapho, AK_INC_DMG +8).
+int run_socketgemtest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
+    std::remove("meta.dat");
+    GameServices services{&mixer, &assets, &cmaps};
+    game_init(717, services);
+    game_debug_apply_base(0);
+
+    const int gear = game_debug_grant_socketed_gear(2);   // a Hood with 2 empty sockets
+    const int gem  = game_debug_grant_gem(1);             // Cut Sapho (AK_INC_DMG +8)
+    const bool granted = gear >= 0 && gem >= 0 && gear != gem &&
+                         game_debug_inv_sockets(gear) == 2 && game_debug_inv_is_gem(gem) == 1;
+
+    // (A) socket the gem: gear gains +8 increased Lethality, the loose gem is consumed
+    const int dmg0 = game_debug_inv_affix(gear, items::AK_INC_DMG);
+    const bool socketed = game_debug_bench_socket(gem, gear) == 1 &&
+                          game_debug_inv_socketed(gear, 0) == 1 && game_debug_inv_is_gem(gem) == 0 &&
+                          game_debug_inv_affix(gear, items::AK_INC_DMG) == dmg0 + 8;
+
+    // (B) unsocket: the socket empties, the bonus is gone, the gem returns to the pack
+    const bool unsocketed = game_debug_bench_unsocket(gear) == 1 &&
+                            game_debug_inv_socketed(gear, 0) == 0 &&
+                            game_debug_inv_affix(gear, items::AK_INC_DMG) == dmg0;
+
+    // (C) DMER persistence: re-socket, then the socketed gem survives a meta reload
+    const int gem2 = game_debug_grant_gem(1);
+    game_debug_bench_socket(gem2, gear);
+    game_debug_extract();
+    int mb = -1, ma = -1; game_debug_meta_reload_class(&mb, &ma);
+    const bool persisted = game_debug_meta_inv_socketed(gear, 0) == 1;
+
+    const bool pass = granted && socketed && unsocketed && persisted;
+    std::printf("socketgemtest %s (granted %d socketed %d unsocketed %d persist %d)\n",
+                pass ? "PASS" : "FAIL", granted, socketed, unsocketed, persisted);
+    std::remove("meta.dat");
+    return pass ? 0 : 1;
+}
+
 // D3a: the currency framework + the "simple" PoE orbs (those that reuse the affix engine). Each orb
 // is a stacking currency the bench applies to a gear item. Currency kinds are items::CUR_* (in items.h).
 int run_currencytest(audio::Mixer& mixer, const Assets& assets, const Colormaps& cmaps) {
@@ -2717,7 +2756,7 @@ int main(int argc, char** argv) {
          rttest = false, stuntest = false, classtest = false, guildtest = false,
          vendortest = false, patroltest = false, cavetest = false, trialtest = false,
          endgametest = false, striketest = false, pinnacletest = false, capstonetest = false,
-         longridetest = false, choamtest = false, paradisetest = false, currencytest = false, currencymechtest = false,
+         longridetest = false, choamtest = false, paradisetest = false, socketgemtest = false, currencytest = false, currencymechtest = false,
          currencydroptest = false, currencyuitest = false, essencetest = false, gridtest = false, currencytabtest = false, vaulttest = false, guitest = false, economytest = false, sietchtreetest = false, maulatest = false, skillbartest = false, skilltreetest = false, gearclasstest = false, abilitytest = false,
          flasktest = false, inputtest = false, menutest = false;
     for (int i = 1; i < argc; ++i) {
@@ -2753,6 +2792,7 @@ int main(int argc, char** argv) {
         if (SDL_strcmp(argv[i], "--longridetest") == 0) longridetest = true;
         if (SDL_strcmp(argv[i], "--choamtest") == 0) choamtest = true;
         if (SDL_strcmp(argv[i], "--paradisetest") == 0) paradisetest = true;
+        if (SDL_strcmp(argv[i], "--socketgemtest") == 0) socketgemtest = true;
         if (SDL_strcmp(argv[i], "--currencytest") == 0) currencytest = true;
         if (SDL_strcmp(argv[i], "--currencymechtest") == 0) currencymechtest = true;
         if (SDL_strcmp(argv[i], "--currencydroptest") == 0) currencydroptest = true;
@@ -2823,6 +2863,7 @@ int main(int argc, char** argv) {
     if (longridetest) return run_longridetest(mixer, assets, cmaps);
     if (choamtest) return run_choamtest(mixer, assets, cmaps);
     if (paradisetest) return run_paradisetest(mixer, assets, cmaps);
+    if (socketgemtest) return run_socketgemtest(mixer, assets, cmaps);
     if (currencytest) return run_currencytest(mixer, assets, cmaps);
     if (currencymechtest) return run_currencymechtest(mixer, assets, cmaps);
     if (currencydroptest) return run_currencydroptest(mixer, assets, cmaps);

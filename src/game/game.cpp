@@ -1334,6 +1334,7 @@ int guild_difficulty() {
     return d < 0 ? 0 : d > cap ? cap : d;
 }
 
+inline constexpr uint32_t kMetaVR = 0x52454D44u;  // 'DMER' (D5: widened Inst — gear sockets + stat-gems)
 inline constexpr uint32_t kMetaVQ = 0x51454D44u;  // 'DMEQ' (C9: + paradise, the Green Paradise Atlas bitmask)
 inline constexpr uint32_t kMetaVP = 0x50454D44u;  // 'DMEP' (C8d: Sietch build tree — single-allocate graph, ~37 nodes)
 inline constexpr uint32_t kMetaVO = 0x4F454D44u;  // 'DMEO' (C8b: widened sietch_rank u16 + sietch_points_bought)
@@ -1397,9 +1398,34 @@ items::Inst from_old_inst(const OldInst& o) {
     for (int i = 0; i < items::kMaxSuffix; ++i) it.suf[i] = o.suf[i];
     return it;
 }
+// D5: the Inst byte layout for meta DME C..Q (the "current" format before stat-gem sockets were appended).
+struct PreD5Inst {
+    uint8_t def, rarity, ilvl, nprefix, nsuffix, rare_name, quality, enchant, currency;
+    uint16_t stack;
+    uint8_t fractured, istate;
+    items::RolledAffix pre[items::kMaxPrefix];
+    items::RolledAffix suf[items::kMaxSuffix];
+};
+items::Inst from_pre_d5(const PreD5Inst& o) {
+    items::Inst it;
+    it.def = o.def; it.rarity = o.rarity; it.ilvl = o.ilvl;
+    it.nprefix = o.nprefix; it.nsuffix = o.nsuffix; it.rare_name = o.rare_name;
+    it.quality = o.quality; it.enchant = o.enchant; it.currency = o.currency;
+    it.stack = o.stack; it.fractured = o.fractured; it.istate = o.istate;
+    for (int i = 0; i < items::kMaxPrefix; ++i) it.pre[i] = o.pre[i];
+    for (int i = 0; i < items::kMaxSuffix; ++i) it.suf[i] = o.suf[i];
+    return it;  // sockets / gem default to 0
+}
+// layout: 0 = OldInst (pre-DMEC), 1 = PreD5Inst (DME C..Q), 2 = current (DMER+, with sockets).
 template <int N>
-void read_inst_blob(FILE* f, items::Inst (&dst)[N], bool current) {
-    if (current) { (void)!std::fread(dst, sizeof dst, 1, f); return; }
+void read_inst_blob(FILE* f, items::Inst (&dst)[N], int layout) {
+    if (layout >= 2) { (void)!std::fread(dst, sizeof dst, 1, f); return; }
+    if (layout == 1) {
+        PreD5Inst old[N];
+        (void)!std::fread(old, sizeof old, 1, f);
+        for (int i = 0; i < N; ++i) dst[i] = from_pre_d5(old[i]);
+        return;
+    }
     OldInst old[N];
     (void)!std::fread(old, sizeof old, 1, f);
     for (int i = 0; i < N; ++i) dst[i] = from_old_inst(old[i]);
@@ -1523,19 +1549,27 @@ void meta_load() {
     if (!f) return;
     uint32_t magic = 0;
     if (std::fread(&magic, 4, 1, f) == 1) {
-        if (magic >= kMetaV4 && magic <= kMetaVQ && magic != kMetaV1) {  // native widened-Inst format (DME4..DMEQ)
-            const bool cur = (magic >= kMetaVC);  // DMEC+ = new Inst layout; older = OldInst (convert)
+        if (magic >= kMetaV4 && magic <= kMetaVR && magic != kMetaV1) {  // native widened-Inst format (DME4..DMER)
+            // Inst layout: 0 OldInst (pre-DMEC), 1 PreD5Inst (DME C..Q), 2 current (DMER+, with sockets).
+            const int layout = magic >= kMetaVR ? 2 : magic >= kMetaVC ? 1 : 0;
             (void)!std::fread(&g_meta.runs, 4, 1, f);
             (void)!std::fread(&g_meta.endings_seen, 1, 1, f);
-            if (magic >= kMetaVG) {  // G3: the multi-tab grid stash (Inst layout is current here)
+            if (magic >= kMetaVG) {  // G3: the multi-tab grid stash
                 (void)!std::fread(&g_meta.stash_tabs, 1, 1, f);
-                (void)!std::fread(g_meta.stash, sizeof g_meta.stash, 1, f);
+                if (layout >= 2) {
+                    (void)!std::fread(g_meta.stash, sizeof g_meta.stash, 1, f);
+                } else {  // D5: read the pre-socket stash layout + convert
+                    static PreD5Inst old_st[tune::kMaxStashTabs][tune::kStashCap];
+                    (void)!std::fread(old_st, sizeof old_st, 1, f);
+                    for (int t = 0; t < tune::kMaxStashTabs; ++t)
+                        for (int i = 0; i < tune::kStashCap; ++i) g_meta.stash[t][i] = from_pre_d5(old_st[t][i]);
+                }
                 (void)!std::fread(g_meta.stash_cell, sizeof g_meta.stash_cell, 1, f);
             } else {  // DMEF and earlier: a flat 24-slot stash -> migrate the banked items into tab 0
                 uint8_t old_count = 0;
                 (void)!std::fread(&old_count, 1, 1, f);
                 items::Inst old_stash[24];
-                read_inst_blob(f, old_stash, cur);
+                read_inst_blob(f, old_stash, layout);
                 for (int t = 0; t < tune::kMaxStashTabs; ++t)
                     for (int i = 0; i < tune::kStashCap; ++i) g_meta.stash[t][i] = items::Inst{};
                 for (int i = 0; i < old_count && i < 24; ++i) g_meta.stash[0][i] = old_stash[i];
@@ -1547,13 +1581,13 @@ void meta_load() {
             (void)!std::fread(&g_meta.has_char, 1, 1, f);
             (void)!std::fread(&g_meta.banked_spice, 4, 1, f);
             (void)!std::fread(&g_meta.st, sizeof g_meta.st, 1, f);
-            read_inst_blob(f, g_meta.equip, cur);
+            read_inst_blob(f, g_meta.equip, layout);
             if (magic >= kMetaVE) {  // G: the pack grid is 96 pool slots + inv_cell
-                read_inst_blob(f, g_meta.inv, cur);
+                read_inst_blob(f, g_meta.inv, layout);
                 (void)!std::fread(g_meta.inv_cell, sizeof g_meta.inv_cell, 1, f);
             } else {  // DMED and earlier: a flat 12-slot pack -> migrate into the grid (first-fit repack)
                 items::Inst old_inv[12];
-                read_inst_blob(f, old_inv, cur);
+                read_inst_blob(f, old_inv, layout);
                 for (items::Inst& s : g_meta.inv) s = items::Inst{};
                 for (int i = 0; i < 12; ++i) g_meta.inv[i] = old_inv[i];
                 regrid_pool(g_meta.inv, g_meta.inv_cell, tune::kInvCap, tune::kPackW, tune::kPackH);
@@ -1665,7 +1699,7 @@ void meta_load() {
 void meta_save() {
     FILE* f = std::fopen("meta.dat", "wb");
     if (!f) return;
-    std::fwrite(&kMetaVQ, 4, 1, f);  // C9: DMEQ (+ the Green Paradise Atlas bitmask)
+    std::fwrite(&kMetaVR, 4, 1, f);  // D5: DMER (widened Inst — gear sockets + stat-gems)
     std::fwrite(&g_meta.runs, 4, 1, f);
     std::fwrite(&g_meta.endings_seen, 1, 1, f);
     std::fwrite(&g_meta.stash_tabs, 1, 1, f);                       // G3: owned tab count
@@ -2151,6 +2185,37 @@ bool tab_deposit(int idx);
 bool tab_withdraw(uint8_t kind, int amount);
 bool bench_apply(int cur, int inv_idx);
 
+// D5: socket the loose gem at pack slot `gem_idx` into gear at pack slot `gear_idx` (first free socket).
+// The gem is consumed from the pack. Returns true on success.
+bool bench_socket(int gem_idx, int gear_idx) {
+    if (gem_idx < 0 || gem_idx >= tune::kInvCap || gear_idx < 0 || gear_idx >= tune::kInvCap) return false;
+    items::Inst& gem = g.pl.inv[gem_idx];
+    items::Inst& gear = g.pl.inv[gear_idx];
+    if (!gem.is_gem() || gear.empty() || gear.is_currency() || gear.is_gem()) return false;
+    for (int s = 0; s < gear.sockets && s < items::kMaxSockets; ++s)
+        if (gear.socketed[s] == 0) {                 // first empty socket
+            gear.socketed[s] = gem.gem;
+            gem = items::Inst{};                     // consume the loose gem
+            if (g.pl.hp > player_max_hp()) g.pl.hp = player_max_hp();
+            return true;
+        }
+    return false;  // no free socket
+}
+// D5: pop the last-socketed gem out of the gear at pack slot `gear_idx`, back into the pack as a loose gem.
+bool bench_unsocket(int gear_idx) {
+    if (gear_idx < 0 || gear_idx >= tune::kInvCap) return false;
+    items::Inst& gear = g.pl.inv[gear_idx];
+    if (gear.empty() || gear.is_currency() || gear.is_gem()) return false;
+    for (int s = (gear.sockets < items::kMaxSockets ? gear.sockets : items::kMaxSockets) - 1; s >= 0; --s)
+        if (gear.socketed[s] != 0) {
+            items::Inst loose; loose.gem = gear.socketed[s];
+            gear.socketed[s] = 0;
+            if (pack_add(loose) < 0) { gear.socketed[s] = loose.gem; return false; }  // no room — undo
+            return true;
+        }
+    return false;  // nothing socketed
+}
+
 // G4: mouse drag-drop + Ctrl-click on the grid screens (menu 6/7/11). Returns true if it consumed the
 // click. All moves route through the tested model ops (quickmove / grid_can_place / tab_* / stash_*).
 bool ui_grid_input(const InputState& in) {
@@ -2169,7 +2234,12 @@ bool ui_grid_input(const InputState& in) {
             if (h.what == UIHit::PackCell) { int i = ui_item_under(h); if (i >= 0) stash_deposit(i, g.stash_tab); }
             else if (h.what == UIHit::StashCell) { int i = ui_item_under(h); if (i >= 0) stash_withdraw(g.stash_tab, i); }
         } else {  // menu 11 bench
-            if (h.what == UIHit::PackCell) { int i = ui_item_under(h); if (i >= 0 && g.pl.inv[i].is_currency()) tab_deposit(i); }
+            if (h.what == UIHit::PackCell) {
+                int i = ui_item_under(h);
+                if (i >= 0 && g.pl.inv[i].is_currency()) tab_deposit(i);
+                else if (i >= 0 && g.pl.inv[i].sockets > 0 && bench_unsocket(i))  // D5: Ctrl-click pops a gem
+                    g.log.push("You pry a gem loose.");
+            }
             else if (h.what == UIHit::CurTabSlot && g.pl.cur_tab[h.idx] > 0) tab_withdraw(uint8_t(h.idx), 1);
         }
         return true;
@@ -2195,7 +2265,11 @@ bool ui_grid_input(const InputState& in) {
         const int k = g.drag_kind, s = g.drag_idx;
         g.drag_kind = 0; g.drag_idx = -1;
         if (k == 1) {  // dragging a pack item
-            if (h.what == UIHit::PackCell) {  // move within the pack grid to the hovered top-left
+            const int over = (h.what == UIHit::PackCell) ? ui_item_under(h) : -1;  // item under the drop cell
+            if (h.what == UIHit::PackCell && over >= 0 && over != s && g.pl.inv[s].is_gem() &&
+                bench_socket(s, over)) {  // D5: drop a loose gem onto gear -> socket it
+                // socketed (gem consumed)
+            } else if (h.what == UIHit::PackCell) {  // move within the pack grid to the hovered top-left
                 if (grid_can_place(g.pl.inv, g.pl.inv_cell, tune::kInvCap, tune::kPackW, tune::kPackH,
                                    s, h.idx, g.pl.inv[s].size())) g.pl.inv_cell[s] = uint8_t(h.idx);
             } else if (h.what == UIHit::EquipSlot) {          // equip if the slot matches
@@ -2523,6 +2597,26 @@ void drop_currency(int x, int y) {
             return;
         }
 }
+// D5: pick / drop a loose stat-gem (area-gated, like currency). A gem drops as an EType::Loot entity
+// carrying a gem Inst, so the ordinary walk-over pickup collects it into the pack (a 1x1 item).
+int pick_gem(int alvl) {
+    int idx[items::GEM_COUNT], n = 0;
+    for (int gk = 1; gk < items::GEM_COUNT; ++gk)
+        if (items::kGems[gk].min_alvl <= alvl) idx[n++] = gk;
+    return n ? idx[g.rng.loot.below(uint32_t(n))] : 0;
+}
+void drop_gem(int x, int y) {
+    const int gk = pick_gem(area_level());
+    if (!gk) return;
+    for (int i = 1; i < kMaxEnts; ++i)
+        if (g.ents[i].type == EType::None) {
+            items::Inst gem; gem.gem = uint8_t(gk);
+            g.ents[i] = Entity{EType::Loot, Ai::Idle, g.cur_zone, int16_t(x), int16_t(y), 1, 0, 0, 0};
+            g.loot_inst[i] = gem;
+            g.log.push("A cut gem glitters in the sand: %s.", items::gem_name(uint8_t(gk)));
+            return;
+        }
+}
 // Put a rolled gear item into a free pack cell (used by the Jacurutu vault burst on the Long Ride,
 // which has no zone to spill onto yet — the playable ride room comes later).
 void grant_gear_to_pack(const items::Inst& it) {
@@ -2559,6 +2653,15 @@ void maybe_drop_loot(EType t, int x, int y) {  // C8a: abilities/modifiers no lo
         if (area_level() >= tune::kUnidMinArea && it.rarity != items::R_COMMON &&
             g.rng.loot.below(tune::kUnidChanceDenom) == 0)
             it.istate |= 1;
+        // D5: deep gear rolls 0..kMaxSockets empty stat-gem sockets (one gated draw; shallow runs unperturbed)
+        if (area_level() >= tune::kSocketMinArea && !it.empty() && it.currency == 0) {
+            const int r = int(g.rng.loot.below(100));
+            int sc = r < 45 ? 0 : r < 78 ? 1 : r < 93 ? 2 : 3;   // 45% none / 33% 1 / 15% 2 / 7% 3
+            const int cap = 1 + it.ilvl / 4;                     // shallow items carry fewer
+            if (sc > cap) sc = cap;
+            if (sc > items::kMaxSockets) sc = items::kMaxSockets;
+            it.sockets = uint8_t(sc);
+        }
         for (int i = 1; i < kMaxEnts; ++i)
             if (g.ents[i].type == EType::None) {
                 g.ents[i] = Entity{EType::Loot, Ai::Idle, g.cur_zone, int16_t(x), int16_t(y), 1, 0,
@@ -2576,6 +2679,9 @@ void maybe_drop_loot(EType t, int x, int y) {  // C8a: abilities/modifiers no lo
     // draw for it, keeping their loot stream unshifted). PoE-faithful whole-game currency.
     if (area_level() >= tune::kDropMinArea && g.rng.loot.below(tune::kCurrencyDropDenom) == 0)
         drop_currency(x, y);
+    // D5: a loose stat-gem — a rarer find, drawn after currency + gated deeper, so shallow runs are unperturbed.
+    if (area_level() >= tune::kGemMinArea && g.rng.loot.below(tune::kGemDropDenom) == 0)
+        drop_gem(x, y);
     // D3e: Spice Essence — the Awakening resource. A rare find in the deepest content only; not a bench
     // currency, so it banks straight to meta (persists across runs, like the Desert Trials). Drawn last
     // and gated deeper than currency, so nothing shallower is perturbed.
@@ -8919,6 +9025,24 @@ int game_debug_paradise_unlocked(int u) { return paradise_unlocked(u) ? 1 : 0; }
 int game_debug_meta_paradise_has(int n) { return (n >= 0 && n < 64 && (g_meta.paradise & (1ull << n))) ? 1 : 0; }
 int game_debug_run_difficulty() { return run_difficulty(); }
 int game_debug_strike_cost(int tier) { return strike_cost(tier); }
+// --- D5 gear-socket + stat-gem hooks ---
+int game_debug_grant_gem(int gk) { items::Inst g_; g_.gem = uint8_t(gk); return pack_add(g_); }  // -> pool idx
+int game_debug_grant_socketed_gear(int sockets) {  // a Cloth Headwrap (def 5, Hood) with N empty sockets
+    items::Inst it; it.def = 5; it.rarity = items::R_COMMON; it.ilvl = 5;
+    it.sockets = uint8_t(sockets < 0 ? 0 : sockets > items::kMaxSockets ? items::kMaxSockets : sockets);
+    return pack_add(it);
+}
+int game_debug_inv_sockets(int i) { return (i >= 0 && i < tune::kInvCap) ? g.pl.inv[i].sockets : -1; }
+int game_debug_inv_socketed(int i, int s) {
+    return (i >= 0 && i < tune::kInvCap && s >= 0 && s < items::kMaxSockets) ? g.pl.inv[i].socketed[s] : -1;
+}
+int game_debug_inv_is_gem(int i) { return (i >= 0 && i < tune::kInvCap && g.pl.inv[i].is_gem()) ? 1 : 0; }
+int game_debug_inv_affix(int i, int kind) { return (i >= 0 && i < tune::kInvCap) ? g.pl.inv[i].affix_power(uint8_t(kind)) : 0; }
+int game_debug_bench_socket(int gem_i, int gear_i) { return bench_socket(gem_i, gear_i) ? 1 : 0; }
+int game_debug_bench_unsocket(int gear_i) { return bench_unsocket(gear_i) ? 1 : 0; }
+int game_debug_meta_inv_socketed(int i, int s) {
+    return (i >= 0 && i < tune::kInvCap && s >= 0 && s < items::kMaxSockets) ? g_meta.inv[i].socketed[s] : -1;
+}
 // C4 passive-tree hooks RETIRED by C8b.
 void game_debug_set_level(int lvl) { g.pl.st.level = int16_t(lvl < 1 ? 1 : lvl > tune::kLevelCap ? tune::kLevelCap : lvl); }
 int game_debug_deathstill(int water) {  // place a corpse worth `water` on the player + harvest it

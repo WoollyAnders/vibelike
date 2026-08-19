@@ -258,6 +258,16 @@ int game_debug_paradise_unlocked(int u);     // 1 if unlock u (e.g. PU_LONGRIDE=
 int game_debug_meta_paradise_has(int n);     // persisted greened bit (DMEQ round-trip)
 int game_debug_run_difficulty();             // run_difficulty() (Peril raises it)
 int game_debug_strike_cost(int tier);        // strike_cost(tier) (Dominion lowers it)
+// --- D5 gear-socket + stat-gem hooks ---
+int game_debug_grant_gem(int gk);            // drop a loose gem into the pack; returns its pool index
+int game_debug_grant_socketed_gear(int sockets);  // put a Hood with N empty sockets in the pack; -> pool index
+int game_debug_inv_sockets(int i);           // socket count of pack item i (-1 invalid)
+int game_debug_inv_socketed(int i, int s);   // gem in pack item i's socket s (0 empty)
+int game_debug_inv_is_gem(int i);            // 1 if pack item i is a loose gem
+int game_debug_inv_affix(int i, int kind);   // pack item i's affix_power(kind) (includes socketed gems)
+int game_debug_bench_socket(int gem_i, int gear_i);   // socket the gem into the gear; 1 on success
+int game_debug_bench_unsocket(int gear_i);   // pop the last gem out; 1 on success
+int game_debug_meta_inv_socketed(int i, int s);  // persisted socketed gem (DMER round-trip)
 void game_debug_revelation(int* stage, int* inv_count);  // B2b: Revelation stage + inv item count
 void game_debug_revelation_pick(int idx);  // B2b: choose row idx + confirm the Revelation
 int game_debug_cur_node();  // B1.3: current graph node index
