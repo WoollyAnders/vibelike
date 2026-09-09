@@ -21,6 +21,65 @@ Full design rationale + locked decisions live in the plan file
 
 ---
 
+## ⚠️ DIRECTION UPDATE (2026-09) — the ARPG pivot supersedes the extraction framing
+
+The premise above (a roguelike **extract-or-lose** vision campaign, a **5 acts × 2 Awaken = 10 pinnacle**
+Hades-ladder, "ride the worm home or lose the run") is **superseded**. DUSTFALL had drifted into two genres
+— a roguelike extraction campaign bolted onto an ARPG endgame. It now commits fully to **ARPG**: **one
+persistent character, one continuous world** from the sietch through Arrakeen to the Jihad, **no extraction
+gate**. The *fiction* of Paul's prescient visions stays as the narrative wrapper (you still venture out from
+the sietch "into a vision"), but the mechanics are a single continuous ARPG. **"Awaken" is reclaimed for the
+Ascendancy rite**; the 1–10 depth ladder is deleted and difficulty re-bases on **act + character level**.
+Everything below marked against the old extraction model (Phase B's run/extract flow, the Awaken ladder, the
+harvest-deny season) is being reworked by **Arc E** (the forward plan, at the bottom of this file). The
+shipped combat/progression systems below stay.
+
+## ✅ SHIPPED since this roadmap was written — the C7→D5 line (all committed, not yet reflected per-milestone above)
+
+The build evolved through the plan file, so the milestone numbering below diverged from what actually
+shipped. As of the latest commit (`aa48b2c`), these are **done, tested, committed** (191 commits total,
+being pushed to GitHub for the first time now):
+
+- **C7b/c/d** — abilities are learned **Fremen Teachings** (drop-acquired), a **12-slot dual skill bar**
+  (Ctrl secondary), and **PoE2 support links** (Disciplines attach to skills' support slots).
+- **C8a** *(the "Chronicon pivot")* — **class ability trees** replace the Teaching/Discipline loot
+  (`kSkillNodes`, `skill_mods_alloc` bitmask, menu 16).
+- **C8b-1 / C8b-2 / C8d** — retire the C4 shared passive tree; the **Sietch tree becomes the character build
+  tree** — reworked to **bounded** (level cap 100 + keystones, adjacency-gated, respec via spice; menu 12).
+- **C8c** — **class gear restrictions** (ranged weapons gate by class).
+- **C9** — the **Green Paradise Atlas**: banked water (**Litrejons**) terraforms Arrakis across four branches
+  (Bounty/Peril/Dominion/Ecology), endgame-gated, fully completable (menu 17).
+- **D5** — **gear sockets + stat-gems** (the Dune gem pool, D4-style plain sockets, socketing at the bench).
+
+*(Also now genuinely shipped though still marked ⬜ below: **D2** crafting table/roster, **D3** flasks.
+**C7/C8** as originally scoped — "Will fuel / vendor refresh / quest board" — were superseded by the above.)*
+
+## 🎯 FORWARD PLAN — Arc E: the ARPG pivot & the vision-forged campaign
+
+Full detail + locked design in the plan file (`.claude/plans/this-project-is-to-nested-planet.md`).
+**Sequencing steer: get the game working before the campaign flow** — build the structure first; the
+act-by-act story beats + boss roster are content that drops into the working skeleton later.
+
+- **E0 — the structural ARPG pivot** *(BUILD FIRST)*: remove extraction (`extract_run`), one persistent
+  **spice** wallet, **occasional** drops (spice ≈ PoE/D4 gold, Litrejon water ≈ Sacred Water in the Trials
+  of the Sekhemas) with a visible auto-pickup animation, **two-phase death** (no XP loss until the Jihad
+  opens), delete the Awaken ladder, re-base difficulty on act+level with a **Water-of-Life inflection**,
+  retire the season.
+- **E1 — PoE-style acts**: connected zones — a critical path + optional side zones + waypoints, sietch as
+  town, medium size (~3–4 main + 2–3 side zones), across **10 acts**, real biomes.
+- **E2 — campaign boss roster** *(deferred content pass)*: 10 acts × (~3 mini-bosses + 1 named act boss);
+  the 10-act canon skeleton (Tabr prologue → First Blood → … → Baron's Fall → Feyd) is parked in the plan
+  file awaiting the final act-boss list.
+- **E3** — the Sayyadina line (Ramallo→Jessica→Alia→Chani) + a 3-round mini-tree Ascendancy.
+- **E4** — town vendors: **Gurney** (weapons master; gem socketing relocates here) + **Greybeard** (black
+  market).
+- **E5** — the desert stays deadly throughout; loot becomes richest there **post-campaign**.
+- **E6** — the Guild: rare tithe ambushes in-campaign → escalate post-campaign → Navigator invasion (own
+  design pass).
+- **E7** — droppable **"Visions"** (PoE-style maps) rolled by Alia the Oracle (own design pass).
+
+---
+
 ## PHASE A — Playable Now (feel + the bug)
 
 ### A1 — Fix the sietch (critical bug) ✅
@@ -519,13 +578,13 @@ Cursor-aimed maula; Bresenham line-of-fire; Lethality-scaled damage; loud.
 **Exit:** aim + fire down a corridor; a wall blocks the shot; drop a trooper at
 range.
 
-### C7 — Ability + Will (universal fuel) + six skill slots ⬜
+### C7 — Ability + Will (universal fuel) + six skill slots ⚠️ *(superseded — shipped as the C7b→d Teaching/skill-bar/support-link line; see "SHIPPED: the C7→D5 line" at top)*
 Shared Will resource; cooldowns; `Entity.stun`; six skill slots on LMB/RMB/MMB/
 Q/E/R aimed at the cursor; skill-loadout screen.
 **Exit:** each class fires slotted skills; Will drains/regens/flask-refills;
 cooldowns tick.
 
-### C8 — Vendors refresh + sietch quest board ⬜
+### C8 — Vendors refresh + sietch quest board ⚠️ *(superseded — became the "Chronicon pivot": class ability trees + the bounded Sietch build tree, C8a–d; see top. Vendor refresh moves to Arc E4.)*
 Per-run seeded vendor stock; a sietch quest board reset per run.
 **Exit:** vendor wares differ between runs; accept/complete/turn-in a board quest;
 the board resets.
@@ -552,7 +611,7 @@ Generated Fremen rare titles + an in-menu affix detail readout. New tests
 potency, is defined but inert — no clean player-poisons-enemy mechanic yet; wire in a
 combat pass.)*
 
-### D2 — Sietch Crafting Table (D4×PoE blend, canon Fremen materials) ⬜
+### D2 — Sietch Crafting Table (D4×PoE blend, canon Fremen materials) ✅
 A single sietch bench (Diablo-4 place-item UX) that replays **PoE's base crafting
 currencies** — each mapped to a **stillsuit fabrication material** dropped **randomly,
 weighted by rarity**: Osmotic Weave=**Quality** · Fremseal=**Transmute** ·
@@ -567,7 +626,7 @@ D1's `RolledAffix`/tier model + `roll_affixes`.
 **Exit:** craft an item's affixes for material cost; a bricked item re-rolls;
 banked materials survive a death.
 
-### D3 — Flasks (Life / Will / Utility) ⬜
+### D3 — Flasks (Life / Will / Utility) ✅
 A flask belt; charges refill on kills/time; used via number keys.
 **Exit:** equip Life/Will/Utility flasks; number keys consume a charge; charges
 refill on kills.

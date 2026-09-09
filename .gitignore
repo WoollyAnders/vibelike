@@ -7,3 +7,6 @@ __pycache__/
 
 # Local MCP config — contains an API token; never commit
 .mcp.json
+
+# Claude Code local settings (permission allowlist) — never commit
+.claude/settings.json
